@@ -1,0 +1,7 @@
+# Copy this folder per experiment. All run parameters live here (no hardcoding).
+name: example-ablation
+base_model: deepseek-ai/deepseek-coder-6.7b-base
+seed: 0
+alpha: 1.0      # cluster contribution in Wnew = Wbase + alpha*dWcluster + beta*dWclient
+beta: 1.0       # client contribution
+notes: ""

@@ -1,0 +1,52 @@
+# --- Claude Code workspace (keep local, never push) ---
+.claude/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Models / adapters / large artifacts ---
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+checkpoints/
+wandb/
+
+# --- Secrets / certs (mTLS) ---
+.env
+*.key
+*.pem
+secrets/
+
+# --- Experiment outputs (keep configs, ignore heavy results) ---
+experiments/**/results/*
+!experiments/**/results/.gitkeep
+
+# --- Node / dashboard ---
+node_modules/
+build/
+.DS_Store
+
+# --- LaTeX build artifacts ---
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.nav
+*.snm
+*.synctex.gz

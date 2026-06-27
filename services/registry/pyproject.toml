@@ -1,0 +1,16 @@
+[project]
+name = "clasp-registry"
+version = "0.1.0"
+description = "CLASP State Registry — safetensors versioning, Pass@k rollback, FastAPI (P4)."
+requires-python = ">=3.10"
+dependencies = [
+    "clasp-contracts",
+    # "fastapi", "uvicorn", "safetensors",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,27 @@
+# CLASP — single-command reproducible stack.
+# Security (P3) is a library imported by edge & cluster, so it is NOT a service here.
+services:
+  registry:
+    build:
+      context: .
+      dockerfile: services/registry/Dockerfile
+    ports: ["8004:8004"]
+
+  cluster:
+    build:
+      context: .
+      dockerfile: services/cluster/Dockerfile
+    ports: ["8002:8002"]
+    depends_on: [registry]
+
+  edge:
+    build:
+      context: .
+      dockerfile: services/edge/Dockerfile
+    depends_on: [cluster, registry]
+
+  evaluation:
+    build:
+      context: .
+      dockerfile: services/evaluation/Dockerfile
+    depends_on: [registry]

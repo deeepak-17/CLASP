@@ -1,0 +1,16 @@
+[project]
+name = "clasp-edge"
+version = "0.1.0"
+description = "CLASP Edge Layer — PEFT training, 4-bit inference, dynamic merger (P1)."
+requires-python = ">=3.10"
+dependencies = [
+    "clasp-contracts",
+    # "peft", "transformers", "torch", "opacus",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
