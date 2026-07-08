@@ -81,6 +81,24 @@ def test_missing_adapter_raises(store):
         store.list_versions("does-not-exist")
 
 
+def test_corrupt_active_pointer_degrades(store, safetensors_blob):
+    # L1: a garbage `active` file must raise StorageError, not a bare ValueError.
+    store.save("torch", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    (store._adapter_dir("torch") / "active").write_text("not-an-int")
+    from registry.storage import StorageError
+
+    with pytest.raises(StorageError):
+        store.get_active("torch")
+
+
+def test_set_active_is_atomic_no_tmp_left(store, safetensors_blob):
+    # L2: temp file is renamed away, never left behind.
+    store.save("scipy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    store.set_active("scipy", 1)
+    assert not (store._adapter_dir("scipy") / "active.tmp").exists()
+    assert store.get_active("scipy") == 1
+
+
 def test_invalid_name_rejected(store, safetensors_blob):
     with pytest.raises(Exception):
         store.save("../evil", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())

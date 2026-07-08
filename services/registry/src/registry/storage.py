@@ -124,12 +124,21 @@ class RegistryStore:
         p = self._adapter_dir(name) / "active"
         if not p.exists():
             return None
-        return int(p.read_text().strip())
+        raw = p.read_text().strip()
+        try:  # L1: a corrupt/hand-edited pointer must not 500 the rollback path
+            return int(raw)
+        except ValueError as e:
+            raise StorageError(f"corrupt active pointer for {name!r}: {raw!r}") from e
 
     def set_active(self, name: str, version: int) -> None:
         if version not in self.list_versions(name):
             raise AdapterNotFound(f"{name} v{version}")
-        (self._adapter_dir(name) / "active").write_text(str(version))
+        # L2: atomic write (temp + os.replace) so the pointer is never truncated
+        # mid-write — the D5 rollback / D11 restore path must stay reliable.
+        target = self._adapter_dir(name) / "active"
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(str(version))
+        os.replace(tmp, target)
 
     # -- mutation ----------------------------------------------------------- #
     def save(
@@ -154,9 +163,13 @@ class RegistryStore:
 
         version = (self.latest_version(name) if self._adapter_dir(name).exists() else 0) + 1
         vdir = self._version_dir(name, version)
-        if vdir.exists():  # D9: never overwrite in place
-            raise VersionExists(f"{name} v{version} already exists")
-        vdir.mkdir(parents=True)
+        try:
+            # M4: mkdir is the atomic claim on a version. If a concurrent save
+            # already took it, FileExistsError -> VersionExists (a clean 409),
+            # never a silent overwrite (D9) or an unhandled 500.
+            vdir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as e:
+            raise VersionExists(f"{name} v{version} already exists") from e
 
         (vdir / "adapter.safetensors").write_bytes(payload)
         meta = AdapterMetadata(

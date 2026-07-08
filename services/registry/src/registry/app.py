@@ -29,7 +29,13 @@ from contracts import (
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 
 from . import __version__
-from .storage import AdapterNotFound, RegistryStore, StorageError, _metadata_to_dict
+from .storage import (
+    AdapterNotFound,
+    RegistryStore,
+    StorageError,
+    VersionExists,
+    _metadata_to_dict,
+)
 
 app = FastAPI(
     title="CLASP State Registry",
@@ -102,6 +108,8 @@ async def save_version(
             source_clients=tuple(m.get("source_clients", ())),
             set_active=m.get("set_active", True),
         )
+    except VersionExists as e:  # M4: concurrent save lost the version race
+        raise HTTPException(409, str(e)) from e
     except (StorageError, ValueError) as e:
         raise HTTPException(422, str(e)) from e
     return _metadata_to_dict(written)
