@@ -52,9 +52,11 @@ build/
 *.synctex.gz
 
 # --- Internal planning (plan of record = MASTER_PLAN.md; never push planning notes) ---
+TEAM_HANDBOOK.md
 MASTER_PLAN.md
 AUDIT-*.md
 daily_targets_v2.md
 CLASP_Daily_Targets*.pdf
 CLASP_Swimlane*.pdf
 CLASP_Swimlane*.png
+CLASP_Team_Bundle.zip
