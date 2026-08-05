@@ -60,3 +60,7 @@ CLASP_Daily_Targets*.pdf
 CLASP_Swimlane*.pdf
 CLASP_Swimlane*.png
 CLASP_Team_Bundle.zip
+
+# --- IDE / editor settings (per-developer, never shared) ---
+.idea/
+.vscode/
