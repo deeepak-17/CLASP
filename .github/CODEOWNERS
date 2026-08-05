@@ -1,0 +1,12 @@
+# CLASP — code ownership
+#
+# Deepak (P4) is DevOps & Orchestration Lead and the release owner for `main`.
+# The `main-protection` ruleset requires a CODEOWNER review on every PR, so this
+# single catch-all makes his approval mandatory before anything merges.
+#
+# Note: this file only takes effect once it is on the default branch. Deliberately
+# NOT split per-module — listing a module owner alongside would let that owner
+# self-approve their own area, which is exactly what this is meant to prevent.
+# Module ownership for *review routing* lives in .claude/CLAUDE.md, not here.
+
+*   @deeepak-17
