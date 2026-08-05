@@ -3,7 +3,7 @@ import random
 import torch
 from transformers import AutoTokenizer
 
-from edge.model_loader import load_model
+from edge.model_loader import load_model, sanity_check
 from edge.lora_init import attach_lora
 from edge.dataset import toy_dataset
 
@@ -95,8 +95,22 @@ if __name__ == "__main__":
     print(f"\nexamples      : {len(examples)}  | token lengths {lengths} (max {max(lengths)})")
 
     first_avg, last_avg = train(model, examples, epochs=EPOCHS, lr=LR)
-
+    model.save_pretrained(save_directory="./cache")
+    tokenizer.save_pretrained(save_directory="./cache")
+    
     print("\n=== E2.2 acceptance ===")
     print(f"first-epoch avg loss : {first_avg:.4f}")
     print(f"last-epoch  avg loss : {last_avg:.4f}")
     print(f"loss decreased       : {last_avg < first_avg}")
+
+    # Switching to inference mode
+    model.eval()
+    model.gradient_checkpointing_disable()
+    model.config.use_cache = True
+    print("\n Fine-tuned model output:")
+    prompt = "def fibonacci(n):\n    "
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    out = model.generate(
+        **inputs, max_new_tokens=profile.max_new_tokens, do_sample=False
+    )
+    print(tokenizer.decode(out[0], skip_special_tokens=True))
