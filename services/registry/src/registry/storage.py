@@ -35,6 +35,8 @@ from contracts import (
     AggregationMethod,
     LoRAHyperParams,
     PrivacySpec,
+    PromotionAction,
+    PromotionDecision,
     utcnow_iso,
 )
 
@@ -140,6 +142,33 @@ class RegistryStore:
         tmp.write_text(str(version))
         os.replace(tmp, target)
 
+    def previous_version(self, name: str, version: int) -> int | None:
+        """The version immediately before ``version`` in this adapter's history.
+
+        Used by the D5 rule as the rollback target. None if ``version`` is the
+        first version (nothing to fall back to).
+        """
+        vs = self.list_versions(name)
+        earlier = [v for v in vs if v < version]
+        return max(earlier) if earlier else None
+
+    # -- promotion audit trail (D5/D9) --------------------------------------- #
+    def record_promotion(self, name: str, decision: PromotionDecision) -> None:
+        """Append a PromotionDecision to this adapter's audit log (never rewritten)."""
+        log = self._adapter_dir(name) / "promotions.jsonl"
+        with log.open("a") as f:
+            f.write(json.dumps(_promotion_decision_to_dict(decision)) + "\n")
+
+    def list_promotions(self, name: str) -> list[PromotionDecision]:
+        log = self._adapter_dir(name) / "promotions.jsonl"
+        if not log.exists():
+            return []
+        return [
+            _promotion_decision_from_dict(json.loads(line))
+            for line in log.read_text().splitlines()
+            if line.strip()
+        ]
+
     # -- mutation ----------------------------------------------------------- #
     def save(
         self,
@@ -229,4 +258,27 @@ def _metadata_from_dict(d: dict) -> AdapterMetadata:
         source_clients=tuple(d.get("source_clients", ())),
         created_at=d["created_at"],
         contracts_version=d.get("contracts_version", "1.0.0"),
+    )
+
+
+def _promotion_decision_to_dict(decision: PromotionDecision) -> dict:
+    d = asdict(decision)
+    d["action"] = decision.action.value
+    d["adapter"]["kind"] = decision.adapter.kind.value
+    return d
+
+
+def _promotion_decision_from_dict(d: dict) -> PromotionDecision:
+    ref = d["adapter"]
+    return PromotionDecision(
+        adapter=AdapterRef(
+            name=ref["name"],
+            version=ref["version"],
+            kind=AdapterKind(ref["kind"]),
+            cluster_id=ref.get("cluster_id"),
+        ),
+        action=PromotionAction(d["action"]),
+        active_version_after=d["active_version_after"],
+        reason=d["reason"],
+        timestamp=d["timestamp"],
     )
