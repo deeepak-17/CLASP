@@ -102,3 +102,42 @@ def test_set_active_is_atomic_no_tmp_left(store, safetensors_blob):
 def test_invalid_name_rejected(store, safetensors_blob):
     with pytest.raises(Exception):
         store.save("../evil", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+
+
+def test_save_leaves_no_orphan_on_crash_between_writes(store, safetensors_blob, monkeypatch):
+    # M5 (Thu target): a crash between the safetensors write and the metadata
+    # write must never leave a version dir that `list_versions` can see with
+    # one file missing. We simulate the crash by blowing up mid-staging,
+    # after adapter.safetensors is already on disk but before metadata.json
+    # is written / the publish rename happens.
+    import registry.storage as storage_mod
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated crash mid-save")
+
+    monkeypatch.setattr(storage_mod, "_metadata_to_dict", boom)
+
+    with pytest.raises(RuntimeError):
+        store.save("crashy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+
+    # No half-written v1/ ever became visible...
+    assert store.list_versions("crashy") == []
+    assert not (store._adapter_dir("crashy") / "v1").exists()
+    # ...and no abandoned staging directory was left behind either.
+    leftovers = list(store._adapter_dir("crashy").iterdir())
+    assert leftovers == [], f"staging dir not cleaned up: {leftovers}"
+
+    # The failed attempt didn't burn a version number — a real save still
+    # lands on v1, not v2, proving nothing was claimed by the crash.
+    monkeypatch.undo()
+    m = store.save("crashy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    assert m.ref.version == 1
+
+
+def test_save_publishes_both_files_together(store, safetensors_blob):
+    # The other half of the atomicity claim: once save() returns, both files
+    # exist side by side — no window where one is present without the other.
+    store.save("atomic-pair", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    vdir = store._adapter_dir("atomic-pair") / "v1"
+    assert (vdir / "adapter.safetensors").exists()
+    assert (vdir / "metadata.json").exists()

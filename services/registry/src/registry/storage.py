@@ -25,6 +25,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -190,30 +192,42 @@ class RegistryStore:
         if not is_safetensors(payload):
             raise StorageError("payload is not a valid safetensors blob")
 
-        version = (self.latest_version(name) if self._adapter_dir(name).exists() else 0) + 1
+        adapter_dir = self._adapter_dir(name)
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        version = self.latest_version(name) + 1
         vdir = self._version_dir(name, version)
-        try:
-            # M4: mkdir is the atomic claim on a version. If a concurrent save
-            # already took it, FileExistsError -> VersionExists (a clean 409),
-            # never a silent overwrite (D9) or an unhandled 500.
-            vdir.mkdir(parents=True, exist_ok=False)
-        except FileExistsError as e:
-            raise VersionExists(f"{name} v{version} already exists") from e
 
-        (vdir / "adapter.safetensors").write_bytes(payload)
-        meta = AdapterMetadata(
-            ref=AdapterRef(name=name, version=version, kind=kind, cluster_id=cluster_id),
-            hparams=hparams,
-            privacy=privacy or PrivacySpec(),
-            aggregation=aggregation,
-            round=round,
-            seed=seed,
-            sha256=hashlib.sha256(payload).hexdigest(),
-            num_bytes=len(payload),
-            source_clients=tuple(source_clients),
-            created_at=utcnow_iso(),
-        )
-        (vdir / "metadata.json").write_text(json.dumps(_metadata_to_dict(meta), indent=2))
+        # M5: stage both files in a hidden, uniquely-named directory next to
+        # the version tree, then publish them with a single directory rename.
+        # A crash before the rename leaves only the (unlisted) staging dir —
+        # never a version directory with one file missing (Thu target).
+        staging = Path(tempfile.mkdtemp(prefix=f".tmp-v{version}-", dir=adapter_dir))
+        try:
+            (staging / "adapter.safetensors").write_bytes(payload)
+            meta = AdapterMetadata(
+                ref=AdapterRef(name=name, version=version, kind=kind, cluster_id=cluster_id),
+                hparams=hparams,
+                privacy=privacy or PrivacySpec(),
+                aggregation=aggregation,
+                round=round,
+                seed=seed,
+                sha256=hashlib.sha256(payload).hexdigest(),
+                num_bytes=len(payload),
+                source_clients=tuple(source_clients),
+                created_at=utcnow_iso(),
+            )
+            (staging / "metadata.json").write_text(json.dumps(_metadata_to_dict(meta), indent=2))
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        try:
+            # os.rename onto an existing (non-empty) vdir fails, which we
+            # still turn into a clean VersionExists (D9) — same external
+            # semantics as the old mkdir-based claim, atomic claim moved here.
+            os.rename(staging, vdir)
+        except OSError as e:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise VersionExists(f"{name} v{version} already exists") from e
         if set_active:
             self.set_active(name, version)
         return meta
