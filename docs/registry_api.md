@@ -1,8 +1,9 @@
-# State Registry — API (v0.1, W3)
+# State Registry — API (v0.2, W4)
 
 FastAPI service. Owner: Deepak (P4). Adapters are stored as versioned,
-immutable safetensors with a JSON metadata sidecar. W3 scope is **save / load /
-list**; two-sided promotion & rollback (D5) land in W5.
+immutable safetensors with a JSON metadata sidecar. Save/load/list landed W3;
+two-sided promotion & rollback (D5) landed W4 (ahead of the original W5 plan).
+Runnable end-to-end walkthrough: [`services/registry/demo/save_promote_rollback_demo.sh`](../services/registry/demo/save_promote_rollback_demo.sh).
 
 Run locally:
 
@@ -23,6 +24,8 @@ CLASP_REGISTRY_DATA=./_data uvicorn registry.app:app --port 8004
 | GET  | `/adapters/{name}/versions/{v}` | Metadata for one version. |
 | GET  | `/adapters/{name}/versions/{v}/file` | Download the safetensors blob. |
 | GET  | `/adapters/{name}/active` | Metadata for the promoted (active) version. |
+| POST | `/adapters/{name}/promote` | Apply the D5 two-sided rule to the active version — confirms (`promote`) or reverts (`rollback`). |
+| GET  | `/adapters/{name}/promotions` | Promotion/rollback audit trail (append-only, never rewritten). |
 
 ### Save
 
@@ -62,6 +65,51 @@ curl -F "file=@adapter.safetensors" \
 curl http://localhost:8004/adapters/django/versions/2                # metadata
 curl -OJ http://localhost:8004/adapters/django/versions/2/file       # safetensors bytes
 ```
+
+### Promote / rollback (D5)
+
+`POST /adapters/{name}/promote` — JSON body, applies the two-sided rule to
+whatever version is **currently active** (saves auto-activate on write, D9;
+this is the checkpoint that confirms or reverts that choice once P5's
+evaluation is in):
+
+```json
+{
+  "eval": {
+    "adapter": {"name": "django", "version": 2, "kind": "client"},
+    "in_project": {"edit_similarity": 0.80, "exact_match": 0.5, "perplexity": 3.0, "n_examples": 20},
+    "guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.30}}],
+    "baseline_in_project": {"edit_similarity": 0.70, "exact_match": 0.5, "perplexity": 3.2, "n_examples": 20},
+    "baseline_noise_band": 0.02
+  },
+  "baseline_guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.30}}]
+}
+```
+
+Rule (`registry.promotion.decide`, pure function — no filesystem access):
+promote iff in-project edit similarity clears `baseline_noise_band` **and**
+HumanEval pass@1 hasn't dropped more than `GUARD_PASS_AT_1_TOLERANCE` (0.02)
+vs `baseline_guard`. Otherwise the registry rolls the `active` pointer back to
+`previous_version`. Never gates on pass@k alone (D5).
+
+Responses:
+
+| Status | Meaning |
+|---|---|
+| `200` | Decision applied (`action: "promote"` or `"rollback"`); body is the `PromotionDecision`, also appended to the audit log. |
+| `409` | `eval.adapter.version` isn't the currently active version — promotion only evaluates the current active. |
+| `422` | Malformed payload, `eval.adapter.name` doesn't match the path, or a rollback was indicated but there's no `previous_version` to fall back to. |
+
+```bash
+curl -X POST http://localhost:8004/adapters/django/promote \
+     -H 'Content-Type: application/json' \
+     -d '{"eval": {...}, "baseline_guard": [...]}'
+
+curl http://localhost:8004/adapters/django/promotions   # audit trail
+```
+
+See [`services/registry/demo/save_promote_rollback_demo.sh`](../services/registry/demo/save_promote_rollback_demo.sh)
+for a full runnable save → save → promote → save → rollback → lineage cycle.
 
 ## metadata.json schema (`AdapterMetadata`)
 
@@ -107,7 +155,6 @@ write_manifest(m, "experiments/<run>/results/manifest.json")
 
 ## Not yet (later weeks)
 
-- `promote` / `rollback` endpoints driven by `EvalResult` (D5) — W5.
-- Composite-adapter storage + promotion pipeline — W8.
+- Composite-adapter storage + promotion pipeline (D6) — W8.
 - Retention/GC policy + compose profiles — W10.
 - mTLS in front of all endpoints (D7) — W10.
