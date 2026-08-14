@@ -3,9 +3,9 @@ import random
 import torch
 from transformers import AutoTokenizer
 
-from edge.model_loader import load_model, sanity_check
+from edge.model_loader import load_model
 from edge.lora_init import attach_lora
-from edge.dataset import toy_dataset
+from edge.toy.toy_dataset import toy_dataset
 
 SEED = 0
 EPOCHS = 10

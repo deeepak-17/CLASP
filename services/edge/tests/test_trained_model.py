@@ -1,6 +1,6 @@
 from edge.model_loader import load_model
 from edge.lora_init import attach_lora
-from edge.toy_training_loop import set_seed, train, toy_dataset, encode
+from edge.toy.toy_training_loop import set_seed, train, toy_dataset, encode
 from peft import PeftModel
 
 def test_before_after_out():
