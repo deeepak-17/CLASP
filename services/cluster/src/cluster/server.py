@@ -1,4 +1,4 @@
-    d"""Cluster server: Flower strategy with SVD LoRA aggregation (D2).
+"""Cluster server: Flower strategy with SVD LoRA aggregation (D2).
 
 ``SVDLoRAStrategy`` plugs the Week-3 aggregation core into Flower's FedAvg
 skeleton: client updates arrive as flat ndarray lists (see
@@ -25,13 +25,13 @@ from flwr.server import ServerConfig
 from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
 
-from services.cluster.adapter_format import (
+from cluster.adapter_format import (
     DEFAULT_ALPHA,
     DEFAULT_RANK,
     TARGET_MODULES,
     LoRAAdapter,
 )
-from services.cluster.aggregation import aggregate_naive, aggregate_svd
+from cluster.aggregation import aggregate_naive, aggregate_svd
 
 
 class SVDLoRAStrategy(FedAvg):

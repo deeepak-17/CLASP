@@ -5,8 +5,15 @@ description = "CLASP Cluster Layer — Flower + FedProx aggregation, FastAPI (P2
 requires-python = ">=3.10"
 dependencies = [
     "clasp-contracts",
-    # "flwr", "fastapi", "uvicorn",
+    "numpy",
+    "pydantic>=2",
+    "flwr>=1.8",
+    "torch",
+    # "fastapi", "uvicorn",  # server HTTP surface, not needed for the Week 5 demo
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [build-system]
 requires = ["setuptools>=68"]

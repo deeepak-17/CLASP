@@ -1,6 +1,6 @@
 """CLASP cluster service (P2): federated LoRA aggregation over Flower."""
 
-from services.cluster.adapter_format import (
+from cluster.adapter_format import (
     DEFAULT_ALPHA,
     DEFAULT_RANK,
     TARGET_MODULES,
@@ -8,7 +8,7 @@ from services.cluster.adapter_format import (
     LoRAAdapter,
     random_adapter,
 )
-from services.cluster.aggregation import (
+from cluster.aggregation import (
     StreamingWeightedMean,
     aggregate_naive,
     aggregate_svd,
@@ -16,7 +16,10 @@ from services.cluster.aggregation import (
     truncated_svd_refactor,
 )
 
+__version__ = "0.1.0"
+
 __all__ = [
+    "__version__",
     "DEFAULT_ALPHA",
     "DEFAULT_RANK",
     "TARGET_MODULES",

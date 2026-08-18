@@ -18,7 +18,7 @@ from typing import Iterable
 
 import numpy as np
 
-from services.cluster.adapter_format import LoRAAdapter
+from cluster.adapter_format import LoRAAdapter
 
 
 class StreamingWeightedMean:
