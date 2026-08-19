@@ -93,5 +93,20 @@ def test_promotions_404_for_unknown_adapter(client):
     assert client.get("/adapters/ghost/promotions").status_code == 404
 
 
+def test_promote_corrupt_pointer_is_a_clean_500(client):
+    """L1: same guard as GET .../active — promote() must not 500 raw on a
+    hand-corrupted active pointer."""
+    import os
+    from pathlib import Path
+
+    _upload(client, "corrupt")
+    active_path = Path(os.environ["CLASP_REGISTRY_DATA"]) / "adapters" / "corrupt" / "active"
+    active_path.write_text("not-an-int")
+
+    r = client.post("/adapters/corrupt/promote", json=_promote_body("corrupt", 1, good=True))
+    assert r.status_code == 500
+    assert "corrupt" in r.json()["detail"].lower()
+
+
 # make_safetensors imported so conftest helper is reachable from tests
 _ = make_safetensors

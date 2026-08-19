@@ -5,6 +5,7 @@ import pytest
 from contracts import AdapterKind, AggregationMethod, LoRAHyperParams, PrivacySpec
 from registry.storage import (
     AdapterNotFound,
+    StorageError,
     VersionExists,
     is_safetensors,
 )
@@ -100,7 +101,7 @@ def test_set_active_is_atomic_no_tmp_left(store, safetensors_blob):
 
 
 def test_invalid_name_rejected(store, safetensors_blob):
-    with pytest.raises(Exception):
+    with pytest.raises(StorageError):
         store.save("../evil", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
 
 

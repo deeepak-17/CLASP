@@ -92,6 +92,15 @@ def _guard_metrics_from(d: dict) -> GuardMetrics:
     )
 
 
+def _get_active_version(store: RegistryStore, name: str) -> int | None:
+    """`store.get_active` but with a corrupt on-disk pointer turned into a
+    clean HTTP 500 instead of an unhandled `StorageError` (L1)."""
+    try:
+        return store.get_active(name)
+    except StorageError as e:
+        raise HTTPException(500, f"registry data error: {e}") from e
+
+
 def _eval_result_from(d: dict) -> EvalResult:
     ref = d["adapter"]
     return EvalResult(
@@ -196,7 +205,7 @@ def download_version(name: str, version: int) -> Response:
 @app.get("/adapters/{name}/active")
 def get_active(name: str) -> dict:
     store = get_store()
-    active = store.get_active(name)
+    active = _get_active_version(store, name)
     if active is None:
         raise HTTPException(404, f"no active version for {name}")
     return _metadata_to_dict(store.get_metadata(name, active))
@@ -226,7 +235,7 @@ def promote(name: str, body: dict = Body(...)) -> dict:
             422, f"eval.adapter.name {eval_result.adapter.name!r} does not match path {name!r}"
         )
 
-    active_before = store.get_active(name)
+    active_before = _get_active_version(store, name)
     if active_before is None:
         raise HTTPException(404, f"no active version for {name}")
     if active_before != eval_result.adapter.version:

@@ -94,6 +94,21 @@ def test_missing_adapter_404(client):
     assert client.get("/adapters/ghost/active").status_code == 404
 
 
+def test_active_endpoint_corrupt_pointer_is_a_clean_500(client, safetensors_blob):
+    """L1: a hand-corrupted `active` file must surface as a structured 500,
+    not an unhandled StorageError bubbling out of the handler."""
+    import os
+    from pathlib import Path
+
+    _upload(client, "corrupt", safetensors_blob, {"kind": "client"})
+    active_path = Path(os.environ["CLASP_REGISTRY_DATA"]) / "adapters" / "corrupt" / "active"
+    active_path.write_text("not-an-int")
+
+    r = client.get("/adapters/corrupt/active")
+    assert r.status_code == 500
+    assert "corrupt" in r.json()["detail"].lower()
+
+
 def test_manifest_roundtrip(tmp_path):
     from registry.manifest import build_manifest, config_hash, read_manifest, write_manifest
 
