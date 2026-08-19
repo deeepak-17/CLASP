@@ -64,3 +64,9 @@ CLASP_Team_Bundle.zip
 # --- IDE / editor settings (per-developer, never shared) ---
 .idea/
 .vscode/
+
+# --- P4 local-only docs (kept on disk, not pushed to GitHub) ---
+docs/registry_api.md
+docs/review/registry_rubric_evidence.md
+docs/proposals/contracts-v1.1-proposal.md
+docs/rubric.md
