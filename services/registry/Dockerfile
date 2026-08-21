@@ -1,4 +1,4 @@
-# CLASP State Registry — safetensors versioning, Pass@k rollback, FastAPI (P4)
+# CLASP State Registry — safetensors versioning, two-sided promotion/rollback (D5), FastAPI (P4)
 FROM python:3.11-slim
 WORKDIR /app
 COPY contracts /app/contracts

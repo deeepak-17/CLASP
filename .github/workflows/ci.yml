@@ -1,0 +1,51 @@
+name: CI
+
+# Required check on every PR (MASTER_PLAN D9). No direct pushes to main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff (whole repo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.15.20
+      - run: ruff check .
+
+  test:
+    name: pytest (${{ matrix.package.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The 6-package matrix: contracts + security lib + 4 services.
+        package:
+          - { name: contracts,   path: contracts,             tests: contracts/tests }
+          - { name: security,    path: security,              tests: security/tests }
+          - { name: edge,        path: services/edge,         tests: services/edge/tests }
+          - { name: cluster,     path: services/cluster,      tests: services/cluster/tests }
+          - { name: registry,    path: services/registry,     tests: services/registry/tests }
+          - { name: evaluation,  path: services/evaluation,   tests: services/evaluation/tests }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install contracts (shared seam) + package under test
+        run: |
+          pip install -e contracts
+          pip install -e "${{ matrix.package.path }}[test]" 2>/dev/null || pip install -e "${{ matrix.package.path }}"
+          pip install pytest httpx
+      - name: Run tests
+        run: pytest "${{ matrix.package.tests }}" -q
