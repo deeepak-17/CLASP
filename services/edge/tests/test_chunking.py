@@ -9,7 +9,6 @@ same blocks every time — an unsorted directory walk would silently reshuffle
 every block boundary between Windows and the Linux GPU box.
 """
 import json
-import math
 
 import pytest
 
