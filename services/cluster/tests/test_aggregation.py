@@ -8,7 +8,6 @@ only services/cluster/tests/test_smoke.py (a bare import check) existed.
 from __future__ import annotations
 
 import numpy as np
-
 from cluster.adapter_format import random_adapter
 from cluster.aggregation import aggregate_naive, aggregate_svd, exact_average_delta
 

@@ -19,16 +19,16 @@ from cluster.aggregation import (
 __version__ = "0.1.0"
 
 __all__ = [
-    "__version__",
     "DEFAULT_ALPHA",
     "DEFAULT_RANK",
     "TARGET_MODULES",
     "AdapterFormatError",
     "LoRAAdapter",
-    "random_adapter",
     "StreamingWeightedMean",
+    "__version__",
     "aggregate_naive",
     "aggregate_svd",
     "exact_average_delta",
+    "random_adapter",
     "truncated_svd_refactor",
 ]

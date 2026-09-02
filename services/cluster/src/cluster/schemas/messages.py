@@ -29,7 +29,7 @@ class TensorPayload(BaseModel):
     data_b64: str
 
     @classmethod
-    def from_numpy(cls, name: str, array: np.ndarray) -> "TensorPayload":
+    def from_numpy(cls, name: str, array: np.ndarray) -> TensorPayload:
         array = np.ascontiguousarray(array)
         return cls(
             name=name,
@@ -43,7 +43,7 @@ class TensorPayload(BaseModel):
         return np.frombuffer(raw, dtype=np.dtype(self.dtype)).reshape(self.shape).copy()
 
     @model_validator(mode="after")
-    def _check_size(self) -> "TensorPayload":
+    def _check_size(self) -> TensorPayload:
         expected = int(np.prod(self.shape)) * np.dtype(self.dtype).itemsize
         actual = len(base64.b64decode(self.data_b64))
         if expected != actual:
@@ -76,7 +76,7 @@ class AdapterUpload(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _check_tensor_coverage(self) -> "AdapterUpload":
+    def _check_tensor_coverage(self) -> AdapterUpload:
         # Every target module must ship exactly one lora_A and one lora_B.
         names = {t.name for t in self.tensors}
         missing = [

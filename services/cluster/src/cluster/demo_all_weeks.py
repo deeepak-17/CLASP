@@ -624,7 +624,7 @@ def demo_full_simulation():
             ok(f"Loss decreased: {losses[0]:.6f} -> {losses[-1]:.6f}")
             ok("FedProx training is working: model improves across rounds")
         else:
-            ok(f"Loss values: {[f'{l:.4f}' for l in losses]}")
+            ok(f"Loss values: {[f'{loss:.4f}' for loss in losses]}")
             ok("Note: toy model/few steps may not show clear decrease")
 
     ok("All 3 rounds completed successfully")
