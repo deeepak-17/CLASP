@@ -9,12 +9,12 @@ import logging
 import sys
 import time
 
+from cluster.adapter_format import random_adapter
+from cluster.simulation import make_real_clients, run_federated
+
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 logging.getLogger("flwr").setLevel(logging.ERROR)
-
-from cluster.adapter_format import random_adapter
-from cluster.simulation import make_real_clients, run_federated
 
 
 def main():
