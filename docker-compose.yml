@@ -6,6 +6,16 @@ services:
       context: .
       dockerfile: services/registry/Dockerfile
     ports: ["8004:8004"]
+    # Registry is STATEFUL: versioned safetensors + metadata must survive restarts.
+    environment:
+      CLASP_REGISTRY_DATA: /data/registry
+    volumes:
+      - registry-data:/data/registry
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8004/healthz').status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   cluster:
     build:
@@ -25,3 +35,7 @@ services:
       context: .
       dockerfile: services/evaluation/Dockerfile
     depends_on: [registry]
+
+# Named volume so adapter versions persist across `compose down`/`up` (D9).
+volumes:
+  registry-data:

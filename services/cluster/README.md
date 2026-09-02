@@ -2,7 +2,7 @@
 
 **Owner:** Prasanth (P2)
 
-Skeleton module. See `.claude/CLAUDE.md` (local) for conventions. Depends on
+Skeleton module. See the team's internal conventions notes (local). Depends on
 the shared `contracts` package; keep cross-module interaction interface-driven.
 
 ```bash
