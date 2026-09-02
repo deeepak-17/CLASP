@@ -63,8 +63,8 @@ def test_round_result_reproducible_end_to_end():
     r2 = one_run(42)
     for module in r1.adapter.target_modules:
         assert np.array_equal(
-            r1.adapter.modules[module]["lora_A"], r2.adapter.modules[module]["lora_A"]
+            r1.adapter.modules[0][module]["lora_A"], r2.adapter.modules[0][module]["lora_A"]
         )
         assert np.array_equal(
-            r1.adapter.modules[module]["lora_B"], r2.adapter.modules[module]["lora_B"]
+            r1.adapter.modules[0][module]["lora_B"], r2.adapter.modules[0][module]["lora_B"]
         )

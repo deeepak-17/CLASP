@@ -177,7 +177,8 @@ def run_demo(
             "lora_A_shape": list(pair["lora_A"].shape),
             "lora_B_shape": list(pair["lora_B"].shape),
         }
-        for module, pair in result.adapter.modules.items()
+        # layer 0: the demo's clients are single-layer ToyLoRAModels.
+        for module, pair in result.adapter.modules[0].items()
     }
 
     return {

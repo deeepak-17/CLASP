@@ -107,24 +107,28 @@ if TORCH_AVAILABLE:
         # --- adapter (trainable-params-only) round-trip --------------------------
 
         def get_adapter(self) -> LoRAAdapter:
+            # ToyLoRAModel is a single (conceptual) layer, so everything
+            # lives at layer index 0 of the adapter's (layer, module) map.
             modules = {
-                name: {
-                    "lora_A": self.lora_a[name].detach().numpy().copy(),
-                    "lora_B": self.lora_b[name].detach().numpy().copy(),
+                0: {
+                    name: {
+                        "lora_A": self.lora_a[name].detach().numpy().copy(),
+                        "lora_B": self.lora_b[name].detach().numpy().copy(),
+                    }
+                    for name in self.target_modules
                 }
-                for name in self.target_modules
             }
             return LoRAAdapter(
                 rank=self.rank, alpha=self.alpha,
-                target_modules=self.target_modules, modules=modules,
+                target_modules=self.target_modules, num_layers=1, modules=modules,
             )
 
         def set_adapter(self, adapter: LoRAAdapter) -> None:
             adapter.validate()
             with torch.no_grad():
                 for name in self.target_modules:
-                    self.lora_a[name].copy_(torch.from_numpy(adapter.modules[name]["lora_A"]).float())
-                    self.lora_b[name].copy_(torch.from_numpy(adapter.modules[name]["lora_B"]).float())
+                    self.lora_a[name].copy_(torch.from_numpy(adapter.modules[0][name]["lora_A"]).float())
+                    self.lora_b[name].copy_(torch.from_numpy(adapter.modules[0][name]["lora_B"]).float())
 
     class LoRAClient(NumPyClient):
         """Week 3 client: real local training with a FedProx proximal term."""

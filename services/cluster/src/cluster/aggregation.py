@@ -1,6 +1,6 @@
 """Cluster-side LoRA aggregation (Week 3, D2).
 
-Pipeline per target module:
+Pipeline per (layer, target module):
     1. reconstruct delta_W_k = B_k @ A_k for every client k        (W3 Tue)
     2. streamed exact weighted average of the delta_Ws             (W3 Wed)
        - one running accumulator; never materializes all clients
@@ -14,11 +14,16 @@ which is exactly the error the SVD path avoids.
 
 from __future__ import annotations
 
-from typing import Iterable
+from itertools import zip_longest
+from typing import Iterable, Iterator
 
 import numpy as np
 
 from cluster.adapter_format import LoRAAdapter
+
+# Sentinel used to detect a length mismatch between `adapters` and `weights`
+# without materializing either into a list (see `_paired`).
+_MISSING = object()
 
 
 class StreamingWeightedMean:
@@ -53,6 +58,34 @@ class StreamingWeightedMean:
         return self._mean
 
 
+def _paired(
+    adapters: Iterable[LoRAAdapter], weights: Iterable[float]
+) -> Iterator[tuple[LoRAAdapter, float]]:
+    """zip(adapters, weights), but raise instead of silently truncating.
+
+    Plain ``zip`` stops at the shorter iterable with no error — if ``weights``
+    is ever shorter than ``adapters`` (e.g. an off-by-one when a client drops
+    mid-round), fewer clients get aggregated with no signal that anything was
+    dropped. This raises as soon as either side runs out first, and — unlike
+    materializing ``adapters`` into a list to compare lengths up front — keeps
+    the "adapters is only iterated once, streamed" contract intact.
+    """
+    for i, (adapter, weight) in enumerate(
+        zip_longest(adapters, weights, fillvalue=_MISSING)
+    ):
+        if adapter is _MISSING:
+            raise ValueError(
+                f"weights has more entries than adapters (adapters exhausted "
+                f"after {i} pair(s)) — cannot aggregate a partial pair"
+            )
+        if weight is _MISSING:
+            raise ValueError(
+                f"adapters has more entries than weights (weights exhausted "
+                f"after {i} pair(s)) — cannot aggregate a partial pair"
+            )
+        yield adapter, weight
+
+
 def truncated_svd_refactor(delta_w: np.ndarray, rank: int) -> tuple[np.ndarray, np.ndarray]:
     """Best rank-``rank`` factorization of delta_w: returns (A, B), B @ A ≈ delta_w.
 
@@ -74,35 +107,46 @@ def aggregate_svd(
     weights: Iterable[float],
     rank: int | None = None,
 ) -> LoRAAdapter:
-    """SVD aggregation: exact-average delta_W per module, re-factorized to rank r.
+    """SVD aggregation: exact-average delta_W per (layer, module), re-factorized to rank r.
 
     ``adapters`` is only iterated once, so it may be a generator that loads /
     receives one client adapter at a time (streamed).
     """
-    means: dict[str, StreamingWeightedMean] = {}
+    means: dict[tuple[int, str], StreamingWeightedMean] = {}
     template: LoRAAdapter | None = None
-    for adapter, weight in zip(adapters, weights):
+    for adapter, weight in _paired(adapters, weights):
         adapter.validate()
         if template is None:
             template = adapter
-            means = {m: StreamingWeightedMean() for m in adapter.target_modules}
+            means = {
+                (layer, m): StreamingWeightedMean()
+                for layer in adapter.layer_indices
+                for m in adapter.target_modules
+            }
         elif adapter.target_modules != template.target_modules:
             raise ValueError("all client adapters must share target_modules")
-        for module in adapter.target_modules:
-            means[module].update(adapter.delta_w(module), weight)
+        elif adapter.num_layers != template.num_layers:
+            raise ValueError("all client adapters must share num_layers")
+        for layer in adapter.layer_indices:
+            for module in adapter.target_modules:
+                means[(layer, module)].update(adapter.delta_w(module, layer), weight)
     if template is None:
         raise ValueError("no adapters to aggregate")
 
     out_rank = rank if rank is not None else template.rank
-    modules: dict[str, dict[str, np.ndarray]] = {}
-    for module in template.target_modules:
-        a, b = truncated_svd_refactor(means[module].result(), out_rank)
-        dtype = template.modules[module]["lora_A"].dtype
-        modules[module] = {"lora_A": a.astype(dtype), "lora_B": b.astype(dtype)}
+    modules: dict[int, dict[str, dict[str, np.ndarray]]] = {
+        layer: {} for layer in template.layer_indices
+    }
+    for layer in template.layer_indices:
+        for module in template.target_modules:
+            a, b = truncated_svd_refactor(means[(layer, module)].result(), out_rank)
+            dtype = template.modules[layer][module]["lora_A"].dtype
+            modules[layer][module] = {"lora_A": a.astype(dtype), "lora_B": b.astype(dtype)}
     return LoRAAdapter(
         rank=out_rank,
         alpha=template.alpha,
         target_modules=template.target_modules,
+        num_layers=template.num_layers,
         modules=modules,
     )
 
@@ -112,37 +156,49 @@ def aggregate_naive(
     weights: Iterable[float],
 ) -> LoRAAdapter:
     """Ablation baseline (D2): weighted average of A and B factors directly."""
-    means: dict[str, dict[str, StreamingWeightedMean]] = {}
+    means: dict[tuple[int, str], dict[str, StreamingWeightedMean]] = {}
     template: LoRAAdapter | None = None
-    for adapter, weight in zip(adapters, weights):
+    for adapter, weight in _paired(adapters, weights):
         adapter.validate()
         if template is None:
             template = adapter
             means = {
-                m: {"lora_A": StreamingWeightedMean(), "lora_B": StreamingWeightedMean()}
+                (layer, m): {"lora_A": StreamingWeightedMean(), "lora_B": StreamingWeightedMean()}
+                for layer in adapter.layer_indices
                 for m in adapter.target_modules
             }
         elif adapter.target_modules != template.target_modules:
-            # BUG-FIX: mirror the mismatch guard from aggregate_svd; without
-            # this, mismatched clients silently corrupt the averaged factors.
+            # mirror the mismatch guard from aggregate_svd; without this,
+            # mismatched clients silently corrupt the averaged factors.
             raise ValueError("all client adapters must share target_modules")
-        for module in adapter.target_modules:
-            for part in ("lora_A", "lora_B"):
-                means[module][part].update(adapter.modules[module][part], weight)
+        elif adapter.num_layers != template.num_layers:
+            raise ValueError("all client adapters must share num_layers")
+        for layer in adapter.layer_indices:
+            for module in adapter.target_modules:
+                for part in ("lora_A", "lora_B"):
+                    means[(layer, module)][part].update(
+                        adapter.modules[layer][module][part], weight
+                    )
     if template is None:
         raise ValueError("no adapters to aggregate")
 
-    modules = {
-        module: {
-            part: means[module][part].result().astype(template.modules[module][part].dtype)
-            for part in ("lora_A", "lora_B")
+    modules: dict[int, dict[str, dict[str, np.ndarray]]] = {
+        layer: {
+            module: {
+                part: means[(layer, module)][part]
+                .result()
+                .astype(template.modules[layer][module][part].dtype)
+                for part in ("lora_A", "lora_B")
+            }
+            for module in template.target_modules
         }
-        for module in template.target_modules
+        for layer in template.layer_indices
     }
     return LoRAAdapter(
         rank=template.rank,
         alpha=template.alpha,
         target_modules=template.target_modules,
+        num_layers=template.num_layers,
         modules=modules,
     )
 
@@ -150,16 +206,20 @@ def aggregate_naive(
 def exact_average_delta(
     adapters: Iterable[LoRAAdapter],
     weights: Iterable[float],
+    layer: int = 0,
 ) -> dict[str, np.ndarray]:
-    """Reference: the exact weighted-average delta_W per module (no re-factorization)."""
+    """Reference: the exact weighted-average delta_W per module, no
+    re-factorization. Single-layer by default (``layer=0``), matching how
+    ``delta_w()`` defaults — pass ``layer`` to inspect another one.
+    """
     means: dict[str, StreamingWeightedMean] = {}
     modules_order: tuple[str, ...] | None = None
-    for adapter, weight in zip(adapters, weights):
+    for adapter, weight in _paired(adapters, weights):
         if modules_order is None:
             modules_order = adapter.target_modules
             means = {m: StreamingWeightedMean() for m in modules_order}
         for module in modules_order:
-            means[module].update(adapter.delta_w(module), weight)
+            means[module].update(adapter.delta_w(module, layer), weight)
     if modules_order is None:
         raise ValueError("no adapters to aggregate")
     return {m: means[m].result() for m in modules_order}
