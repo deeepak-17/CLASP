@@ -14,8 +14,8 @@ which is exactly the error the SVD path avoids.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from itertools import zip_longest
-from typing import Iterable, Iterator
 
 import numpy as np
 

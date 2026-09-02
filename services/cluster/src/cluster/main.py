@@ -3,13 +3,18 @@ CLASP — P2 Cluster Service  |  Author: Prasanth
 Run: python -m cluster.main
 """
 from __future__ import annotations
-import io, sys, time, logging
+
+import io
+import logging
+import sys
+import time
+
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 logging.getLogger("flwr").setLevel(logging.ERROR)
 
 from cluster.adapter_format import random_adapter
-from cluster.simulation     import make_real_clients, run_federated
+from cluster.simulation import make_real_clients, run_federated
 
 
 def main():
@@ -38,7 +43,8 @@ def main():
 
     # ── 2. SVD vs Naive Aggregation Error ─────────────────────────
     import numpy as np
-    from cluster.aggregation import aggregate_svd, aggregate_naive, exact_average_delta
+
+    from cluster.aggregation import aggregate_naive, aggregate_svd, exact_average_delta
 
     def _trained(seed):
         rng = np.random.default_rng(seed)

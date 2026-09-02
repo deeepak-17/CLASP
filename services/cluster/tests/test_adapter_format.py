@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from cluster.adapter_format import (
     TARGET_MODULES,
     AdapterFormatError,

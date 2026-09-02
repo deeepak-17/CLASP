@@ -39,7 +39,12 @@ from typing import Any
 
 from cluster.adapter_format import DEFAULT_RANK
 from cluster.schemas.messages import RoundMetrics
-from cluster.simulation import make_dummy_clients, make_real_clients, random_adapter, run_round
+from cluster.simulation import (
+    make_dummy_clients,
+    make_real_clients,
+    random_adapter,
+    run_round,
+)
 
 try:
     import torch  # noqa: F401

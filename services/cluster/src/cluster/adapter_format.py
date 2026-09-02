@@ -124,7 +124,7 @@ class LoRAAdapter:
         alpha: float = DEFAULT_ALPHA,
         target_modules: tuple[str, ...] = TARGET_MODULES,
         num_layers: int = 1,
-    ) -> "LoRAAdapter":
+    ) -> LoRAAdapter:
         per_layer = 2 * len(target_modules)
         expected = per_layer * num_layers
         if len(arrays) != expected:
@@ -170,7 +170,7 @@ class LoRAAdapter:
         alpha: float = DEFAULT_ALPHA,
         target_modules: tuple[str, ...] = TARGET_MODULES,
         num_layers: int = 1,
-    ) -> "LoRAAdapter":
+    ) -> LoRAAdapter:
         """Parse PEFT-style keys, e.g.
         'base_model.model.model.layers.3.self_attn.q_proj.lora_A.weight'.
 

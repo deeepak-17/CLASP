@@ -136,8 +136,8 @@ if TORCH_AVAILABLE:
         def __init__(
             self,
             client_id: str,
-            model: "ToyLoRAModel",
-            data: tuple["torch.Tensor", "torch.Tensor"],
+            model: ToyLoRAModel,
+            data: tuple[torch.Tensor, torch.Tensor],
             mu: float = 0.01,
             lr: float = 1e-2,
             local_steps: int = 20,
@@ -149,7 +149,7 @@ if TORCH_AVAILABLE:
             self.lr = lr
             self.local_steps = local_steps
 
-        def _trainable(self) -> list["torch.nn.Parameter"]:
+        def _trainable(self) -> list[torch.nn.Parameter]:
             return [p for p in self.model.parameters() if p.requires_grad]
 
         def train_local(self, global_adapter: LoRAAdapter) -> float:

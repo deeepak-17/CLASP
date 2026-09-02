@@ -19,6 +19,7 @@ What this script shows:
 from __future__ import annotations
 
 import time
+
 import numpy as np
 
 LINE  = "=" * 64
@@ -64,15 +65,15 @@ def demo_week1():
     print()
 
     # Import only what Week 1 needed
-    from cluster.client import DummyClient
+
     from cluster.adapter_format import random_adapter
-    from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+    from cluster.client import DummyClient
 
     # Create the initial global adapter (what server sends out)
     initial = random_adapter(in_features=32, out_features=32, seed=0)
     global_arrays = initial.to_ndarrays()
 
-    info(f"Initial global adapter created:")
+    info("Initial global adapter created:")
     show("  rank", initial.rank)
     show("  alpha", initial.alpha)
     show("  target_modules", list(initial.target_modules))
@@ -92,7 +93,7 @@ def demo_week1():
 
     for client in clients:
         arrays_in = [a.copy() for a in global_arrays]
-        updated, n_examples, metrics = client.fit(arrays_in, {"bump": 1.0})
+        updated, n_examples, _metrics = client.fit(arrays_in, {"bump": 1.0})
 
         # Verify the bump happened
         diff = float(np.mean(np.abs(updated[0] - global_arrays[0])))
@@ -159,7 +160,7 @@ def demo_week2():
     info("  from_ndarrays()  <- [A_q, B_q, A_k, B_k, A_v, B_v, A_o, B_o]")
     print()
 
-    from cluster.adapter_format import random_adapter, LoRAAdapter
+    from cluster.adapter_format import LoRAAdapter, random_adapter
 
     adapter = random_adapter(32, 32, seed=1)
 
@@ -210,12 +211,11 @@ def demo_week2():
 def demo_week3():
     heading("WEEK 3 - Delta-W Reconstruction + Streaming Mean + SVD Aggregation")
 
-    from cluster.adapter_format import random_adapter, LoRAAdapter
+    from cluster.adapter_format import random_adapter
     from cluster.aggregation import (
         StreamingWeightedMean,
-        truncated_svd_refactor,
-        aggregate_svd,
         aggregate_naive,
+        aggregate_svd,
         exact_average_delta,
     )
 
@@ -350,13 +350,17 @@ def demo_week3():
 def demo_week4():
     heading("WEEK 4 - Metrics + Redistribution + Tests + Fault Tolerance")
 
-    from cluster.adapter_format import random_adapter, LoRAAdapter
-    from cluster.aggregation import aggregate_svd
-    from cluster.server import SVDLoRAStrategy, build_strategy
     from flwr.common import (
-        Code, FitRes, Status,
-        ndarrays_to_parameters, parameters_to_ndarrays,
+        Code,
+        FitRes,
+        Status,
+        ndarrays_to_parameters,
+        parameters_to_ndarrays,
     )
+
+    from cluster.adapter_format import LoRAAdapter, random_adapter
+    from cluster.aggregation import aggregate_svd
+    from cluster.server import build_strategy
 
     # Helper to create a realistic adapter
     def make_trained_adapter(seed: int) -> LoRAAdapter:
@@ -527,7 +531,7 @@ def demo_week4():
         failures=fake_failures,
     )
     assert p is not None
-    ok(f"Result: params returned (1 good client aggregated)")
+    ok("Result: params returned (1 good client aggregated)")
     ok(f"num_failures in metrics = {m.get('num_failures', 'NOT PRESENT')} "
        f"(transport failures counted)")
 
@@ -544,7 +548,7 @@ def demo_week4():
         failures=[],
     )
     assert p is not None
-    ok(f"Result: only 1 client aggregated (straggler skipped)")
+    ok("Result: only 1 client aggregated (straggler skipped)")
     ok(f"num_clients in metrics = {m.get('num_clients', '?')} (only good client)")
     ok(f"num_failures in metrics = {m.get('num_failures', 'NOT PRESENT')} (straggler counted)")
 
@@ -564,8 +568,8 @@ def demo_week4():
         ok("Result: params=None, metrics={}  (round SKIPPED by quorum guard)")
         ok("25% OK < 50% minimum threshold -> round aborted, no corrupt aggregate")
     else:
-        ok(f"Note: quorum guard not in current server.py (basic version)")
-        ok(f"Quorum guard was added in the advanced fault-tolerance implementation")
+        ok("Note: quorum guard not in current server.py (basic version)")
+        ok("Quorum guard was added in the advanced fault-tolerance implementation")
 
     print()
     ok("WEEK 4 COMPLETE: Metrics, redistribution, tests, fault tolerance all working")
@@ -586,11 +590,11 @@ def demo_full_simulation():
     info("  round_log            ->  metrics per round           (W4 Mon)")
     print()
 
-    from cluster.simulation import make_real_clients, run_federated
     from cluster.adapter_format import random_adapter
+    from cluster.simulation import make_real_clients, run_federated
 
     clients = make_real_clients(n=3, dim=32, local_steps=20, seed=42)
-    ok(f"3 real LoRAClient instances created (FedProx, mu=0.01)")
+    ok("3 real LoRAClient instances created (FedProx, mu=0.01)")
 
     initial = random_adapter(32, 32, seed=0)
     ok(f"Initial global adapter: rank={initial.rank}, modules={list(initial.target_modules)}")
@@ -684,8 +688,8 @@ def main():
 
     print()
     print(f"  All demonstrations completed in {elapsed:.2f}s")
-    print(f"  Files written by Prasanth (P2): server.py, aggregation.py,")
-    print(f"    adapter_format.py, client.py, simulation.py, demo.py, tests/")
+    print("  Files written by Prasanth (P2): server.py, aggregation.py,")
+    print("    adapter_format.py, client.py, simulation.py, demo.py, tests/")
     print()
     print(LINE)
     print("  Status: Week 1-4 COMPLETE")
