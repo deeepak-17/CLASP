@@ -91,6 +91,20 @@ def test_refactorize_pads_when_rank_exceeds_matrix_dimension():
     assert a.shape == (R, 8) and b.shape == (6, R)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_refactorize_pad_stays_on_the_input_device():
+    """The pad branch must not drag a CUDA factorization back to the CPU.
+
+    An unqualified torch.zeros allocates on the CPU, and torch.cat across
+    devices raises. This cannot be reproduced on a CPU-only runner, so CI
+    skips it; it is the GPU box that keeps the pad honest.
+    """
+    dw = torch.randn(6, 8, device="cuda")
+    a, b, _ = refactorize(dw, rank=R)
+    assert a.shape == (R, 8) and b.shape == (6, R)
+    assert a.device.type == "cuda" and b.device.type == "cuda"
+
+
 # --- SVD aggregation vs the exact average (D2's requirement) ---------------
 
 def test_single_client_aggregation_is_near_lossless():

@@ -98,8 +98,15 @@ def refactorize(dw: torch.Tensor, rank: int, niter: int = DEFAULT_NITER
     rel = (torch.linalg.norm(dw - b @ a) / denom).item() if denom > 0 else 0.0
 
     if q < rank:      # pad so every module reports the same rank
-        b = torch.cat([b, torch.zeros(b.shape[0], rank - q)], dim=1)
-        a = torch.cat([a, torch.zeros(rank - q, a.shape[1])], dim=0)
+        # device=/dtype= are load-bearing: b and a inherit dw's device, so an
+        # unqualified torch.zeros lands on the CPU and torch.cat raises on a
+        # CUDA dw. Unreachable on the real path (2048x2048 at rank 16 gives
+        # q == rank), but live from this module's CLI with --rank above a
+        # matrix dimension.
+        b = torch.cat([b, torch.zeros(b.shape[0], rank - q,
+                                      device=b.device, dtype=b.dtype)], dim=1)
+        a = torch.cat([a, torch.zeros(rank - q, a.shape[1],
+                                      device=a.device, dtype=a.dtype)], dim=0)
     return a, b, rel
 
 
