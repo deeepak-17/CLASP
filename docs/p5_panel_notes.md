@@ -22,6 +22,10 @@ The "Mostly Basic Python Problems" benchmark (Austin et al., 2021). This reposit
 
 The unbiased estimator from the Codex/HumanEval paper: `pass@k = 1 − C(n−c, k) / C(n, k)`, where `n` is samples generated per task, `c` is how many passed, `k` is the number of attempts being modelled. Implemented in `evaluation/scoring.py`, with every edge case (zero samples, `k` exceeding `n`, all-pass, all-fail) handled explicitly rather than silently. Verified against real data: every one of HumanEval's 164 and MBPP's 392 canonical reference solutions passes its own test when run through the identical scoring path (`scripts/sanity_check_scoring.py` — Pass@1 = 1.0000 for both) — proof the scorer and executor are correct, independent of any model.
 
+## 5a. In-project completion metric (D5 primary signal)
+
+Pass@k is the D5 *guard* — a regression tripwire. The D5 *primary* metric is "did the adapter get better at the code this client actually writes?", and `evaluation/in_project.py` measures it: next-line completion over each client's **held-out** `.py` files (the deterministic 10% slice P1 was told to train without), scored as **edit similarity** (character-level `1 − lev/max_len`, the CodeXGLUE convention) and **exact match**. Perplexity — the one number P1 does measure — is merged in at the integration seam. `scripts/run_in_project_eval.py` also runs each client N times to measure `baseline_noise_band`: the smallest in-project gain D5 should treat as real rather than run-to-run noise. With the deterministic mock the band is 0.0 (every repeat is identical) — the mechanism is in place; it becomes a live gate once a stochastic backend is wired. Fills `contracts.InProjectMetrics` and `EvalResult.in_project` (contract mirror bumped to 0.3.0). See `docs/in_project_eval.md`.
+
 ## 6. results.json
 
 `evaluation/results_store.py` writes `evaluation/results/results.json`: one record per scored benchmark run, each a schema-valid `EvalResult` (adapter, benchmark, Pass@k map, task/sample counts) plus run metadata the dashboard needs — model/checkpoint, dataset split, seed, generation config, timestamp, and a mandatory `REAL` / `DEMO_TEST` provenance flag with an explanatory note. Large raw completions live in a separate per-run file; `results.json` stays small and dashboard-facing.
@@ -61,7 +65,8 @@ Every result currently in `results.json` is labelled `DEMO_TEST`, and the dashbo
 
 ## 11. Current limitations
 
-- No real model has been evaluated yet — Pass@k against `MockEdgeInferenceClient` is 0.0 for every task/k by design (the mock never produces a passing completion), which is the correct output of a working scorer given that input, not a result to report as capability.
+- No real model has been evaluated yet — Pass@k against `MockEdgeInferenceClient` is 0.0 for every task/k by design (the mock never produces a passing completion), which is the correct output of a working scorer given that input, not a result to report as capability. The in-project metric (§5a) is the same story: `edit_similarity ≈ 0.18`, `exact_match = 0`, `noise_band = 0` against the mock.
+- The `baseline_noise_band` is measured but reads 0.0 — the mock backend is deterministic, so repeated runs don't vary. It becomes a real threshold when a stochastic (real) backend makes the repeats differ; no code change needed.
 - The real Edge-Layer adapter (`interfaces/edge_transformers_adapter.py`) is implemented but untested against real weights — no GPU/checkpoint in this environment.
 - Execution sandboxing (`evaluation/execution.py`) is process-level (timeout + resource limits), not container-grade; fine for this repository's own completions, would want P3 sign-off before running untrusted input at scale.
 - The dashboard is a single static snapshot with no historical trend view (see `docs/dashboard.md` §9 for the full list).

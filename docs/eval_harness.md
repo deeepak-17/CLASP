@@ -66,6 +66,14 @@ python scripts/sanity_check_scoring.py
 - **`run_baseline_eval.py`** — the harness against `MockEdgeInferenceClient`, scored for real. Pass@k is *expected* to be 0.0 for every task (the mock never produces a passing completion by design) — that is the scorer working correctly given a generator that never passes, not a bug. Writes `evaluation/results/results.json` (see §6) and `evaluation/results/<run_id>.json` (raw completions).
 - **`sanity_check_scoring.py`** — the real check: every task's own canonical/reference solution, run through the identical execute→score path, must pass its own test. On the real HumanEval/MBPP data fetched via §2: **164/164 and 392/392 pass, pass@1 = 1.0000, ~10s total**. No model involved.
 
+## 5a. In-project completion metric (D5 primary signal)
+
+Pass@k above is only the D5 **guard**. The D5 **primary** metric — completion quality on the code a client actually writes — is `evaluation/in_project.py` / `scripts/run_in_project_eval.py`: next-line completion over each client's held-out `.py` files, scored as `edit_similarity` + `exact_match`, plus a `baseline_noise_band` from repeated runs. Fills `contracts.InProjectMetrics` and `EvalResult.in_project`. Full write-up: **`docs/in_project_eval.md`**.
+
+```bash
+python scripts/run_in_project_eval.py            # all clients, mock backend, DEMO_TEST
+```
+
 ## 6. `results.json` (`evaluation/results_store.py`)
 
 Two artefacts, two audiences:
@@ -84,4 +92,5 @@ pytest tests/ -v                                                  # full suite
 python scripts/fetch_benchmark_data.py                            # real HumanEval + MBPP
 python scripts/sanity_check_scoring.py                            # real end-to-end check
 python scripts/run_baseline_eval.py --limit 1000 --num-samples 10 --k 1 10
+python scripts/run_in_project_eval.py                             # in-project metric + noise band
 ```

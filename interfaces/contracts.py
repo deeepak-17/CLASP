@@ -30,6 +30,7 @@ matching the style of the upstream contracts package.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Mapping
@@ -38,7 +39,12 @@ from utils.errors import ContractViolationError
 
 #: Version of the contract mirror. Bumped whenever a field is added or renamed;
 #: written into every artefact so readers can detect a stale producer.
-CONTRACT_VERSION = "0.2.0"
+#:
+#: 0.3.0 — added ``InProjectMetrics`` and the ``EvalResult.in_project`` /
+#:         ``EvalResult.baseline_noise_band`` fields (D5 primary metric — P5's
+#:         "in-project eval v1"). Both new ``EvalResult`` fields are optional
+#:         with backward-compatible defaults, so a 0.2.0 document still loads.
+CONTRACT_VERSION = "0.3.0"
 
 
 class AdapterKind(str, Enum):
@@ -158,14 +164,73 @@ class SnapshotMetadata:
 
 
 @dataclass(frozen=True)
+class InProjectMetrics:
+    """D5 primary metric — completion quality on a client's held-out files.
+
+    Mirrors the frozen ``contracts.InProjectMetrics`` (P4's package). Produced
+    by :mod:`evaluation.in_project`: ``edit_similarity`` and ``exact_match``
+    come from next-line completion over each client's held-out ``.py`` files;
+    ``perplexity`` is P1's held-out number when the integrated pipeline
+    supplies it, or ``None`` when P5 runs standalone against the mock backend
+    (P5 has no logits and does not compute perplexity itself).
+
+    ``edit_similarity`` is the mean character-level normalised edit similarity
+    ``1 - lev(pred, target) / max(len(pred), len(target))`` over the held-out
+    completion set — the CodeXGLUE code-completion convention.
+    """
+
+    edit_similarity: float
+    exact_match: float
+    n_examples: int
+    perplexity: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("edit_similarity", "exact_match"):
+            value = float(getattr(self, name))
+            if not 0.0 <= value <= 1.0:
+                raise ContractViolationError(f"InProjectMetrics.{name} must lie in [0, 1], got {value}")
+        if self.n_examples < 0:
+            raise ContractViolationError(f"InProjectMetrics.n_examples must be >= 0, got {self.n_examples}")
+        if self.perplexity is not None:
+            ppl = float(self.perplexity)
+            if math.isnan(ppl) or ppl <= 0.0:
+                raise ContractViolationError(f"InProjectMetrics.perplexity must be a positive number or null, got {self.perplexity}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "edit_similarity": self.edit_similarity,
+            "exact_match": self.exact_match,
+            "n_examples": self.n_examples,
+            "perplexity": self.perplexity,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "InProjectMetrics":
+        try:
+            perplexity = data.get("perplexity")
+            return cls(
+                edit_similarity=float(data["edit_similarity"]),
+                exact_match=float(data["exact_match"]),
+                n_examples=int(data["n_examples"]),
+                perplexity=None if perplexity is None else float(perplexity),
+            )
+        except (KeyError, ValueError) as exc:
+            raise ContractViolationError(f"Invalid InProjectMetrics payload: {exc}") from exc
+
+
+@dataclass(frozen=True)
 class EvalResult:
-    """P5 -> P4 / dashboard. Outcome of one benchmark run.
+    """P5 -> P4 / dashboard. Outcome of one candidate-adapter evaluation.
 
     ``pass_at_k`` keys are integers in memory but serialise to JSON strings,
     because JSON object keys must be strings; :meth:`from_dict` reverses this.
 
-    Scoring itself is a **Week 3** deliverable — Week 1/2 only fixes the shape
-    so P4 can code the rollback threshold against a stable schema.
+    Two-sided D5 promotion rule (P4's registry acts on this): promote iff the
+    in-project metric improves beyond ``baseline_noise_band`` **and** the
+    HumanEval pass@1 guard has not dropped more than 2 points absolute;
+    otherwise roll back. ``pass_at_k`` here is the guard; ``in_project`` is the
+    primary metric. ``in_project`` is optional so a guard-only document (the
+    Week-3 shape) still validates.
     """
 
     adapter: AdapterRef
@@ -175,6 +240,8 @@ class EvalResult:
     num_samples_per_task: int = 1
     created_at: str | None = None
     run_id: str | None = None
+    in_project: InProjectMetrics | None = None
+    baseline_noise_band: float = 0.0
     contract_version: str = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -183,6 +250,10 @@ class EvalResult:
                 raise ContractViolationError(f"pass@k requires k >= 1, got {k}")
             if not 0.0 <= float(value) <= 1.0:
                 raise ContractViolationError(f"pass@{k} must lie in [0, 1], got {value}")
+        if self.baseline_noise_band < 0.0:
+            raise ContractViolationError(
+                f"baseline_noise_band must be >= 0, got {self.baseline_noise_band}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -193,12 +264,15 @@ class EvalResult:
             "num_samples_per_task": self.num_samples_per_task,
             "created_at": self.created_at,
             "run_id": self.run_id,
+            "in_project": self.in_project.to_dict() if self.in_project is not None else None,
+            "baseline_noise_band": self.baseline_noise_band,
             "contract_version": self.contract_version,
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "EvalResult":
         try:
+            in_project = data.get("in_project")
             return cls(
                 adapter=AdapterRef.from_dict(data["adapter"]),
                 benchmark=BenchmarkName(data["benchmark"]),
@@ -207,6 +281,8 @@ class EvalResult:
                 num_samples_per_task=int(data.get("num_samples_per_task", 1)),
                 created_at=data.get("created_at"),
                 run_id=data.get("run_id"),
+                in_project=InProjectMetrics.from_dict(in_project) if in_project else None,
+                baseline_noise_band=float(data.get("baseline_noise_band", 0.0)),
                 contract_version=str(data.get("contract_version", CONTRACT_VERSION)),
             )
         except (KeyError, ValueError) as exc:

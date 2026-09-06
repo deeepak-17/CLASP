@@ -29,6 +29,13 @@ from evaluation.harness import (
     load_evaluation_config,
     render_dry_run_report,
 )
+from evaluation.in_project import (
+    InProjectConfig,
+    InProjectEvalResult,
+    InProjectEvaluator,
+    evaluate_client_in_project,
+    noise_band,
+)
 from evaluation.models import BenchmarkRunSummary, EvalTask, EvaluationConfig, TaskOutcome
 from evaluation.registry import build_adapter, build_adapters, build_inference_client
 
@@ -43,12 +50,17 @@ __all__ = [
     "EvaluationConfig",
     "EvaluationHarness",
     "HarnessRun",
+    "InProjectConfig",
+    "InProjectEvalResult",
+    "InProjectEvaluator",
     "TaskOutcome",
     "build_adapter",
     "build_adapters",
     "build_inference_client",
     "check_dependencies",
+    "evaluate_client_in_project",
     "load_evaluation_config",
+    "noise_band",
     "render_dependency_report",
     "render_dry_run_report",
 ]
