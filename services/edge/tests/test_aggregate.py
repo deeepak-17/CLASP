@@ -5,8 +5,6 @@ average, with naive averaging kept only as an ablation baseline". These do
 exactly that, and the naive-baseline tests are the ones that justify the
 algorithm choice: they demonstrate the cross-term bias rather than asserting it.
 """
-import math
-
 import pytest
 import torch
 
@@ -55,7 +53,7 @@ def test_weights_normalize_to_one():
     assert w[1] > w[2] > w[0]          # ordering preserved
 
 
-def test_zero_total_weight_is_rejected():
+def test_zero_total_weight_is_rejected():  # noqa: F821
     with pytest.raises(ValueError, match="sum to"):
         normalize_weights([0, 0])
 
