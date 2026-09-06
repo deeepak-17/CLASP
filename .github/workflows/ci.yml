@@ -49,3 +49,20 @@ jobs:
           pip install pytest httpx
       - name: Run tests
         run: pytest "${{ matrix.package.tests }}" -q
+
+  e2e:
+    name: e2e (edge -> cluster -> registry loop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install contracts + cluster + registry (no edge — needs torch/transformers/peft)
+        run: |
+          pip install -e contracts
+          pip install -e services/cluster
+          pip install -e services/registry
+          pip install pytest httpx safetensors
+      - name: Run the cross-service loop test
+        run: pytest tests/e2e -q
