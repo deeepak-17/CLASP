@@ -41,14 +41,12 @@ import _bootstrap  # noqa: F401
 from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
 from evaluation.harness import EvaluationHarness, load_evaluation_config
 from evaluation.results_store import GenerationSnapshot, ResultRecord, append_results, default_results_path
-from interfaces.contracts import AdapterKind, AdapterRef, BenchmarkName
+from interfaces.contracts import AdapterKind, AdapterRef
 from interfaces.edge_client import MockEdgeInferenceClient
-from utils.errors import ClaspP5Error
 from utils.io_utils import read_json
 from utils.logging_utils import get_logger
 from utils.paths import project_paths
 from utils.reporting import MarkdownReport
-from utils.timing import utc_timestamp
 
 _LOG = get_logger(__name__)
 

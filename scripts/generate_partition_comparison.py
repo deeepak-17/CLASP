@@ -24,7 +24,7 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
+from _cli import EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
 from partitions.partitioner import load_partition_config, load_partition_manifest
 from utils.errors import ClaspP5Error
 from utils.io_utils import read_json
@@ -94,7 +94,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(args: argparse.Namespace) -> int:
-    paths = project_paths()
     data = {label: _load_strategy_data(label, path) for label, path in _STRATEGIES.items()}
 
     report = MarkdownReport(

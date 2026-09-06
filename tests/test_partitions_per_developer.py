@@ -21,7 +21,6 @@ from partitions.models import ClientNamingConfig, PartitionConfig, PerDeveloperC
 from partitions.partitioner import Partitioner
 from partitions.strategies import PerDeveloperStrategy, ProjectLevelStrategy, build_strategy
 from partitions.validation import PartitionValidator
-from tests.conftest import make_record
 from utils.errors import ConfigError, PartitionError
 from utils.io_utils import sha256_text
 

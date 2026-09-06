@@ -44,7 +44,6 @@ from evaluation.models import (
 )
 from evaluation.registry import build_adapters, build_inference_client
 from evaluation.scoring import AggregatePassAtK, aggregate_pass_at_k, pass_at_k
-from interfaces.contracts import BenchmarkName
 from interfaces.edge_client import EdgeInferenceClient, GenerationRequest
 from interfaces.security_client import NullPrivacyAccountant, PrivacyAccountant
 from utils.config import load_config

@@ -40,7 +40,7 @@ exactly the two-line change demonstrated in
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 from interfaces.contracts import AdapterRef
@@ -50,7 +50,6 @@ from utils.logging_utils import get_logger
 from utils.timing import Stopwatch
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
-    import torch
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 _LOG = get_logger(__name__)

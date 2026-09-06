@@ -58,7 +58,7 @@ from typing import Any, Callable
 
 import _bootstrap  # noqa: F401
 
-from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, run_cli, setup_logging
+from _cli import EXIT_OK, base_parser, emit, run_cli, setup_logging
 from utils.errors import ClaspP5Error
 from utils.io_utils import write_json, write_jsonl
 from utils.logging_utils import get_logger

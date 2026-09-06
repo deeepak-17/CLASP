@@ -32,7 +32,10 @@ from evaluation.harness import (
 from evaluation.models import BenchmarkRunSummary, EvalTask, EvaluationConfig, TaskOutcome
 from evaluation.registry import build_adapter, build_adapters, build_inference_client
 
+__version__ = "0.1.0"
+
 __all__ = [
+    "__version__",
     "BenchmarkAdapter",
     "BenchmarkRunSummary",
     "DependencyCheckResult",
