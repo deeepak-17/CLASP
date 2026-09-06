@@ -1,0 +1,93 @@
+# Integration Sprint — the four seams run as one loop (Panel Review 2).
+# Wiring only: no retraining, no new ML science. Every run parameter lives here;
+# scripts/demo_round.py takes each as a flag.
+name: w12-integration
+owner: P1 Adithyaa (edge portion) with P2's cluster service and P4's registry
+depends_on: w4w5-g2-g3-round      # reuses its six trained client adapters, unretrained
+
+base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile; 6.7B does not fit in 4 GB
+device_profile: dev
+seed: 0
+
+# --- what runs where ---
+services:
+  registry: http://localhost:8004     # docker compose up -d registry
+  cluster:  http://localhost:8002     # docker compose up -d cluster
+  edge:     host                      # runs where the GPU is
+# Without a docker daemon: python scripts/run_services.py --background
+
+# --- clients (D1) ---
+# NOTE unchanged from w4w5: the web cluster on disk is {flask, requests, werkzeug};
+# D1 specifies {django, flask, requests}. Werkzeug is an unrecorded substitution.
+corpus_root: datasets/materialized
+adapters_root: services/edge/artifacts/round1     # gitignored weights; --adapters overrides
+clusters:
+  web:        [client-flask, client-requests, client-werkzeug]
+  scientific: [client-numpy, client-pandas, client-scikit-learn]
+# Whose held-out files stand for the cluster in the D5 decision (largest split =
+# least noisy edit-similarity estimate). Recorded because it changes the number.
+representative_clients:
+  web: client-werkzeug
+  scientific: client-scikit-learn
+
+# --- seam A: edge -> cluster ---
+upload:
+  dtype: float32              # enforced both directions, not merely documented
+  key_convention: peft        # base_model.model.model.layers.<i>.self_attn.<m>...
+  weight: n_train_blocks      # FedAvg sample weighting, recomputed per run
+  tensors_per_adapter: 192    # 24 layers x q/k/v/o x {lora_A, lora_B}
+
+# --- aggregation (D2) — P2's service, mathematics unchanged ---
+aggregation:
+  rank: 16
+  candidate: svd              # exact weighted average in dW space, re-factorized
+  baseline: naive             # per-factor averaging: D2's ablation, published as v1
+  exact_lowrank: true         # same result as the reference path, 864.6s -> 2.5s
+  retain_uploads: true        # both aggregates come from ONE upload set
+  include_manifest: true      # reconstruction error vs the exact weighted average
+
+# --- seam B/C1: registry ---
+registry_names: [cluster-web, cluster-scientific]
+materialization:
+  verify_sha256: true         # a mismatch fails loudly; nothing is written
+  config_source: registry hparams + adapter_config embedded in the safetensors header
+
+# --- composition (D6) ---
+alpha: 0.5                    # cluster contribution
+beta: 1.0                     # client contribution
+merge_strategy: rank-concat   # exact, not SVD-truncated; self-checked every merge
+
+# --- evaluation (D5 primary metric) ---
+eval:
+  primary_metric: in_project_edit_similarity
+  method: next-line completion on the client's held_out/ split
+  max_examples: 60
+  stride: 7
+  prompt_tokens: 512
+  max_new_tokens: 48
+  decoding: greedy            # do_sample=false; re-runs reproduce exactly
+  batch_size: 4
+  ppl_max_blocks: 0           # full held-out split; the round fits the NFR uncapped
+  noise_band: 0.0             # PLACEHOLDER — P5's measured band does not exist yet
+  humaneval_guard: unavailable
+
+# --- NFRs (D11) ---
+nfr:
+  round_minutes: 30
+  ttft_overhead_ms: 200
+
+notes: >
+  Known deviations carried into this experiment:
+  (1) D3 composition order is NOT satisfied — the six clients were trained on the
+      frozen base, not on frozen (base + alpha*cluster). Unchanged here.
+  (2) D5's HumanEval guard is unavailable: evalplus imports the Unix-only
+      `resource` module and the docker daemon would not start on the demo
+      machine, so option 3 of the sprint's guard policy was taken. Every
+      promotion decision is PROVISIONAL and carries
+      decision_is_authoritative=false.
+  (3) The noise band is still 0.0. At zero, "improved" means "improved by any
+      amount", which is not a real gate.
+  (4) Two registry versions per cluster are published on purpose: D5's first
+      promote call cannot succeed against a single version, because rollback
+      with nothing to fall back to raises.
+  See docs/integration-sprint.md for the full record.

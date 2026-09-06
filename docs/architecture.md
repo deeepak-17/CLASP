@@ -68,6 +68,24 @@ overwritten in place.
    otherwise it repoints `active` to the previous version (rollback). Never gated
    on Pass@k alone.
 
+### 3a. Status of the four seams (Integration Sprint, Panel Review 2)
+
+All four hops above are now implemented and run as one loop on branch
+`integration/panel`. **`docs/integration-sprint.md` is the record**: what
+changed, the PEFT ⇄ cluster key translation, registry materialization, the
+evaluation metric, the HumanEval guard decision, fallback status, the exact
+commands, and the debt log.
+
+| Seam | Call | Status |
+|---|---|---|
+| Edge → Cluster | `POST /uploads` (:8002) | live over HTTP with the real 192-tensor adapters |
+| Cluster → Registry | `POST /adapters/{id}/publish` → `POST /adapters/{name}/versions` (:8004) | live |
+| Registry → Edge | `GET /active` + `GET .../file`, sha256-verified | live |
+| Edge → Registry | `POST /adapters/{name}/promote` | live; decisions PROVISIONAL while the HumanEval guard is unscored |
+
+Security stays a library this sprint: nothing on this channel is
+differentially private or mutually authenticated (still W7/W10).
+
 ## 4. Registry internals (P4 — this repo's primary module)
 
 Storage layout on the persistent volume (`CLASP_REGISTRY_DATA`, default
