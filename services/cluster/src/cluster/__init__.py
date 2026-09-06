@@ -1,6 +1,34 @@
-"""CLASP Cluster Layer — Flower + FedProx aggregation, FastAPI (P2 — Prasanth).
+"""CLASP cluster service (P2): federated LoRA aggregation over Flower."""
 
-Module skeleton. Implement here; communicate with other modules only through
-the shared `contracts` package.
-"""
+from cluster.adapter_format import (
+    DEFAULT_ALPHA,
+    DEFAULT_RANK,
+    TARGET_MODULES,
+    AdapterFormatError,
+    LoRAAdapter,
+    random_adapter,
+)
+from cluster.aggregation import (
+    StreamingWeightedMean,
+    aggregate_naive,
+    aggregate_svd,
+    exact_average_delta,
+    truncated_svd_refactor,
+)
+
 __version__ = "0.1.0"
+
+__all__ = [
+    "DEFAULT_ALPHA",
+    "DEFAULT_RANK",
+    "TARGET_MODULES",
+    "AdapterFormatError",
+    "LoRAAdapter",
+    "StreamingWeightedMean",
+    "__version__",
+    "aggregate_naive",
+    "aggregate_svd",
+    "exact_average_delta",
+    "random_adapter",
+    "truncated_svd_refactor",
+]
