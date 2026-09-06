@@ -1,0 +1,134 @@
+{
+  "utc": "2026-08-21T06:32:28.060324+00:00",
+  "task": "E3.5 TTFT composite vs base",
+  "profile": "dev",
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "composite": "artifacts\\composites\\a05",
+  "composite_merge_manifest": {
+    "task": "E3.3 composite merge (D6)",
+    "alpha": 0.5,
+    "beta": 1.0,
+    "cluster_source": "stub:random",
+    "client_source": "C:/Users/admin/AppData/Local/Temp/claude/C--Users-admin-Desktop-Edu-Final-year-project-CLASP-Team-Bundle/be1a727c-fbc8-4351-8db4-805fbf1e7d5d/scratchpad/train_out/client-requests/adapter",
+    "composite_rank": 32,
+    "composite_scaling": 1.0,
+    "n_modules": 96,
+    "merge_self_check": {
+      "max_abs_err": 2.9802322387695312e-08,
+      "max_rel_err": 4.078368709613317e-07
+    },
+    "compatibility": {
+      "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+      "target_modules": [
+        "k_proj",
+        "o_proj",
+        "q_proj",
+        "v_proj"
+      ],
+      "ranks": {
+        "cluster": 16,
+        "client": 16
+      },
+      "scalings": {
+        "cluster": 1.0,
+        "client": 1.0
+      }
+    },
+    "d3_deviation": "cluster is a stand-in; P2's SVD aggregation produces no real cluster adapter until W5+"
+  },
+  "repeats": 8,
+  "warmup_discarded": 3,
+  "base": [
+    {
+      "prompt_tokens": 2,
+      "median_ms": 93.0,
+      "p95_ms": 103.47,
+      "min_ms": 89.12,
+      "max_ms": 103.47,
+      "stdev_ms": 5.3,
+      "n": 8,
+      "prompt": "def "
+    },
+    {
+      "prompt_tokens": 9,
+      "median_ms": 86.56,
+      "p95_ms": 92.95,
+      "min_ms": 83.93,
+      "max_ms": 92.95,
+      "stdev_ms": 3.02,
+      "n": 8,
+      "prompt": "def parse_config(path):\n    "
+    },
+    {
+      "prompt_tokens": 30,
+      "median_ms": 92.02,
+      "p95_ms": 111.64,
+      "min_ms": 91.1,
+      "max_ms": 111.64,
+      "stdev_ms": 7.01,
+      "n": 8,
+      "prompt": "import numpy as np\n\n\ndef normalize(ma..."
+    }
+  ],
+  "composite_ttft": [
+    {
+      "prompt_tokens": 2,
+      "median_ms": 110.63,
+      "p95_ms": 119.55,
+      "min_ms": 97.74,
+      "max_ms": 119.55,
+      "stdev_ms": 7.32,
+      "n": 8,
+      "prompt": "def "
+    },
+    {
+      "prompt_tokens": 9,
+      "median_ms": 111.77,
+      "p95_ms": 116.7,
+      "min_ms": 100.62,
+      "max_ms": 116.7,
+      "stdev_ms": 5.47,
+      "n": 8,
+      "prompt": "def parse_config(path):\n    "
+    },
+    {
+      "prompt_tokens": 30,
+      "median_ms": 128.72,
+      "p95_ms": 166.97,
+      "min_ms": 103.44,
+      "max_ms": 166.97,
+      "stdev_ms": 22.16,
+      "n": 8,
+      "prompt": "import numpy as np\n\n\ndef normalize(ma..."
+    }
+  ],
+  "overhead_ms_per_prompt": [
+    17.63,
+    25.21,
+    36.7
+  ],
+  "worst_overhead_ms": 36.7,
+  "first_adapter_load_s": 0.6746,
+  "adapter_swap": {
+    "median_s": 0.5673,
+    "p95_s": 1.406,
+    "max_s": 1.406,
+    "n": 5
+  },
+  "nfr": {
+    "ttft_overhead_budget_ms": 200.0,
+    "ttft_pass": true,
+    "swap_budget_s": 2.0,
+    "swap_pass": true
+  },
+  "hardware": {
+    "device": "NVIDIA GeForce RTX 2050",
+    "base_peak_vram_gb": 0.886,
+    "composite_peak_vram_gb": 0.951
+  },
+  "versions": {
+    "python": "3.10.11",
+    "torch": "2.13.0+cu126",
+    "transformers": "5.14.1"
+  }
+}

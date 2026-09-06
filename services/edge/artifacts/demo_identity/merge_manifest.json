@@ -1,0 +1,32 @@
+{
+  "task": "E3.3 composite merge (D6)",
+  "alpha": 0.5,
+  "beta": 1.0,
+  "cluster_source": "artifacts/clusters/web",
+  "client_source": "artifacts/round1/client-requests/adapter",
+  "composite_rank": 32,
+  "composite_scaling": 1.0,
+  "n_modules": 96,
+  "merge_self_check": {
+    "max_abs_err": 1.3969838619232178e-09,
+    "max_rel_err": 3.652058523872639e-07
+  },
+  "compatibility": {
+    "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+    "target_modules": [
+      "k_proj",
+      "o_proj",
+      "q_proj",
+      "v_proj"
+    ],
+    "ranks": {
+      "cluster": 16,
+      "client": 16
+    },
+    "scalings": {
+      "cluster": 1.0,
+      "client": 1.0
+    }
+  },
+  "d3_deviation": null
+}

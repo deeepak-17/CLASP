@@ -19,6 +19,10 @@ htmlcov/
 
 # --- Models / adapters / large artifacts ---
 *.safetensors
+# save_pretrained drops a full tokenizer copy into every adapter output dir.
+# Byte-identical across clients and ranks, and derivable from the adapter's own
+# base_model_name_or_path — regenerate at reproduce time, don't commit per dir.
+tokenizer.json
 *.bin
 *.pt
 *.ckpt
@@ -70,3 +74,5 @@ docs/registry_api.md
 docs/review/registry_rubric_evidence.md
 docs/proposals/contracts-v1.1-proposal.md
 docs/rubric.md
+
+datasets/
