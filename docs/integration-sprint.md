@@ -475,6 +475,16 @@ scikit-learn **2.385 vs 2.385**.
 - **Seam B publishes from the cluster process.** The orchestrator never relays
   the bytes — but note `RegistryClient.save_version` exists as the documented
   fallback if that hop has to move.
+- **The TTFT figure in circulation is mislabelled.** The sprint plan's
+  run-of-show says "TTFT 66.36 ms against ≤200 ms". 66.36 ms is not a TTFT — it
+  is the *overhead* the composite adds over the base, from the W3 run
+  (`experiments/w3-edge-lora-composite/RESULTS.md`: 166.13 ms base → 232.49 ms
+  composite at 2 prompt tokens). And it is superseded: the newest artifact on
+  disk, `services/edge/ttft_results.json` (2026-08-21), records base medians of
+  86–93 ms, composite 110–112 ms, and a worst overhead of **36.7 ms**, with
+  adapter swap at 0.57 s median against a 2 s budget. Both NFRs pass either
+  way, but say "+36.7 ms overhead", not "TTFT 66.36 ms" — the D11 budget is on
+  the overhead, not on absolute TTFT. Nothing in this sprint re-measured TTFT.
 
 ## 10. Fallback status
 
