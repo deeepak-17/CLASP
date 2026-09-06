@@ -15,7 +15,12 @@ fp32 proof lives in test_real_adapter_pipeline.py.
 from __future__ import annotations
 
 import numpy as np
-from cluster.adapter_format import DEFAULT_ALPHA, TARGET_MODULES, LoRAAdapter, random_adapter
+from cluster.adapter_format import (
+    DEFAULT_ALPHA,
+    TARGET_MODULES,
+    LoRAAdapter,
+    random_adapter,
+)
 from cluster.schemas.messages import TensorPayload
 from cluster.server import _state, app
 from fastapi.testclient import TestClient

@@ -39,8 +39,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from cluster.adapter_format import DEFAULT_RANK, TARGET_MODULES, LoRAAdapter
-from cluster.aggregation import exact_average_delta
+from cluster.adapter_format import TARGET_MODULES, LoRAAdapter
 from cluster.schemas.messages import TensorPayload
 from cluster.server import _state, app
 from fastapi.testclient import TestClient

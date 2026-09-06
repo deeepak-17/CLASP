@@ -14,6 +14,8 @@ network or ray.
 
 from __future__ import annotations
 
+import numpy as np
+from fastapi import FastAPI, HTTPException
 from flwr.common import (
     FitRes,
     Parameters,
@@ -24,6 +26,7 @@ from flwr.common import (
 from flwr.server import ServerConfig
 from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
+from pydantic import BaseModel as _BaseModel
 
 from cluster.adapter_format import (
     DEFAULT_ALPHA,
@@ -33,6 +36,11 @@ from cluster.adapter_format import (
     LoRAAdapter,
 )
 from cluster.aggregation import aggregate_naive, aggregate_svd, exact_average_delta
+from cluster.schemas.messages import (
+    AdapterUpload,
+    ClusterAdapterBroadcast,
+    TensorPayload,
+)
 
 
 class SVDLoRAStrategy(FedAvg):
@@ -165,13 +173,6 @@ def start_grpc_server(
 # (seam C1 in the integration sprint doc) is registry's endpoint, not this
 # one. What this module exposes is Cluster's own upload -> aggregate ->
 # download loop, which is the piece Cluster owns end to end.
-
-import numpy as np
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel as _BaseModel
-
-from cluster.schemas.messages import AdapterUpload, ClusterAdapterBroadcast, TensorPayload
-
 
 class _StoredUpload:
     __slots__ = ("adapter", "num_examples", "round_id")
