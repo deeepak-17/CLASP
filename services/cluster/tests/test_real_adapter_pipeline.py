@@ -39,10 +39,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
+
 from cluster.adapter_format import TARGET_MODULES, LoRAAdapter
 from cluster.schemas.messages import TensorPayload
 from cluster.server import _state, app
-from fastapi.testclient import TestClient
 
 safetensors_numpy = pytest.importorskip("safetensors.numpy")
 
@@ -150,7 +151,9 @@ def test_full_cluster_http_pipeline_with_real_shape_adapters(tmp_out_dir):
         assert resp.status_code == 201, resp.text
         assert resp.json()["tensors_received"] == 192
 
-    agg_resp = client.post("/aggregate", json={"aggregation": "svd"})
+    agg_resp = client.post(
+        "/aggregate", json={"aggregation": "svd", "include_manifest": True}
+    )
     assert agg_resp.status_code == 200, agg_resp.text
     broadcast = agg_resp.json()
     assert broadcast["num_clients"] == 3

@@ -209,6 +209,14 @@ app = FastAPI(
 class AggregateRequest(_BaseModel):
     aggregation: str = "svd"  # "svd" | "naive" — same choice SVDLoRAStrategy exposes
     rank: int | None = None  # defaults to the uploaded adapters' own rank
+    # Opt-in: also compute the SVD-reconstruction-error manifest below.
+    # Review fix: this recomputed exact_average_delta from scratch on top of
+    # the equivalent averaging aggregate_svd() already does internally (and
+    # discards) — doubling compute/memory on every /aggregate call on the
+    # svd path, the same class of duplicated work that OOM-killed the
+    # verification VM at real model width (see test_real_adapter_pipeline.py).
+    # Off by default; callers that want the diagnostic ask for it explicitly.
+    include_manifest: bool = False
 
 
 @app.get("/healthz")
@@ -232,6 +240,20 @@ def upload_adapter(upload: AdapterUpload) -> dict[str, object]:
     'base_model.model.model.layers.3.self_attn.q_proj.lora_A.weight' — both
     go through the same ``LoRAAdapter.from_state_dict``, unchanged.
     """
+    # Review fix: reject uploads for a stale/wrong round instead of
+    # silently folding them into whatever round is currently buffering (the
+    # old code stored upload.round_id but never checked it against
+    # _state.round_id, so the 201 response echoed back a round_id that was
+    # never actually honored).
+    if upload.round_id != _state.round_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"upload round_id={upload.round_id} does not match the "
+                f"cluster's current round_id={_state.round_id}"
+            ),
+        )
+
     state_dict = {t.name: t.to_numpy() for t in upload.tensors}
     try:
         adapter = LoRAAdapter.from_state_dict(
@@ -282,22 +304,33 @@ def aggregate(request: AggregateRequest | None = None) -> ClusterAdapterBroadcas
     # layer — the same comparison main.py/demo_all_weeks.py already make at
     # one layer's scale, extended across every layer of a real upload. Reuses
     # exact_average_delta unchanged; no new mathematics.
-    errors: list[float] = []
-    for layer in merged.layer_indices:
-        exact = exact_average_delta(iter(adapters), weights, layer=layer)
-        for module in merged.target_modules:
-            errors.append(float(np.linalg.norm(merged.delta_w(module, layer) - exact[module])))
-
+    #
+    # Review fix: this loop recomputes exact_average_delta from scratch for
+    # every layer/module on top of the equivalent averaging aggregate_svd()
+    # already performed (and discarded) a few lines up, doubling the
+    # compute/memory cost of every /aggregate call on the svd path — the same
+    # category of duplicated work that OOM-killed the verification VM at real
+    # model width. Rather than changing aggregate_svd()'s own internals or
+    # return value, the diagnostic is made opt-in: it only runs when the
+    # caller explicitly asks for it via AggregateRequest.include_manifest.
     manifest: dict[str, object] = {
         "round_id": _state.round_id,
         "num_clients": len(stored),
         "aggregation": req.aggregation,
-        "svd_reconstruction_error": {
-            "mean": float(np.mean(errors)) if errors else 0.0,
-            "max": float(np.max(errors)) if errors else 0.0,
-        },
         "source_clients": sorted(_state.uploads.keys()),
     }
+    if req.include_manifest:
+        errors: list[float] = []
+        for layer in merged.layer_indices:
+            exact = exact_average_delta(iter(adapters), weights, layer=layer)
+            for module in merged.target_modules:
+                errors.append(
+                    float(np.linalg.norm(merged.delta_w(module, layer) - exact[module]))
+                )
+        manifest["svd_reconstruction_error"] = {
+            "mean": float(np.mean(errors)) if errors else 0.0,
+            "max": float(np.max(errors)) if errors else 0.0,
+        }
 
     broadcast = ClusterAdapterBroadcast(
         cluster_id="cluster-default",

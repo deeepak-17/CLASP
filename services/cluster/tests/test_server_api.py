@@ -15,6 +15,8 @@ fp32 proof lives in test_real_adapter_pipeline.py.
 from __future__ import annotations
 
 import numpy as np
+from fastapi.testclient import TestClient
+
 from cluster.adapter_format import (
     DEFAULT_ALPHA,
     TARGET_MODULES,
@@ -23,7 +25,6 @@ from cluster.adapter_format import (
 )
 from cluster.schemas.messages import TensorPayload
 from cluster.server import _state, app
-from fastapi.testclient import TestClient
 
 
 def _upload_payload(adapter: LoRAAdapter, client_id: str, round_id: int = 0,
@@ -117,7 +118,9 @@ def test_full_upload_aggregate_download_loop_short_key_form():
     health = client.get("/healthz").json()
     assert health["pending_uploads"] == 3
 
-    agg_resp = client.post("/aggregate", json={"aggregation": "svd"})
+    agg_resp = client.post(
+        "/aggregate", json={"aggregation": "svd", "include_manifest": True}
+    )
     assert agg_resp.status_code == 200, agg_resp.text
     broadcast = agg_resp.json()
     assert broadcast["num_clients"] == 3
@@ -157,3 +160,121 @@ def test_upload_accepts_real_peft_key_convention_over_http():
     resp = client.post("/uploads", json=payload)
     assert resp.status_code == 201, resp.text
     assert resp.json()["tensors_received"] == 2 * len(TARGET_MODULES) * 2
+
+
+def test_aggregate_naive_branch():
+    """Review coverage gap: the naive aggregation branch in /aggregate was
+    never exercised by any test (only the svd path was)."""
+    _reset_state()
+    client = TestClient(app)
+    adapters = [random_adapter(8, 8, rank=4, num_layers=2, seed=s) for s in (30, 31)]
+    for i, adapter in enumerate(adapters):
+        rng = np.random.default_rng(i)
+        for layer in adapter.layer_indices:
+            for name in adapter.target_modules:
+                adapter.modules[layer][name]["lora_B"] = rng.normal(
+                    size=adapter.modules[layer][name]["lora_B"].shape
+                ).astype(np.float32)
+        payload = _upload_payload(adapter, f"naive-client-{i}", num_examples=10)
+        resp = client.post("/uploads", json=payload)
+        assert resp.status_code == 201, resp.text
+
+    agg_resp = client.post("/aggregate", json={"aggregation": "naive"})
+    assert agg_resp.status_code == 200, agg_resp.text
+    body = agg_resp.json()
+    assert body["aggregation"] == "naive"
+    assert body["num_clients"] == 2
+
+
+def test_aggregate_unknown_method_returns_422():
+    """Review coverage gap: the unknown-aggregation-method else branch in
+    /aggregate was never exercised by any test."""
+    _reset_state()
+    client = TestClient(app)
+    adapter = random_adapter(8, 8, rank=4, num_layers=1, seed=40)
+    resp = client.post("/uploads", json=_upload_payload(adapter, "c0", num_examples=10))
+    assert resp.status_code == 201, resp.text
+
+    agg_resp = client.post("/aggregate", json={"aggregation": "bogus-method"})
+    assert agg_resp.status_code == 422
+    assert "bogus-method" in agg_resp.json()["detail"]
+
+
+def test_upload_rejects_adapter_format_error_returns_422():
+    """Review coverage gap: AdapterFormatError -> 422 in /uploads was never
+    exercised. Distinct from test_upload_rejects_wrong_tensor_count, which
+    only triggers AdapterUpload's own pydantic-level tensor-COUNT check —
+    this payload has the structurally-correct tensor count (so it passes
+    pydantic validation) but an unrecognized module name, so it is
+    LoRAAdapter.from_state_dict() itself that rejects it."""
+    _reset_state()
+    client = TestClient(app)
+    adapter = random_adapter(8, 8, rank=4, num_layers=1, seed=41)
+    payload = _upload_payload(adapter, "bad-key-client", num_examples=10)
+    # Rename one tensor to reference a module that isn't in target_modules —
+    # same tensor count, still unique names, so the pydantic structural
+    # check passes and the request reaches from_state_dict().
+    payload["tensors"][0]["name"] = payload["tensors"][0]["name"].replace(
+        "q_proj", "bogus_proj"
+    )
+    resp = client.post("/uploads", json=payload)
+    assert resp.status_code == 422, resp.text
+    assert "unrecognized" in resp.json()["detail"] or "bogus_proj" in resp.json()["detail"]
+
+
+def test_manifest_before_any_aggregate_returns_404():
+    """Review coverage gap: /aggregate/manifest's 404-before-any-run path
+    was never exercised (only /adapters/cluster/active's 404 was)."""
+    _reset_state()
+    client = TestClient(app)
+    resp = client.get("/aggregate/manifest")
+    assert resp.status_code == 404
+
+
+def test_aggregate_manifest_omits_reconstruction_error_by_default():
+    """Fix verification: the expensive SVD-reconstruction-error diagnostic
+    is opt-in (AggregateRequest.include_manifest) and is NOT computed unless
+    explicitly requested."""
+    _reset_state()
+    client = TestClient(app)
+    adapter = random_adapter(8, 8, rank=4, num_layers=1, seed=42)
+    resp = client.post("/uploads", json=_upload_payload(adapter, "c0", num_examples=10))
+    assert resp.status_code == 201, resp.text
+
+    agg_resp = client.post("/aggregate", json={"aggregation": "svd"})
+    assert agg_resp.status_code == 200, agg_resp.text
+
+    manifest = client.get("/aggregate/manifest").json()
+    assert "svd_reconstruction_error" not in manifest
+    assert manifest["num_clients"] == 1
+
+
+def test_upload_rejects_mismatched_round_id_with_409():
+    """Fix verification: a client uploading for a stale/wrong round is
+    rejected (409) instead of being silently folded into whichever round is
+    currently buffering."""
+    _reset_state()
+    client = TestClient(app)
+    adapter = random_adapter(8, 8, rank=4, num_layers=1, seed=43)
+    payload = _upload_payload(adapter, "stale-client", round_id=7, num_examples=10)
+    resp = client.post("/uploads", json=payload)
+    assert resp.status_code == 409, resp.text
+    assert "round_id" in resp.json()["detail"]
+    # and it must NOT have been buffered
+    health = client.get("/healthz").json()
+    assert health["pending_uploads"] == 0
+
+
+def test_upload_rejects_garbled_dtype_with_422_not_500():
+    """Fix verification: TensorPayload._check_size used to raise a bare
+    TypeError on a garbled dtype string, which pydantic v2 does not convert
+    into a ValidationError, crashing POST /uploads with an unhandled 500.
+    It must now come back as a clean 422."""
+    _reset_state()
+    client = TestClient(app)
+    adapter = random_adapter(8, 8, rank=4, num_layers=1, seed=44)
+    payload = _upload_payload(adapter, "garbled-dtype-client", num_examples=10)
+    payload["tensors"][0]["dtype"] = "bogus"
+    resp = client.post("/uploads", json=payload)
+    assert resp.status_code == 422, resp.text
+    assert resp.status_code != 500

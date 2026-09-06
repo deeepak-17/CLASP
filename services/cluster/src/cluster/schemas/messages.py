@@ -44,7 +44,23 @@ class TensorPayload(BaseModel):
 
     @model_validator(mode="after")
     def _check_size(self) -> TensorPayload:
-        expected = int(np.prod(self.shape)) * np.dtype(self.dtype).itemsize
+        """Validate declared dtype first, as a clean ValueError.
+
+        Review fix: ``np.dtype(self.dtype)`` raises a bare ``TypeError`` on a
+        garbled dtype string (e.g. "bogus"), and pydantic v2's validator
+        error handling only converts ``ValueError``/``AssertionError`` into a
+        proper ``ValidationError`` (-> HTTP 422 at the FastAPI layer). Left
+        unguarded, a malformed tensor payload posted to /uploads crashed the
+        request with an unhandled 500 instead of a 422. Wrapping the dtype
+        parse and re-raising as ValueError restores the clean 422 path.
+        """
+        try:
+            np_dtype = np.dtype(self.dtype)
+        except TypeError as exc:
+            raise ValueError(
+                f"tensor {self.name!r}: invalid dtype {self.dtype!r}"
+            ) from exc
+        expected = int(np.prod(self.shape)) * np_dtype.itemsize
         actual = len(base64.b64decode(self.data_b64))
         if expected != actual:
             raise ValueError(

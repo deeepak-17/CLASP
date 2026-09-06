@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+
 from cluster.adapter_format import TARGET_MODULES, LoRAAdapter, random_adapter
 
 # Copied verbatim from services/edge/src/edge/merge.py (origin/services/edge)
