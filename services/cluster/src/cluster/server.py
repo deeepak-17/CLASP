@@ -289,6 +289,32 @@ class PublishRequest(_BaseModel):
     timeout_s: float = 120.0
 
 
+def _canonical_safetensors(blob: bytes) -> bytes:
+    """Rewrite the safetensors header with sorted, compact JSON.
+
+    ``safetensors`` serializes its header — ``__metadata__`` included — from a
+    Rust hash map, so the same tensors and the same metadata come out in a
+    different key order from call to call: three ``save`` calls in one process
+    were measured producing two distinct sha256 digests. Without this, an
+    adapter's published bytes (and the digest the registry records against
+    them) change run to run even when nothing about the adapter changed, which
+    quietly breaks D9's reproducibility story.
+
+    Header-only: ``data_offsets`` are relative to the buffer that FOLLOWS the
+    header, so re-serializing the header JSON canonically leaves them valid.
+
+    Mirrored in ``edge.wire.canonicalize_safetensors`` — duplicated rather than
+    imported because ``contracts`` is the only cross-module import path
+    (docs/architecture.md §2); ``tests/integration`` asserts the two agree.
+    """
+    import json
+
+    header_len = int.from_bytes(blob[:8], "little")
+    header = json.loads(blob[8:8 + header_len].decode("utf-8"))
+    canonical = json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return len(canonical).to_bytes(8, "little") + canonical + blob[8 + header_len:]
+
+
 def _peft_bytes(broadcast: ClusterAdapterBroadcast) -> bytes:
     """The aggregate as a safetensors blob, config embedded in ``__metadata__``.
 
@@ -298,20 +324,15 @@ def _peft_bytes(broadcast: ClusterAdapterBroadcast) -> bytes:
     nothing, and Edge never has to invent a hyperparameter it was not given.
     """
     import json
-    import tempfile
-    from pathlib import Path as _Path
 
-    from safetensors.numpy import save_file
+    from safetensors.numpy import save
 
     tensors = {t.name: t.to_numpy() for t in broadcast.tensors}
     metadata = {"format": "pt", "cluster_id": broadcast.cluster_id,
                 "source_clients": ",".join(broadcast.source_clients)}
     if broadcast.peft_config is not None:
         metadata["adapter_config"] = json.dumps(broadcast.peft_config)
-    with tempfile.TemporaryDirectory() as tmp:
-        blob = _Path(tmp) / "adapter_model.safetensors"
-        save_file(tensors, str(blob), metadata=metadata)
-        return blob.read_bytes()
+    return _canonical_safetensors(save(tensors, metadata=metadata))
 
 
 @app.get("/healthz")
