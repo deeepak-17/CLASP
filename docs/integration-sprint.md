@@ -212,9 +212,11 @@ stays available via `{"exact_lowrank": false}` and remains the oracle;
 Two things follow. First, reproducing edge's numbers from its own artifact to
 six decimals confirms the client set, the FedAvg weights `[80, 52, 170]` and
 the pipeline were reconstructed correctly. Second, **the cluster's error is
-smaller than edge's, module for module** — which is what must happen: an exact
-truncated SVD is the optimal rank-16 approximation, and edge uses randomized
-`torch.svd_lowrank(niter=8)`.
+smaller than edge's, module for module** — and by Eckart–Young it has to be:
+both adapters are rank-16 approximations of the *same* exact weighted average,
+and the exact truncated SVD is the optimal one in Frobenius norm, while edge
+uses randomized `torch.svd_lowrank(niter=8)`. The measurement confirms the
+theorem rather than discovering something.
 
 The two adapters' ΔW differ by 5.2 % mean / 17.4 % max. **That is not a bug.**
 At the r=16 cut the singular spectrum is nearly flat — `s₁₇/s₁₆` runs 0.85–0.99
