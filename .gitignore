@@ -28,6 +28,10 @@ tokenizer.json
 *.ckpt
 checkpoints/
 wandb/
+# edge.toy.toy_training_loop saves to a relative "./cache", so running the edge
+# tests from anywhere drops a 27 MB adapter directory in the cwd. Already-tracked
+# toy fixtures under services/edge/src/edge/toy/cache/ are unaffected.
+cache/
 
 # --- Secrets / certs (mTLS) ---
 .env
@@ -76,3 +80,4 @@ docs/proposals/contracts-v1.1-proposal.md
 docs/rubric.md
 
 datasets/
+.runtime/
