@@ -512,8 +512,23 @@ scikit-learn **2.385 vs 2.385**.
 
 ### Not verified here
 
-**`docker compose up -d registry cluster`.** The daemon would not start on this
-machine, so every measurement above came from `scripts/run_services.py` — the
-same two ASGI apps on the same ports. The compose file and Dockerfiles were
-updated (the cluster image's `CMD` now resolves to an app that exists, which it
-did not before) but the images have not been built. Build them before the panel.
+**`docker compose up -d registry cluster`.** Every measurement above came from
+`scripts/run_services.py` — the same two ASGI apps on the same ports — because
+the Docker daemon could not be brought up here. Precisely: `Docker Desktop.exe`
+and `com.docker.backend` start, but the privileged Windows service
+`com.docker.service` stays `Stopped`, so the `docker-desktop` WSL distribution
+never boots and `//./pipe/dockerDesktopLinuxEngine` never appears. Starting that
+service needs elevation.
+
+The compose file and Dockerfiles **were** updated this sprint — the cluster
+image's `CMD` now resolves to an app that exists, which it did not before, and
+the cluster gained a healthcheck — but **the images have not been built or
+run**. Before the panel:
+
+```bash
+docker compose build registry cluster && docker compose up -d registry cluster
+```
+
+Expect the cluster image to be slow to build: `services/cluster` still lists
+`torch` and `flwr` as runtime dependencies, which the HTTP surface does not
+use. Trimming that is a follow-up, not a sprint item.
