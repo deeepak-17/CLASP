@@ -1,0 +1,88 @@
+{
+  "manifest_version": "1.0.0",
+  "strategy": "project_level",
+  "seed": 20260616,
+  "created_at": "2026-08-10T06:55:27Z",
+  "corpus_path": "datasets/processed/corpus.jsonl",
+  "corpus_sha256": "1d2d6f6eae8eb65bb1b4ce0c22cc6f4fa7f86b2782b259025f03e77e3e2f3dac",
+  "num_clients": 6,
+  "num_clusters": 6,
+  "total_files": 135,
+  "cluster_ids": [
+    "click",
+    "colorama",
+    "flask",
+    "jinja",
+    "requests",
+    "werkzeug"
+  ],
+  "shards": [
+    {
+      "client_id": "client-click",
+      "cluster_id": "click",
+      "project_label": "Click",
+      "num_files": 16,
+      "num_lines": 10124,
+      "num_code_lines": 7683,
+      "total_bytes": 347533,
+      "files_path": "datasets/partitions/client-click.jsonl",
+      "content_sha256": "216b4202cbde56764b197708234c458ce75d3a2a55f74d35884358e60f9ff800"
+    },
+    {
+      "client_id": "client-colorama",
+      "cluster_id": "colorama",
+      "project_label": "Colorama",
+      "num_files": 5,
+      "num_lines": 875,
+      "num_code_lines": 658,
+      "total_bytes": 30290,
+      "files_path": "datasets/partitions/client-colorama.jsonl",
+      "content_sha256": "f6e33335f5c44d4fc78523676336d4b9e749740150c77c2cb80c9578775cd689"
+    },
+    {
+      "client_id": "client-flask",
+      "cluster_id": "flask",
+      "project_label": "Flask",
+      "num_files": 23,
+      "num_lines": 9021,
+      "num_code_lines": 6594,
+      "total_bytes": 329778,
+      "files_path": "datasets/partitions/client-flask.jsonl",
+      "content_sha256": "5a9dd2edaba67f5c7bb7f50877d70334399b4cb7c07f72d41874fc212e2bf021"
+    },
+    {
+      "client_id": "client-jinja",
+      "cluster_id": "jinja",
+      "project_label": "Jinja2",
+      "num_files": 24,
+      "num_lines": 14304,
+      "num_code_lines": 11025,
+      "total_bytes": 482671,
+      "files_path": "datasets/partitions/client-jinja.jsonl",
+      "content_sha256": "220817bc9dadc8e4c264d405f3a13bd2327651da29c97cb3d358408893fb66c1"
+    },
+    {
+      "client_id": "client-requests",
+      "cluster_id": "requests",
+      "project_label": "Requests",
+      "num_files": 18,
+      "num_lines": 5642,
+      "num_code_lines": 4123,
+      "total_bytes": 188462,
+      "files_path": "datasets/partitions/client-requests.jsonl",
+      "content_sha256": "cc15fe04d18148e98f2292990348b89dd850ac4bcad0676e635fee073031d15d"
+    },
+    {
+      "client_id": "client-werkzeug",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 49,
+      "num_lines": 20589,
+      "num_code_lines": 15839,
+      "total_bytes": 702806,
+      "files_path": "datasets/partitions/client-werkzeug.jsonl",
+      "content_sha256": "a0934d72b22da824948f86916bc96b715ce8ce0c36e1014bf48cc98814c5ddcb"
+    }
+  ],
+  "contract_version": "0.2.0"
+}

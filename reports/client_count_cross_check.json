@@ -1,0 +1,34 @@
+{
+  "checks": [
+    {
+      "label": "project_level",
+      "config_path": "configs/partition.yaml",
+      "strategy": "project_level",
+      "actual_client_count": 6,
+      "num_clusters": 6,
+      "p2_expected_client_count": 3,
+      "p2_max_client_count": 16,
+      "accepted": true,
+      "errors": [],
+      "warnings": [
+        "Cluster Layer currently simulates 3 client(s) but the manifest declares 6; P2 must widen the simulation"
+      ],
+      "matches_p2_expectation": false
+    },
+    {
+      "label": "per_developer",
+      "config_path": "configs/partition_per_developer.yaml",
+      "strategy": "per_developer",
+      "actual_client_count": 20,
+      "num_clusters": 6,
+      "p2_expected_client_count": 3,
+      "p2_max_client_count": 64,
+      "accepted": true,
+      "errors": [],
+      "warnings": [
+        "Cluster Layer currently simulates 3 client(s) but the manifest declares 20; P2 must widen the simulation"
+      ],
+      "matches_p2_expectation": false
+    }
+  ]
+}

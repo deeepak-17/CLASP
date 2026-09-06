@@ -1,0 +1,100 @@
+# =============================================================================
+# CLASP-P5 · Week 4
+# Mon "Build per-developer (individual-style) partition logic"
+# Tue "Validate per-developer partitions don't leak across projects"
+# Wed "Cross-check both partition types against Prasanth's client count"
+# Thu "Write a small report comparing project-level vs per-dev splits"
+#
+# This is a SIBLING of configs/partition.yaml, not a replacement — Week 4
+# requires BOTH the project-level partition (Week 2, unchanged) and this
+# per-developer partition to exist at once. Same Partitioner/validator/CLI
+# code, different config and different output directory
+# (datasets/partitions/per_developer/ vs datasets/partitions/).
+#
+# Run:  python scripts/build_partitions.py --config configs/partition_per_developer.yaml
+#       python scripts/validate_partitions.py --config configs/partition_per_developer.yaml
+# =============================================================================
+partition:
+  strategy: "per_developer"
+
+  # Same corpus, same seed as the project-level partition: both splits are
+  # deterministic functions of the same input, so they are directly
+  # comparable (Week-4 Thursday's comparison report depends on this).
+  seed: 20260616
+
+  manifest_version: "1.0.0"
+
+  input:
+    corpus_path: "datasets/processed/corpus.jsonl"
+    corpus_manifest_path: "datasets/metadata/corpus_manifest.json"
+
+  output:
+    partitions_dir: "datasets/partitions/per_developer"
+    manifest_path: "datasets/partitions/per_developer/manifest.json"
+    shard_filename_template: "{client_id}.jsonl"
+    include_content: true
+
+  # Not used by per_developer (see per_developer.client_id_template below),
+  # kept only because PartitionConfig requires the field; harmless default.
+  client_naming:
+    template: "client-{cluster_id}"
+
+  # ---------------------------------------------------------------------
+  # Week-4 Monday: what defines a "developer" in this corpus.
+  #
+  # D1's repositories are shallow-cloned (git_depth: 1 in configs/dataset.yaml)
+  # for reproducible, size-bounded acquisition; that also means every file
+  # resolves to one single commit/author, which is not a real per-developer
+  # signal. See partitions/strategies.py::PerDeveloperStrategy's docstring
+  # for the full rationale of the module-path / hash-chunk proxy used here.
+  # ---------------------------------------------------------------------
+  per_developer:
+    # Fallback chunk size for projects with no real subpackages (Requests,
+    # Click, Colorama, Jinja2 in D1 are flat file lists).
+    target_files_per_developer: 6
+    # A candidate split is rejected (and the cluster falls back one level,
+    # eventually to a single whole-project developer) if any resulting
+    # shard would be smaller than this.
+    min_files_per_developer: 2
+    client_id_template: "client-{cluster_id}-dev{dev_index}"
+
+  # ---------------------------------------------------------------------
+  # Week-4 Tuesday: "Validate per-developer partitions don't leak across
+  # projects". Identical semantics to Week-2's checks — disjointness,
+  # content-disjointness and project purity are manifest-wide, so they
+  # verify no-cross-project-leakage for per-developer shards exactly as
+  # they did for project-level ones. min_files_per_shard is lower here
+  # because developer-level shards are inherently smaller than
+  # project-level ones (a 2-file floor still catches a genuinely broken
+  # split; per_developer.min_files_per_developer above is the stronger,
+  # strategy-aware floor that governs whether groups form at all).
+  # ---------------------------------------------------------------------
+  validation:
+    require_disjoint_files: true
+    require_full_coverage: true
+    require_project_purity: true
+    require_content_disjoint: true
+    min_files_per_shard: 2
+
+    # Per-developer shards are expected to be far less balanced than
+    # project-level ones (a project's largest module vs its smallest is a
+    # much sharper split than project sizes already are) — these
+    # thresholds are widened accordingly and still reported as warnings,
+    # not hard failures.
+    max_imbalance_ratio: 30.0
+    max_gini: 0.65
+    max_coefficient_of_variation: 1.20
+    fail_on_warning: false
+
+  # ---------------------------------------------------------------------
+  # Week-4 Wednesday: "Cross-check both partition types against Prasanth's
+  # client count". P2's Week-2/3 simulation width is 3 clients; per-developer
+  # splitting the same 6-project corpus produces far more than 3 (see
+  # scripts/cross_check_client_counts.py) — expected_client_count is left at
+  # P2's *current* contract value on purpose, so the mismatch is surfaced as
+  # a warning by the same MockClusterClient logic Week 2 already uses,
+  # rather than silently raising this value to make the check pass.
+  # ---------------------------------------------------------------------
+  integration:
+    expected_client_count: 3
+    max_client_count: 64

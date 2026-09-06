@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clasp.team102/schemas/snapshot_metadata.schema.json",
+  "title": "CLASP Registry Snapshot Metadata",
+  "description": "P4 -> P5. Sidecar written beside a safetensors snapshot. P5 reads it to decide what to evaluate (Registry -> Eval contract). Authoritative copy is owned by P4; this is P5's mirror for pre-integration validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["adapter", "round_number", "created_at", "artifact_path", "contract_version"],
+  "properties": {
+    "adapter": { "$ref": "#/$defs/adapter_ref" },
+    "round_number": {
+      "type": "integer",
+      "description": "Federated round that produced this snapshot.",
+      "minimum": 0
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "artifact_path": {
+      "type": "string",
+      "description": "Path to the .safetensors payload.",
+      "minLength": 1
+    },
+    "artifact_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "training_loss": { "type": ["number", "null"] },
+    "eval_score": {
+      "type": ["number", "null"],
+      "description": "Latest Pass@1 for this snapshot; drives P4's rollback threshold.",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "contract_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+  },
+  "$defs": {
+    "adapter_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 0 },
+        "kind": { "type": "string", "enum": ["client", "cluster"] },
+        "cluster_id": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

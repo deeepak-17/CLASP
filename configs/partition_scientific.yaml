@@ -1,0 +1,51 @@
+# =============================================================================
+# CLASP-P5 · D1 scientific-domain sibling partition
+#
+# Additive to configs/partition.yaml, not a replacement. Reuses the identical
+# Partitioner / ProjectLevelStrategy / PartitionValidator code as the
+# six-project partition (Week 2) — no parallel/incompatible logic — pointed
+# at the scientific corpus and a fully separate output location.
+#
+# datasets/partitions/manifest.json and datasets/partitions/client-*.jsonl
+# (the frozen six) are never read or written by this config.
+#
+# Run:  python scripts/build_partitions.py --config configs/partition_scientific.yaml
+#       python scripts/validate_partitions.py --config configs/partition_scientific.yaml
+# =============================================================================
+partition:
+  strategy: "project_level"
+
+  # Same seed as the six-project partition — same determinism guarantee,
+  # not a new convention.
+  seed: 20260616
+
+  manifest_version: "1.0.0"
+
+  input:
+    corpus_path: "datasets/processed/corpus_scientific.jsonl"
+    corpus_manifest_path: "datasets/metadata/corpus_manifest_scientific.json"
+
+  output:
+    # Fully separate subtree — sibling to, never inside, datasets/partitions/.
+    partitions_dir: "datasets/partitions/scientific"
+    manifest_path: "datasets/partitions/scientific/manifest.json"
+    shard_filename_template: "{client_id}.jsonl"
+    include_content: true
+
+  client_naming:
+    template: "client-{cluster_id}"
+
+  validation:
+    require_disjoint_files: true
+    require_full_coverage: true
+    require_project_purity: true
+    require_content_disjoint: true
+    min_files_per_shard: 3
+    max_imbalance_ratio: 20.0
+    max_gini: 0.50
+    max_coefficient_of_variation: 1.00
+    fail_on_warning: false
+
+  integration:
+    expected_client_count: 3
+    max_client_count: 16

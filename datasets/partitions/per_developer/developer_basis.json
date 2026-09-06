@@ -1,0 +1,82 @@
+{
+  "client-click-dev0": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 0"
+  },
+  "client-click-dev1": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 1"
+  },
+  "client-colorama-dev0": {
+    "basis": "single_developer_whole_project",
+    "label": "<whole project — too small to split further>"
+  },
+  "client-flask-dev0": {
+    "basis": "module_path",
+    "label": "src/flask"
+  },
+  "client-flask-dev1": {
+    "basis": "module_path",
+    "label": "src/flask/json"
+  },
+  "client-flask-dev2": {
+    "basis": "module_path",
+    "label": "src/flask/sansio"
+  },
+  "client-jinja-dev0": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 0"
+  },
+  "client-jinja-dev1": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 1"
+  },
+  "client-jinja-dev2": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 2"
+  },
+  "client-jinja-dev3": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 3"
+  },
+  "client-requests-dev0": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 0"
+  },
+  "client-requests-dev1": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 1"
+  },
+  "client-requests-dev2": {
+    "basis": "deterministic_hash_chunk",
+    "label": "hash-chunk 2"
+  },
+  "client-werkzeug-dev0": {
+    "basis": "module_path",
+    "label": "src/werkzeug"
+  },
+  "client-werkzeug-dev1": {
+    "basis": "module_path",
+    "label": "src/werkzeug/datastructures"
+  },
+  "client-werkzeug-dev2": {
+    "basis": "module_path",
+    "label": "src/werkzeug/debug"
+  },
+  "client-werkzeug-dev3": {
+    "basis": "module_path",
+    "label": "src/werkzeug/middleware"
+  },
+  "client-werkzeug-dev4": {
+    "basis": "module_path",
+    "label": "src/werkzeug/routing"
+  },
+  "client-werkzeug-dev5": {
+    "basis": "module_path",
+    "label": "src/werkzeug/sansio"
+  },
+  "client-werkzeug-dev6": {
+    "basis": "module_path",
+    "label": "src/werkzeug/wrappers"
+  }
+}

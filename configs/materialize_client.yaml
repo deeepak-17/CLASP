@@ -1,0 +1,33 @@
+# =============================================================================
+# CLASP-P5 · E3.1 support
+#
+# P1's task E3.1 ("Train client LoRA on a real partition") needs one real
+# project's .py files as an actual directory of files, not a JSONL shard.
+# This turns one client's shard (datasets/partitions/<client_id>.jsonl) into
+# that directory, and deterministically holds out a slice of files into a
+# separate directory so P1 never trains on the files used to score the
+# result. Read-only against datasets/partitions/ — only reads the manifest
+# and shard already built by scripts/build_partitions.py.
+#
+# Run:  python scripts/materialize_client_repo.py --client-id client-flask
+# =============================================================================
+materialize:
+  # The Week-2 project-level manifest. Point --manifest / this key at
+  # datasets/partitions/per_developer/manifest.json to materialize a
+  # Week-4 per-developer client instead.
+  manifest_path: "datasets/partitions/manifest.json"
+
+  # Everything this script writes lives under here, one subfolder per
+  # client_id — never inside datasets/partitions/ itself.
+  output_root: "datasets/materialized"
+
+  repo_dirname: "repo"
+  held_out_dirname: "held_out"
+
+  # Fraction of a client's files set aside for eval, not training.
+  held_out_fraction: 0.10
+
+  # Pins which files land in held_out/. Recorded in
+  # <output_root>/<client_id>/materialize_manifest.json so the split is
+  # reproducible; independent of partition.yaml's seed.
+  seed: 20260616
