@@ -331,8 +331,7 @@ def test_saved_config_is_valid_peft_json(tmp_path, cluster, client):
 # --- against the real trained adapter, when it is around -------------------
 
 # Repo-relative so the test is portable, with an env override for CI or a
-# different training output. Weights are gitignored (*.safetensors), so on a
-# fresh clone this skips rather than fails — regenerate with:
+# different training output. Regenerate with:
 #   python -m edge.train_client --client web/client-requests --budget-plan budget_plan.json
 REAL_ADAPTER = Path(
     os.environ.get(
@@ -342,7 +341,26 @@ REAL_ADAPTER = Path(
 )
 
 
-@pytest.mark.skipif(not REAL_ADAPTER.exists(), reason="no trained adapter on disk")
+def _adapter_is_loadable(path: Path) -> bool:
+    """True only when `load_adapter` would actually succeed on `path`.
+
+    The adapter *metadata* (adapter_config.json, tokenizer files) is tracked,
+    but the tensors are gitignored (*.safetensors, *.bin). So on CI the
+    directory is present while the weights are not, and gating on the
+    directory alone let these tests run and then die inside torch.load with a
+    FileNotFoundError. Check the same files load_adapter reads, in its order.
+    """
+    if not (path / "adapter_config.json").is_file():
+        return False
+    return ((path / "adapter_model.safetensors").is_file()
+            or (path / "adapter_model.bin").is_file())
+
+
+REAL_ADAPTER_AVAILABLE = _adapter_is_loadable(REAL_ADAPTER)
+NO_REAL_ADAPTER = "no trained adapter weights on disk (metadata is tracked, tensors are not)"
+
+
+@pytest.mark.skipif(not REAL_ADAPTER_AVAILABLE, reason=NO_REAL_ADAPTER)
 def test_identities_hold_on_the_real_adapter():
     """Same three gates, on the 192-tensor adapter from the E3.1 run.
 
@@ -376,7 +394,7 @@ def test_identities_hold_on_the_real_adapter():
     assert err["max_rel_err"] < FP32_TOL, err
 
 
-@pytest.mark.skipif(not REAL_ADAPTER.exists(), reason="no trained adapter on disk")
+@pytest.mark.skipif(not REAL_ADAPTER_AVAILABLE, reason=NO_REAL_ADAPTER)
 def test_real_adapter_satisfies_the_contract():
     _, cfg = load_adapter(REAL_ADAPTER)
     validate_compatibility([cfg], ["client"], contract=CONTRACT_HYPERPARAMS)
