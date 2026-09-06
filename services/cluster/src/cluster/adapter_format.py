@@ -227,6 +227,66 @@ class LoRAAdapter:
         adapter.validate()
         return adapter
 
+    # --- PEFT-loadable view (Integration Sprint, Cluster<->Edge boundary) ---
+
+    def to_peft_state_dict(
+        self, model_prefix: str = "base_model.model.model"
+    ) -> dict[str, np.ndarray]:
+        """Full PEFT key convention edge.merge.load_adapter expects, e.g.
+        'base_model.model.model.layers.3.self_attn.q_proj.lora_A.weight' —
+        as opposed to ``to_state_dict()``'s bare 'layers.<i>.<module>...'.
+
+        Integration Sprint Defect 3 note: the read direction already worked
+        before this method existed — ``from_state_dict`` matches a
+        'layers.<i>.' segment found anywhere in the key plus a
+        '<module>.<lora_A|lora_B>.weight' suffix, and a real PEFT key like
+        the one above satisfies both, prefix and 'self_attn.' segment and
+        all. This method is the missing write-direction half: it lets
+        Cluster hand back an aggregated adapter in the exact key shape
+        edge.merge.py's ``module_prefixes``/``load_adapter`` expect, instead
+        of only the short internal form.
+        """
+        self.validate()
+        sd: dict[str, np.ndarray] = {}
+        for layer in self.layer_indices:
+            for name in self.target_modules:
+                prefix = f"{model_prefix}.layers.{layer}.self_attn.{name}"
+                sd[f"{prefix}.{_A_KEY}.weight"] = self.modules[layer][name][_A_KEY]
+                sd[f"{prefix}.{_B_KEY}.weight"] = self.modules[layer][name][_B_KEY]
+        return sd
+
+    def to_peft_config(
+        self, base_model_name_or_path: str = "deepseek-ai/deepseek-coder-1.3b-base"
+    ) -> dict[str, object]:
+        """``adapter_config.json`` fields edge.merge.py's ``load_adapter`` /
+        ``validate_compatibility`` read. Structural fields (peft_type,
+        use_rslora, use_dora, fan_in_fan_out, lora_bias) are pinned to the
+        values edge.merge.STRUCTURAL_FIELDS checks for equality between
+        adapters; ``r``/``lora_alpha``/``target_modules`` reflect this
+        adapter's own values rather than a hardcoded copy of edge's contract
+        — a real integration would need the two teams' alpha conventions
+        reconciled (edge's CONTRACT_HYPERPARAMS pins lora_alpha=16; this
+        module's own DEFAULT_ALPHA is 32.0), which is cross-team and out of
+        Cluster's scope to silently resolve.
+        """
+        return {
+            "peft_type": "LORA",
+            "r": self.rank,
+            "lora_alpha": self.alpha,
+            "lora_dropout": 0.0,
+            "target_modules": list(self.target_modules),
+            "base_model_name_or_path": base_model_name_or_path,
+            "use_rslora": False,
+            "use_dora": False,
+            "fan_in_fan_out": False,
+            "lora_bias": False,
+            "inference_mode": True,
+            "task_type": "CAUSAL_LM",
+            "rank_pattern": {},
+            "alpha_pattern": {},
+        }
+
+
 
 def random_adapter(
     in_features: int,

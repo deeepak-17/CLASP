@@ -63,6 +63,7 @@ class AdapterUpload(BaseModel):
     rank: int = Field(gt=0)
     target_modules: tuple[str, ...]
     alpha: float = Field(gt=0)
+    num_layers: int = Field(1, ge=1)
     num_examples: int = Field(gt=0)
     seed: int | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -77,16 +78,33 @@ class AdapterUpload(BaseModel):
 
     @model_validator(mode="after")
     def _check_tensor_coverage(self) -> AdapterUpload:
-        # Every target module must ship exactly one lora_A and one lora_B.
-        names = {t.name for t in self.tensors}
-        missing = [
-            f"{m}.{part}"
-            for m in self.target_modules
-            for part in ("lora_A", "lora_B")
-            if f"{m}.{part}" not in names
-        ]
-        if missing:
-            raise ValueError(f"upload missing tensors: {missing}")
+        """Structural check only: enough tensors for every (layer, module,
+        lora_A/lora_B) slot, no duplicate names. Real key-by-key parsing —
+        layer index, module, A vs B — happens in
+        ``cluster.adapter_format.LoRAAdapter.from_state_dict`` at the point
+        of use; this validator just rejects a malformed upload before it
+        gets there.
+
+        Integration Sprint Defect 2: the original version of this validator
+        checked for flat '{module}.lora_A' / '{module}.lora_B' names only,
+        with no layer index at all — so it rejected every real multi-layer
+        upload (192 tensors across 24 layers) outright. It is deliberately
+        layer-COUNT based rather than layer-NAME based, so it does not care
+        which of the two key conventions ``LoRAAdapter`` accepts
+        (the short 'layers.<i>.<module>...' form or a real PEFT dump like
+        'base_model.model.model.layers.3.self_attn.q_proj.lora_A.weight')
+        the caller actually used.
+        """
+        expected = 2 * len(self.target_modules) * self.num_layers
+        if len(self.tensors) != expected:
+            raise ValueError(
+                f"expected {expected} tensors (lora_A + lora_B per module, "
+                f"{self.num_layers} layer(s), {len(self.target_modules)} "
+                f"target module(s)), got {len(self.tensors)}"
+            )
+        names = [t.name for t in self.tensors]
+        if len(set(names)) != len(names):
+            raise ValueError("upload contains duplicate tensor names")
         return self
 
 
@@ -99,9 +117,14 @@ class ClusterAdapterBroadcast(BaseModel):
     rank: int = Field(gt=0)
     target_modules: tuple[str, ...]
     alpha: float = Field(gt=0)
+    num_layers: int = Field(1, ge=1)
     num_clients: int = Field(gt=0)
     aggregation: str = "svd"  # "svd" | "naive" (ablation baseline, D2)
     epsilon: float | None = None  # DP budget spent, filled by P3's accountant
+    # PEFT adapter_config.json fields (LoRAAdapter.to_peft_config()) so a
+    # consumer can materialize a loadable PEFT directory from this broadcast
+    # alone, alongside ``tensors`` in PEFT key form (LoRAAdapter.to_peft_state_dict()).
+    peft_config: dict[str, object] | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tensors: list[TensorPayload]
 
