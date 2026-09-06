@@ -1,0 +1,89 @@
+{
+  "index_version": "1.0.0",
+  "updated_at": "2026-08-10T06:33:23Z",
+  "contract_version": "0.2.0",
+  "results": [
+    {
+      "eval_result": {
+        "adapter": {
+          "name": "baseline",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "HumanEval",
+        "pass_at_k": {
+          "1": 0.0,
+          "10": 0.0
+        },
+        "num_tasks": 164,
+        "num_samples_per_task": 10,
+        "created_at": "2026-08-10T06:31:32Z",
+        "run_id": "p5-20260810T063132Z",
+        "contract_version": "0.2.0"
+      },
+      "run_metadata": {
+        "model_checkpoint": "mock/deepseek-coder-6.7b-base",
+        "dataset_split": "full (164 problems, no filtering)",
+        "num_problems": 164,
+        "seed": null,
+        "generation": {
+          "max_new_tokens": 384,
+          "temperature": 0.2,
+          "stop_sequences": [
+            "\ndef ",
+            "\nclass ",
+            "\nif __name__",
+            "\nprint(",
+            "\n@"
+          ]
+        },
+        "provenance": "DEMO_TEST",
+        "provenance_note": "DEMO/TEST — P1's real merged DeepSeek-Coder-6.7B model is not available in this environment (no GPU, no downloaded weights, no LoRA adapter from the Registry). Completions come from interfaces.edge_client.MockEdgeInferenceClient, a deterministic placeholder generator that always produces a syntactically valid but incorrect body (`raise NotImplementedError(...)`). Pass@k computed against it is therefore expected to be 0.0 for every task and every k — that is the CORRECT output of a working scorer given a generator that never produces a passing program, not a bug. It is NOT a measurement of any model's coding ability. See scripts/sanity_check_scoring.py for a REAL end-to-end check (real HumanEval/MBPP + real execution + canonical reference solutions, no mock).",
+        "raw_artifact_path": "evaluation/results/p5-20260810T063132Z.json",
+        "benchmark_data_source": "https://raw.githubusercontent.com/openai/human-eval/master/data/HumanEval.jsonl.gz"
+      }
+    },
+    {
+      "eval_result": {
+        "adapter": {
+          "name": "baseline",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "MBPP",
+        "pass_at_k": {
+          "1": 0.0,
+          "10": 0.0
+        },
+        "num_tasks": 392,
+        "num_samples_per_task": 10,
+        "created_at": "2026-08-10T06:31:32Z",
+        "run_id": "p5-20260810T063132Z",
+        "contract_version": "0.2.0"
+      },
+      "run_metadata": {
+        "model_checkpoint": "mock/deepseek-coder-6.7b-base",
+        "dataset_split": "test split, task_id 11-510 (Austin et al. 2021 few-shot/eval convention)",
+        "num_problems": 392,
+        "seed": null,
+        "generation": {
+          "max_new_tokens": 384,
+          "temperature": 0.2,
+          "stop_sequences": [
+            "\ndef ",
+            "\nclass ",
+            "\nif __name__",
+            "\nprint(",
+            "\n@"
+          ]
+        },
+        "provenance": "DEMO_TEST",
+        "provenance_note": "DEMO/TEST — P1's real merged DeepSeek-Coder-6.7B model is not available in this environment (no GPU, no downloaded weights, no LoRA adapter from the Registry). Completions come from interfaces.edge_client.MockEdgeInferenceClient, a deterministic placeholder generator that always produces a syntactically valid but incorrect body (`raise NotImplementedError(...)`). Pass@k computed against it is therefore expected to be 0.0 for every task and every k — that is the CORRECT output of a working scorer given a generator that never produces a passing program, not a bug. It is NOT a measurement of any model's coding ability. See scripts/sanity_check_scoring.py for a REAL end-to-end check (real HumanEval/MBPP + real execution + canonical reference solutions, no mock).",
+        "raw_artifact_path": "evaluation/results/p5-20260810T063132Z.json",
+        "benchmark_data_source": "https://raw.githubusercontent.com/google-research/google-research/master/mbpp/mbpp.jsonl"
+      }
+    }
+  ]
+}

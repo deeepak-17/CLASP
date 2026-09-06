@@ -1,0 +1,29 @@
+{
+  "name": "clasp-p5-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CLASP Evaluation Dashboard — P5 (Eval & Data). Week-5 React + Recharts skeleton wired to the static evaluation/results/results.json.",
+  "type": "module",
+  "scripts": {
+    "sync-data": "node scripts/sync-results.mjs",
+    "predev": "npm run sync-data",
+    "prebuild": "npm run sync-data",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.6"
+  }
+}

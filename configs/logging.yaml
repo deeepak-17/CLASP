@@ -1,0 +1,16 @@
+# Logging configuration for every CLASP-P5 entry point.
+# Consumed by utils.config.load_logging_config -> utils.logging_utils.
+logging:
+  # DEBUG | INFO | WARNING | ERROR | CRITICAL. Overridable per-run with --log-level.
+  level: "${CLASP_P5_LOG_LEVEL:INFO}"
+
+  # Rotating file sink. Relative paths resolve against the repository root.
+  # Set to null to log to stderr only.
+  log_file: "logs/clasp_p5.log"
+
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  date_format: "%Y-%m-%dT%H:%M:%S"
+
+  # Rotation policy for the file sink.
+  max_bytes: 5242880   # 5 MiB
+  backup_count: 3

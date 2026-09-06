@@ -1,0 +1,77 @@
+# =============================================================================
+# CLASP-P5 · Week 2
+# Mon "Define project-level partition logic (non-IID by project)"
+# Tue "Implement partition script v1 on collected dataset"
+# Wed "Validate partitions are non-overlapping and balanced enough"
+# Thu "Write partition metadata (sizes, project labels) to disk"
+#
+# Run:  python scripts/build_partitions.py --config configs/partition.yaml
+#       python scripts/validate_partitions.py
+# =============================================================================
+partition:
+  # ---------------------------------------------------------------------
+  # project_level  - one shard per source repository. Non-IID by project.
+  #                  This is the Week-2 scope and the CLASP cluster definition.
+  # per_developer  - Week 4. Declared in the contract enum but NOT implemented
+  #                  here; selecting it raises a clear "not yet implemented".
+  # ---------------------------------------------------------------------
+  strategy: "project_level"
+
+  # Pins shard ordering and any future sampling. Recorded in the manifest so
+  # a partition can be reproduced exactly (Phase-III seed-pinning depends on it).
+  seed: 20260616
+
+  manifest_version: "1.0.0"
+
+  input:
+    corpus_path: "datasets/processed/corpus.jsonl"
+    corpus_manifest_path: "datasets/metadata/corpus_manifest.json"
+
+  output:
+    partitions_dir: "datasets/partitions"
+    manifest_path: "datasets/partitions/manifest.json"
+    # {client_id} is substituted per shard.
+    shard_filename_template: "{client_id}.jsonl"
+    # Write file contents into each shard, making a shard self-contained for
+    # a P1 client. Set false to emit index-only shards that reference the
+    # corpus by file_id.
+    include_content: true
+
+  client_naming:
+    # Flower client id. Under project_level there is one client per cluster,
+    # so this is a pure function of cluster_id.
+    template: "client-{cluster_id}"
+
+  # ---------------------------------------------------------------------
+  # Week-2 Wednesday: "non-overlapping and balanced enough".
+  #
+  # Correctness constraints are hard errors — violating them makes the
+  # federation invalid or breaks CLASP's project-isolation claim.
+  # Balance constraints are warnings by default: D1 is genuinely uneven
+  # (Colorama is an order of magnitude smaller than Werkzeug) and that
+  # unevenness is the non-IID signal FedProx exists to handle, not a defect.
+  # Set fail_on_warning: true to enforce them in CI.
+  # ---------------------------------------------------------------------
+  validation:
+    # --- hard constraints ---
+    require_disjoint_files: true      # no file_id in two shards
+    require_full_coverage: true       # every corpus file assigned exactly once
+    require_project_purity: true      # every file in a shard shares its cluster_id
+    require_content_disjoint: true    # no identical content hash across shards
+    min_files_per_shard: 3            # an empty/near-empty Flower client stalls a round
+
+    # --- balance signals (warnings) ---
+    max_imbalance_ratio: 20.0         # largest shard files / smallest shard files
+    max_gini: 0.50                    # Gini coefficient over shard file counts
+    max_coefficient_of_variation: 1.00
+    fail_on_warning: false
+
+  # ---------------------------------------------------------------------
+  # Week-2 Friday: "Sanity-check partitions against Deepak's interface contract".
+  # expected_client_count mirrors P2's current simulation width (3 dummy
+  # clients in Week 2, rising to 5 per cluster in Week 8). A mismatch is
+  # reported as a coordination warning, not a failure.
+  # ---------------------------------------------------------------------
+  integration:
+    expected_client_count: 3
+    max_client_count: 16

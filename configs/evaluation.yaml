@@ -1,0 +1,85 @@
+# =============================================================================
+# CLASP-P5 · Week 1
+# Wed "Scaffold eval-harness repo structure"
+# Thu "Set up HumanEval/MBPP harness dependencies"
+# Fri "Dry-run harness on a tiny sample; fix path/config issues"
+#
+# Run:  python scripts/check_dependencies.py
+#       python scripts/dry_run_harness.py --limit 3
+#
+# SCOPE NOTE: Pass@k scoring and wiring to P1's merged model are Week-3
+# deliverables. Week 1 fixes the harness structure, its dependencies and a
+# reproducible dry run against a mock generator. Keys marked "Week 3" below
+# are read and validated now so the config need not change later.
+# =============================================================================
+evaluation:
+  run:
+    # dry_run - mock generator, no scoring. The Week-1 Friday mode.
+    # full    - real Edge Layer + Pass@k scoring. Enabled in Week 3.
+    mode: "dry_run"
+    run_id_prefix: "p5"
+    # Cap on tasks per benchmark. null means "all". Overridable with --limit.
+    limit: 5
+    num_samples_per_task: 1
+    continue_on_task_error: true
+    results_dir: "evaluation/results"
+
+  generation:
+    max_new_tokens: 384
+    temperature: 0.2
+    # Truncate a completion at the first of these, so a model that keeps
+    # generating past the function body does not corrupt the assembled program.
+    stop_sequences:
+      - "\ndef "
+      - "\nclass "
+      - "\nif __name__"
+      - "\nprint("
+      - "\n@"
+
+  # ---------------------------------------------------------------------
+  # Which Edge Layer to call.
+  #   mock - interfaces.edge_client.MockEdgeInferenceClient (offline, deterministic)
+  #   edge - P1's real client. Not available until Week 3; selecting it now
+  #          fails with an explicit "not yet integrated" error.
+  # ---------------------------------------------------------------------
+  backend:
+    kind: "mock"
+    model_id: "mock/deepseek-coder-6.7b-base"
+
+  benchmarks:
+    humaneval:
+      enabled: true
+      # Path to the task file. When absent, the harness falls back to the
+      # bundled format-compatible sample fixture and says so in the log.
+      # Week 3: points at the real, published HumanEval (164 problems),
+      # fetched by `python scripts/fetch_benchmark_data.py` from
+      # openai/human-eval (MIT). Not committed (network artefact, like
+      # datasets/raw/); a fresh clone without network falls back to the
+      # bundled 5-task fixture automatically.
+      tasks_path: "evaluation/humaneval/tasks.jsonl"
+      sample_tasks_path: "evaluation/humaneval/sample_tasks.jsonl"
+
+    mbpp:
+      enabled: true
+      # Week 3: real MBPP test split (task_id 11-510, Austin et al. 2021
+      # convention), fetched the same way. See
+      # evaluation/mbpp/tasks_manifest.json for exact provenance/skip counts.
+      tasks_path: "evaluation/mbpp/tasks.jsonl"
+      sample_tasks_path: "evaluation/mbpp/sample_tasks.jsonl"
+      # MBPP prompts embed the first assert as a specification example.
+      include_test_example_in_prompt: true
+
+  # --- Week 3: implemented. -----------------------------------------------
+  scoring:
+    # k values for the unbiased Pass@k estimator (Chen et al., 2021).
+    pass_at_k: [1, 10]
+    # Executes every assembled program in a subprocess sandbox
+    # (evaluation.execution) to determine pass/fail. Process-level isolation
+    # only — see evaluation/execution.py's module docstring for exactly what
+    # that does and does not guarantee, and why P3 sign-off on a stronger
+    # sandbox (container/gVisor) is still recommended before running this
+    # against untrusted input beyond this repository's own mock/reference
+    # completions. Left false by default; scripts/run_baseline_eval.py
+    # enables it explicitly for a scored run.
+    execution_enabled: false
+    execution_timeout_seconds: 10

@@ -35,6 +35,12 @@ secrets/
 experiments/**/results/*
 !experiments/**/results/.gitkeep
 
+# --- P5 heavy dataset material (regenerated locally, not pushed) ---
+datasets/raw/
+datasets/materialized/
+datasets/processed/
+!datasets/**/.gitkeep
+
 # --- Node / dashboard ---
 node_modules/
 build/

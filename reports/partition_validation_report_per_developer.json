@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "errors": [],
+  "warnings": [],
+  "checks_passed": [
+    "manifest counts match shards on disk",
+    "shards are disjoint by file_id (135 unique files)",
+    "no identical content shared across shards",
+    "project purity is 1.0 for every shard (non-IID by project)",
+    "every shard has >= 2 file(s)",
+    "full coverage: all 135 corpus file(s) assigned once",
+    "imbalance ratio 8.50 within 30.00",
+    "Gini 0.2604 within 0.65",
+    "coefficient of variation 0.5380 within 1.20"
+  ],
+  "balance": {
+    "num_shards": 20,
+    "min_files": 2,
+    "max_files": 17,
+    "mean_files": 6.75,
+    "median_files": 6.0,
+    "imbalance_ratio": 8.5,
+    "gini": 0.26037,
+    "coefficient_of_variation": 0.537994,
+    "min_client": "client-werkzeug-dev6",
+    "max_client": "client-flask-dev0"
+  },
+  "purity_by_cluster": {
+    "click": 1.0,
+    "colorama": 1.0,
+    "flask": 1.0,
+    "jinja": 1.0,
+    "requests": 1.0,
+    "werkzeug": 1.0
+  }
+}
