@@ -1,0 +1,66 @@
+# W3 · P1 Edge — real LoRA train (E3.1/E3.2), composite merge (E3.3/E3.4), TTFT (E3.5)
+# Every run parameter lives here. Nothing in this file is hardcoded in the modules;
+# the CLIs take each of these as a flag so a run is reproducible from this config.
+name: w3-edge-lora-composite
+owner: P1 Adithyaa
+
+base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile
+# D8 assumes a "reference GPU". This machine is an RTX 2050 / 4 GB, on which the
+# 6.7B target profile does not fit (see docs/hardware.md). Every number in
+# results/ is a 1.3B-dev-profile number and is NOT comparable to a 6.7B one.
+device_profile: dev
+seed: 0
+
+# --- data (E3.1) ---
+corpus_root: datasets/materialized
+seq_len: 1024                # D8 cap
+pack: fixed-block            # concatenate EOS-separated files, slice at seq_len
+drop_last_train: true        # every train block exactly full -> no padding
+drop_last_eval: false        # held-out keeps its short tail; pad positions masked -100
+
+# --- step budgeting (E3.2) ---
+# D8 says "<= 200 steps/client/round". Applied flat, that is ~3.3 epochs for
+# client-requests and ~0.11 for scikit-learn: a 33x spread. This redistributes
+# the SAME total budget by sqrt(n) instead. Needs a D8 amendment to adopt.
+budget_policy: sqrt          # uniform | sqrt | linear
+total_chunks: 1200           # = 6 clients x 200 blocks, i.e. D8's total spend
+max_epochs: 2.0              # anti-memorization ceiling for small clients
+min_chunks: 20               # floor, so a starved client still carries real signal
+
+# --- optimization (E3.2) ---
+lr: 2e-4                     # PROVISIONAL — see RESULTS.md, sweep in progress
+lr_scheduler: cosine_with_warmup
+warmup_ratio: 0.03
+grad_clip: 1.0
+micro_batch: 1               # 4 GB VRAM: one 1024-token block at a time
+grad_accum: 1                # 1 => one block == one optimizer step, comparable to D8
+
+# --- LoRA (pinned; D8 rank cap, contracts hyperparams) ---
+lora:
+  r: 16
+  lora_alpha: 16
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  lora_dropout: 0.0
+
+# --- composite merge (E3.3/E3.4, D6) ---
+alpha: 0.5      # cluster contribution in Wnew = Wbase + alpha*dWcluster + beta*dWclient
+beta: 1.0       # client contribution
+merge_strategy: rank-concat  # exact; SVD-truncate is the D2-style alternative
+# No real cluster adapter exists: P2's SVD aggregation produces one at W5+.
+cluster_source: stub:random  # stub:zeros | stub:random | <path>
+cluster_stub_seed: 3
+
+# --- TTFT (E3.5, D11) ---
+ttft:
+  repeats: 20
+  warmup_discarded: 3
+  nfr_overhead_ms: 200
+  nfr_swap_seconds: 2
+
+notes: >
+  Known temporary deviation from D3: the client trains on the frozen BASE alone,
+  not on frozen (base + alpha*cluster), because no cluster adapter exists until
+  P2 ships SVD aggregation in W5+. Recorded in every run manifest as
+  `d3_deviation`. Also: the web cluster on disk is {flask, requests, werkzeug} —
+  D1 specifies {django, flask, requests}, so werkzeug is an unrecorded
+  substitution to raise with P5.

@@ -1,0 +1,76 @@
+# W4/G2 (3-layer composition, 6 clients / 2 clusters) + W5/G3 (full E2E round)
+# P1 Edge. Every run parameter lives here; the CLIs take each as a flag.
+name: w4w5-g2-g3-round
+owner: P1 Adithyaa
+depends_on: w3-edge-lora-composite      # reuses its packing, merge and TTFT machinery
+
+base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile; 6.7B does not fit in 4 GB
+device_profile: dev
+seed: 0
+
+# --- clients (D1) ---
+# NOTE: the web cluster on disk is {flask, requests, werkzeug}. D1 specifies
+# {django, flask, requests}. Werkzeug is an unrecorded substitution — open item with P5.
+corpus_root: datasets/materialized
+clusters:
+  web:        [client-flask, client-requests, client-werkzeug]
+  scientific: [client-numpy, client-pandas, client-scikit-learn]
+
+# --- training (carried over from W3/E3.2) ---
+seq_len: 1024
+lr: 1.0e-3                   # cross-client choice; stable on flask, numpy AND requests
+lr_scheduler: cosine_with_warmup
+warmup_ratio: 0.03
+grad_clip: 1.0
+micro_batch: 1
+grad_accum: 1
+budget_policy: sqrt
+total_chunks: 1200
+max_epochs: 2.0
+
+lora:
+  r: 16
+  lora_alpha: 16
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  lora_dropout: 0.0
+
+# --- aggregation (D2) ---
+# Local edge-side implementation standing in for P2's cluster service (W5+).
+aggregation:
+  method: svd                # exact weighted average in dW space, re-factorized to rank r
+  rank: 16
+  svd_niter: 8
+  weighting: sample_count    # client dataset size, NOT its step budget
+  ablation_baseline: naive   # per-factor averaging, kept only to measure the bias
+
+# --- composition (D6) ---
+alpha_grid: [0.0, 0.25, 0.5, 1.0]
+alpha_ref: 0.5               # always re-measured on the full split, so the cluster
+                             # layer's contribution is testable even when the sweep
+                             # picks alpha=0 (where it is zero by construction)
+beta: 1.0
+merge_strategy: rank-concat
+
+# --- evaluation (D5) ---
+eval:
+  primary_metric: in_project_held_out_perplexity
+  grid_max_blocks: 40        # alpha sweep runs capped; chosen alpha re-measured in full
+  noise_band: 0.0            # PLACEHOLDER — P5's measured band (W5) does not exist
+  humaneval_guard: unavailable   # evalplus needs Unix `resource`; W1 debt
+
+# --- NFRs (D11) ---
+nfr:
+  round_minutes: 30
+  ttft_overhead_ms: 200
+  adapter_swap_seconds: 2
+
+notes: >
+  Known deviations carried into this experiment:
+  (1) D3 composition order is NOT satisfied — clients trained on the frozen base,
+      not on frozen (base + alpha*cluster), because no cluster adapter existed at
+      training time. This is the prime suspect for the cluster layer showing no
+      benefit, and testing it requires a round-2 training pass.
+  (2) D5's promotion rule is half-evaluable: the in-project side works, the
+      HumanEval regression guard does not run on Windows. All promotion decisions
+      are therefore PROVISIONAL and carry decision_is_authoritative=false.
+  (3) Aggregation is a local stand-in for P2's service, not a replacement.

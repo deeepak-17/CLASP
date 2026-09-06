@@ -1,0 +1,69 @@
+{
+  "utc": "2026-08-14T06:19:07.497932+00:00",
+  "task": "E3.2 lr/steps sweep for stable convergence",
+  "grid": {
+    "clients": [
+      "scientific/client-numpy"
+    ],
+    "lrs": [
+      0.001,
+      0.002
+    ],
+    "grad_accums": [
+      1
+    ],
+    "micro_batch": 1,
+    "repeat": 1
+  },
+  "seed": 0,
+  "budget_plan": "budget_plan.json",
+  "rows": [
+    {
+      "client": "scientific/client-numpy",
+      "lr": 0.001,
+      "grad_accum": 1,
+      "rep": 1,
+      "tag": "client-numpy__lr0.001__ga1__r1",
+      "wall_seconds": 1124.2,
+      "ok": true,
+      "first_window": 0.9999,
+      "last_window": 1.0755,
+      "loss_slope": 0.000224,
+      "loss_decreased": false,
+      "base_ppl": 2.736,
+      "final_ppl": 2.652,
+      "ppl_delta": -0.084,
+      "stable": false,
+      "optimizer_steps": 292,
+      "chunk_budget": 292,
+      "epochs": 0.227,
+      "peak_vram_gb": 1.747,
+      "max_grad_norm": 1.2229
+    },
+    {
+      "client": "scientific/client-numpy",
+      "lr": 0.002,
+      "grad_accum": 1,
+      "rep": 1,
+      "tag": "client-numpy__lr0.002__ga1__r1",
+      "wall_seconds": 3241.0,
+      "ok": true,
+      "first_window": 1.0161,
+      "last_window": 1.0859,
+      "loss_slope": 0.00015,
+      "loss_decreased": false,
+      "base_ppl": 2.736,
+      "final_ppl": 2.69,
+      "ppl_delta": -0.046,
+      "stable": false,
+      "optimizer_steps": 292,
+      "chunk_budget": 292,
+      "epochs": 0.227,
+      "peak_vram_gb": 1.747,
+      "max_grad_norm": 3.9857
+    }
+  ],
+  "repeatability": [],
+  "recommended": null,
+  "total_wall_seconds": 4365.1
+}

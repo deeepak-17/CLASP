@@ -1,0 +1,369 @@
+{
+  "utc": "2026-08-18T06:57:12.716892+00:00",
+  "task": "W4/G2 3-layer composition + W5/G3 full E2E round",
+  "round": 1,
+  "profile": "dev",
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "seed": 0,
+  "beta": 1.0,
+  "alpha_grid": [
+    0.0,
+    0.5
+  ],
+  "cluster_rank": 16,
+  "clusters": {
+    "scientific": {
+      "members": [
+        "scientific/client-numpy",
+        "scientific/client-pandas",
+        "scientific/client-scikit-learn"
+      ],
+      "sample_weights": [
+        1286,
+        1687,
+        1696
+      ],
+      "n_modules": 96,
+      "reconstruction_error_mean": 0.278619,
+      "reconstruction_error_max": 0.409712,
+      "reconstruction_error_min": 0.097631,
+      "rank": 16,
+      "svd_niter": 8,
+      "weights_normalized": [
+        0.275434,
+        0.361319,
+        0.363247
+      ],
+      "vs_exact_average": {
+        "max_rel_err": 0.409712,
+        "mean_rel_err": 0.278619
+      }
+    },
+    "web": {
+      "members": [
+        "web/client-flask",
+        "web/client-requests",
+        "web/client-werkzeug"
+      ],
+      "sample_weights": [
+        80,
+        52,
+        170
+      ],
+      "n_modules": 96,
+      "reconstruction_error_mean": 0.172242,
+      "reconstruction_error_max": 0.229755,
+      "reconstruction_error_min": 0.076152,
+      "rank": 16,
+      "svd_niter": 8,
+      "weights_normalized": [
+        0.264901,
+        0.172185,
+        0.562914
+      ],
+      "vs_exact_average": {
+        "max_rel_err": 0.229755,
+        "mean_rel_err": 0.172242
+      }
+    }
+  },
+  "clients": {
+    "scientific/client-numpy": {
+      "cluster": "scientific",
+      "n_train_files": 199,
+      "n_train_blocks": 1286,
+      "n_held_out_blocks": 106,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.495,
+          "ppl_delta": -0.096,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.507,
+          "ppl_delta": -0.084,
+          "merge_rel_err": 2.848739347376605e-07
+        }
+      ],
+      "best_alpha": 0.0,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.736,
+        "client_only_ppl": 2.653,
+        "composite_ppl": 2.653,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.664,
+        "n_tokens": 108026
+      },
+      "personalization_delta_ppl": -0.083,
+      "cluster_contribution_ppl": 0.0,
+      "cluster_contribution_at_alpha_ref": 0.011,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 237.2
+    },
+    "scientific/client-pandas": {
+      "cluster": "scientific",
+      "n_train_files": 239,
+      "n_train_blocks": 1687,
+      "n_held_out_blocks": 159,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.514,
+          "ppl_delta": -0.177,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.523,
+          "ppl_delta": -0.168,
+          "merge_rel_err": 2.4649431674486835e-07
+        }
+      ],
+      "best_alpha": 0.0,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.91,
+        "client_only_ppl": 2.718,
+        "composite_ppl": 2.718,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.728,
+        "n_tokens": 162647
+      },
+      "personalization_delta_ppl": -0.192,
+      "cluster_contribution_ppl": 0.0,
+      "cluster_contribution_at_alpha_ref": 0.01,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 338.2
+    },
+    "scientific/client-scikit-learn": {
+      "cluster": "scientific",
+      "n_train_files": 222,
+      "n_train_blocks": 1696,
+      "n_held_out_blocks": 244,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.33,
+          "ppl_delta": -0.231,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.341,
+          "ppl_delta": -0.22,
+          "merge_rel_err": 2.518333150544319e-07
+        }
+      ],
+      "best_alpha": 0.0,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.584,
+        "client_only_ppl": 2.371,
+        "composite_ppl": 2.371,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.385,
+        "n_tokens": 248968
+      },
+      "personalization_delta_ppl": -0.213,
+      "cluster_contribution_ppl": 0.0,
+      "cluster_contribution_at_alpha_ref": 0.014,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 482.5
+    },
+    "web/client-flask": {
+      "cluster": "web",
+      "n_train_files": 21,
+      "n_train_blocks": 80,
+      "n_held_out_blocks": 11,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.269,
+          "ppl_delta": -0.183,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.269,
+          "ppl_delta": -0.183,
+          "merge_rel_err": 2.948907813013294e-07
+        }
+      ],
+      "best_alpha": 0.0,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.452,
+        "client_only_ppl": 2.269,
+        "composite_ppl": 2.269,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.269,
+        "n_tokens": 10549
+      },
+      "personalization_delta_ppl": -0.183,
+      "cluster_contribution_ppl": 0.0,
+      "cluster_contribution_at_alpha_ref": 0.0,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 41.6
+    },
+    "web/client-requests": {
+      "cluster": "web",
+      "n_train_files": 16,
+      "n_train_blocks": 52,
+      "n_held_out_blocks": 1,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 3.26,
+          "ppl_delta": -0.203,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 3.262,
+          "ppl_delta": -0.201,
+          "merge_rel_err": 3.6542508621291346e-07
+        }
+      ],
+      "best_alpha": 0.0,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 3.463,
+        "client_only_ppl": 3.26,
+        "composite_ppl": 3.26,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 3.262,
+        "n_tokens": 513
+      },
+      "personalization_delta_ppl": -0.203,
+      "cluster_contribution_ppl": 0.0,
+      "cluster_contribution_at_alpha_ref": 0.002,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 14.4
+    },
+    "web/client-werkzeug": {
+      "cluster": "web",
+      "n_train_files": 44,
+      "n_train_blocks": 170,
+      "n_held_out_blocks": 30,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.653,
+          "ppl_delta": -0.175,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.665,
+          "ppl_delta": -0.163,
+          "merge_rel_err": 2.6693426530169533e-07
+        }
+      ],
+      "best_alpha": 0.0,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.828,
+        "client_only_ppl": 2.653,
+        "composite_ppl": 2.653,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.665,
+        "n_tokens": 30279
+      },
+      "personalization_delta_ppl": -0.175,
+      "cluster_contribution_ppl": 0.0,
+      "cluster_contribution_at_alpha_ref": 0.012,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 94.5
+    }
+  },
+  "timings": {
+    "aggregate_seconds": 132.8,
+    "total_minutes": 27.8,
+    "nfr_round_minutes": 30.0,
+    "nfr_note": "this round EXCLUDES client training, which ran separately; see the round-cost breakdown in the report"
+  },
+  "hardware": {
+    "device": "NVIDIA GeForce RTX 2050",
+    "peak_vram_gb": 1.724
+  },
+  "versions": {
+    "python": "3.10.11",
+    "torch": "2.13.0+cu126",
+    "transformers": "5.14.1"
+  },
+  "known_deviations": {
+    "d3_composition_order": "clients trained on frozen base, not on frozen (base + a*cluster) \u2014 no cluster adapter existed at training time; needs a second pass",
+    "d5_regression_guard": "HumanEval half unavailable on Windows; decisions provisional",
+    "d5_noise_band": "placeholder 0.0; P5's measured band outstanding",
+    "d1_web_cluster": "on disk = {flask, requests, werkzeug}; D1 says {django, flask, requests}"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "policy": "sqrt",
+  "total_chunks": 1200,
+  "max_epochs": 2.0,
+  "seq_len": 1024,
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "clients": {
+    "scientific/client-numpy": {
+      "n_chunks": 1286,
+      "chunk_budget": 292,
+      "epochs": 0.227
+    },
+    "scientific/client-pandas": {
+      "n_chunks": 1687,
+      "chunk_budget": 335,
+      "epochs": 0.199
+    },
+    "scientific/client-scikit-learn": {
+      "n_chunks": 1696,
+      "chunk_budget": 335,
+      "epochs": 0.198
+    },
+    "web/client-flask": {
+      "n_chunks": 80,
+      "chunk_budget": 73,
+      "epochs": 0.912
+    },
+    "web/client-requests": {
+      "n_chunks": 52,
+      "chunk_budget": 59,
+      "epochs": 1.135
+    },
+    "web/client-werkzeug": {
+      "n_chunks": 170,
+      "chunk_budget": 106,
+      "epochs": 0.624
+    }
+  }
+}
