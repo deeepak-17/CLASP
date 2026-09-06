@@ -10,8 +10,12 @@ python scripts/demo_round.py --round 1
 Full record: `results/round1_manifest.json` (gitignored — heavy, and regenerated
 by the command above). Method and caveats: `docs/integration-sprint.md`.
 
-**Run:** 2026-09-06 16:12:53 → 16:27:13 UTC · NVIDIA GeForce RTX 2050 ·
-peak VRAM **1.701 GB** of 4 GB · deepseek-coder-1.3b-base (NF4) · seed 0.
+**Run:** 2026-09-06 16:52:12 UTC · NVIDIA GeForce RTX 2050 · peak VRAM
+**1.701 GB** of 4 GB · deepseek-coder-1.3b-base (NF4) · seed 0.
+
+The round was run three times end to end. Every metric below came out
+identical each time; only wall clock moved (14.00 / 14.33 / 17.94 min,
+depending on what else was using the box).
 
 ---
 
@@ -25,7 +29,7 @@ peak VRAM **1.701 GB** of 4 GB · deepseek-coder-1.3b-base (NF4) · seed 0.
 | adapters pulled back (seam C1) | 4 — all sha256-verified |
 | composites merged (D6) | 4 — rank 32, α=0.5, β=1.0 |
 | promotion decisions (seam C2) | 2 |
-| **wall clock** | **14.33 min** against the 30 min NFR (D11) — **met** |
+| **wall clock** | **17.94 min** against the 30 min NFR (D11) — **met** (14.0 min on an otherwise idle box) |
 
 ---
 
@@ -118,7 +122,24 @@ reasons against the real registry rule.
 
 ---
 
-## 5. What these numbers are not
+## 5. Reproducibility
+
+Recomputing the web cluster's SVD aggregate from the six real client adapters
+in a **fresh process** — upload envelope, aggregation, serialization — produces
+the exact sha256 the registry stored during the live round:
+
+```
+recomputed in a fresh process: 9758be92bbde4f01e344dcc368f245b9…
+stored by the registry       : 9758be92bbde4f01e344dcc368f245b9…
+```
+
+This only became true this sprint: `safetensors` orders its header from a hash
+map, so the same adapter used to serialize to different bytes call to call. See
+`docs/integration-sprint.md` §4.
+
+---
+
+## 6. What these numbers are not
 
 - **Not a D3 result.** The six clients were trained against the frozen base, not
   against frozen `base + α·cluster`. Unchanged by this sprint.
