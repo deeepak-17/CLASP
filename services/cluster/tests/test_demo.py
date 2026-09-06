@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+
 from cluster.adapter_format import TARGET_MODULES
 from cluster.client import TORCH_AVAILABLE
 from cluster.demo import run_demo

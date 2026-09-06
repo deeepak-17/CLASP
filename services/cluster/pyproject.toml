@@ -9,11 +9,12 @@ dependencies = [
     "pydantic>=2",
     "flwr>=1.8",
     "torch",
-    # "fastapi", "uvicorn",  # server HTTP surface, not needed for the Week 5 demo
+    "fastapi",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "httpx", "safetensors"]
 
 [build-system]
 requires = ["setuptools>=68"]
