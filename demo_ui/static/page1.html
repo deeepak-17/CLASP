@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>CLASP Demo — Edge / Client Training</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1>CLASP <span>Panel Demo</span> — Page 1 of 3</h1>
+  <nav class="pages">
+    <a href="/static/page1.html" class="active">1 · Edge Training</a>
+    <a href="/static/page2.html">2 · Cluster + Registry</a>
+    <a href="/static/page3.html">3 · Compose + Promote</a>
+  </nav>
+  <div class="healthbar" id="healthbar"></div>
+</header>
+
+<main>
+  <div class="pipeline">
+    <div class="pipe-step current">Edge Clients</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">Cluster Aggregation</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">Registry Versioning</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">Edge Fetch + Composition</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">Evaluation / Promotion</div>
+  </div>
+
+  <div class="section-title">Client adapters — real, committed training runs</div>
+  <p class="hint">
+    Source: <code>services/edge/artifacts/round1/*/manifest.json</code> — a real
+    RTX 2050 run (PR #9), not fabricated for this demo. Each client trained a
+    LoRA adapter locally, on its own repository partition, on the frozen base
+    model alone.
+  </p>
+
+  <div class="grid" id="summary-cards"></div>
+
+  <div class="section-title">Per-client detail</div>
+  <div class="card">
+    <table id="clients-table">
+      <thead>
+        <tr>
+          <th>Client</th><th>Cluster</th><th>Base model</th><th>Rank</th>
+          <th>Target modules</th><th>Train files</th><th>Train blocks</th>
+          <th>Held-out ppl (before → after)</th><th>Wall time</th>
+        </tr>
+      </thead>
+      <tbody id="clients-body"><tr><td colspan="9">loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    Adapters exist as <code>adapter_config.json</code> (real LoRA hyperparameters)
+    per client. The trained <code>*.safetensors</code> weight files are gitignored
+    repo-wide and not present in this checkout — the "Send to Cluster" action below
+    uses synthetic tensor <em>values</em> at the same shape and hyperparameters as
+    each real adapter, so it exercises Cluster's real upload validation and
+    aggregation math live, without claiming to replay real trained weights.
+  </div>
+
+  <div class="section-title">Send to Cluster (seam A, live)</div>
+  <div class="actions">
+    <button class="primary" onclick="sendCluster('web')">Send web cluster (flask, requests, werkzeug) → Cluster</button>
+    <button class="primary" onclick="sendCluster('scientific')">Send scientific cluster (numpy, pandas, scikit-learn) → Cluster</button>
+    <a href="/static/page2.html" class="secondary">Go to Page 2 →</a>
+  </div>
+  <div class="log" id="log">ready.</div>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+async function loadClients() {
+  const { ok, body } = await apiGet("/api/edge/clients");
+  if (!ok) { log(document.getElementById("log"), "failed to load /api/edge/clients"); return; }
+  const clients = body.clients;
+
+  const cards = document.getElementById("summary-cards");
+  const improved = clients.filter(c => c.held_out_ppl_delta < 0).length;
+  cards.innerHTML = `
+    <div class="card"><h3>Clients trained</h3><div class="big">${clients.length}/6</div><div class="sub">real, committed manifests</div></div>
+    <div class="card"><h3>Improved held-out ppl</h3><div class="big">${improved}/${clients.length}</div><div class="sub">perplexity decreased after LoRA training</div></div>
+    <div class="card"><h3>Clusters</h3><div class="big">2</div><div class="sub">web {flask, requests, werkzeug} · scientific {numpy, pandas, scikit-learn}</div></div>
+    <div class="card"><h3>Base model</h3><div class="big" style="font-size:16px">${clients[0]?.base_model ?? "—"}</div><div class="sub">frozen, dev profile</div></div>
+  `;
+
+  const rows = clients.map(c => `
+    <tr>
+      <td>${c.client_id}</td>
+      <td>${c.cluster}</td>
+      <td class="mono">${c.base_model}</td>
+      <td>${c.rank}</td>
+      <td class="mono">${c.target_modules.join(", ")}</td>
+      <td>${c.n_train_files}</td>
+      <td>${c.n_train_blocks}</td>
+      <td>${fmt(c.held_out_ppl_before)} → ${fmt(c.held_out_ppl_after)}
+          <span style="color:${c.held_out_ppl_delta < 0 ? 'var(--good)' : 'var(--bad)'}">(${c.held_out_ppl_delta > 0 ? '+' : ''}${fmt(c.held_out_ppl_delta)})</span></td>
+      <td>${fmt(c.wall_seconds, 1)}s</td>
+    </tr>
+  `).join("");
+  document.getElementById("clients-body").innerHTML = rows;
+}
+
+async function sendCluster(clusterId) {
+  const logEl = document.getElementById("log");
+  log(logEl, `POST /api/demo/send-to-cluster/${clusterId} …`);
+  const { ok, body } = await apiPost(`/api/demo/send-to-cluster/${clusterId}`);
+  if (!ok) { log(logEl, `FAILED: ${JSON.stringify(body)}`); return; }
+  body.uploads.forEach(u => log(logEl, `  upload ${u.client_id} -> ${u.status_code} (${u.body.tensors_received} tensors)`));
+  if (body.aggregate) {
+    log(logEl, `  aggregate -> ${body.aggregate.status_code}: cluster_id=${body.aggregate.body.cluster_id}, rank=${body.aggregate.body.rank}, num_clients=${body.aggregate.body.num_clients}`);
+    log(logEl, `  note: ${body.note}`);
+    log(logEl, `Done. Open Page 2 to see the aggregation + publish it to the Registry.`);
+  }
+}
+
+loadClients();
+</script>
+</body>
+</html>

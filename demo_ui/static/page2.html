@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>CLASP Demo — Cluster Aggregation + Registry</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1>CLASP <span>Panel Demo</span> — Page 2 of 3</h1>
+  <nav class="pages">
+    <a href="/static/page1.html">1 · Edge Training</a>
+    <a href="/static/page2.html" class="active">2 · Cluster + Registry</a>
+    <a href="/static/page3.html">3 · Compose + Promote</a>
+  </nav>
+  <div class="healthbar" id="healthbar"></div>
+</header>
+
+<main>
+  <div class="pipeline">
+    <div class="pipe-step done">Edge Clients</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step current">Cluster Aggregation</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step current">Registry Versioning</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">Edge Fetch + Composition</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">Evaluation / Promotion</div>
+  </div>
+
+  <div class="section-title">Live Cluster state <span class="badge live">LIVE :8002</span></div>
+  <p class="hint">Real <code>cluster.server</code> FastAPI app, proxied unchanged — no math reimplemented here.</p>
+  <div class="grid" id="cluster-cards"></div>
+
+  <div class="section-title">Why SVD, not naive averaging (D2) — real numbers</div>
+  <p class="hint">
+    Source: <code>services/edge/artifacts/clusters/{web,scientific}/aggregate_manifest.json</code>
+    — a real aggregation run over real client adapters, before this demo started.
+  </p>
+  <div class="grid" id="d2-cards"></div>
+
+  <div class="section-title">Publish aggregated adapter to Registry (seam B, live)</div>
+  <div class="note">
+    The real Cluster service holds <b>one active aggregate at a time</b> (one process,
+    one cluster, one upload buffer — by its own design). Do one cluster fully —
+    <b>Send to Cluster → Publish → Promote</b> — before starting the other. Publishing
+    checks the aggregation's real source clients and refuses (409) if they don't match.
+  </div>
+  <div class="actions">
+    <button class="primary" onclick="publish('web')">Publish web cluster adapter → Registry</button>
+    <button class="primary" onclick="publish('scientific')">Publish scientific cluster adapter → Registry</button>
+    <button class="secondary" onclick="loadRegistry()">Refresh Registry state</button>
+    <a href="/static/page3.html" class="secondary">Go to Page 3 →</a>
+  </div>
+  <div class="log" id="log">ready. (Run Page 1's "Send to Cluster" for this exact cluster first.)</div>
+
+  <div class="section-title">Registry versions <span class="badge live">LIVE :8004</span></div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Adapter</th><th>Version</th><th>Active</th><th>sha256</th><th>Aggregation</th><th>Source clients</th><th>Created</th></tr></thead>
+      <tbody id="registry-body"><tr><td colspan="7">loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+async function loadCluster() {
+  // Cluster now tracks each project cluster's buffer/round/active adapter
+  // separately (multi-cluster HTTP service, integration/panel) -- healthz's
+  // "clusters" sub-object breaks it out per cluster_id instead of one global
+  // state.
+  const cards = document.getElementById("cluster-cards");
+  const { ok, body } = await apiGet("/api/cluster/healthz");
+  if (!ok) { cards.innerHTML = `<div class="card"><h3>Cluster</h3><div class="big" style="color:var(--bad)">unreachable</div></div>`; return; }
+  const clusters = body.clusters || {};
+  const rows = [];
+  for (const cid of ["web", "scientific"]) {
+    const c = clusters[cid];
+    const manifestRes = await apiGet(`/api/cluster/adapters/${cid}/manifest`);
+    const m = manifestRes.ok ? manifestRes.body : null;
+    rows.push(`
+      <div class="card">
+        <h3>${cid} cluster</h3>
+        <table>
+          <tr><td>round</td><td>${c ? c.round_id : "—"}</td></tr>
+          <tr><td>pending uploads</td><td>${c ? c.pending_uploads : 0}</td></tr>
+          <tr><td>active adapter</td><td>${c && c.has_active_adapter ? "yes" : "not yet"}</td></tr>
+          <tr><td>last SVD reconstruction error</td><td>${m && m.svd_reconstruction_error ? fmt(m.svd_reconstruction_error.mean, 4) : "—"}</td></tr>
+          <tr><td>last source clients</td><td class="mono">${m ? m.source_clients.join(", ") : "—"}</td></tr>
+        </table>
+      </div>
+    `);
+  }
+  cards.innerHTML = rows.join("");
+}
+
+async function loadD2() {
+  const cards = document.getElementById("d2-cards");
+  const rows = [];
+  for (const cid of ["web", "scientific"]) {
+    const { ok, body } = await apiGet(`/api/edge/cluster-aggregate-manifest/${cid}`);
+    if (!ok) continue;
+    rows.push(`
+      <div class="card">
+        <h3>${cid} cluster</h3>
+        <table>
+          <tr><td>clients</td><td>${body.clients.join(", ")}</td></tr>
+          <tr><td>SVD vs exact avg</td><td>mean ${fmt(body.vs_exact_average.mean_rel_err)} / max ${fmt(body.vs_exact_average.max_rel_err)}</td></tr>
+          <tr><td>naive vs exact avg</td><td style="color:var(--bad)">mean ${fmt(body.naive_baseline_vs_exact_average.mean_rel_err)} / max ${fmt(body.naive_baseline_vs_exact_average.max_rel_err)}</td></tr>
+        </table>
+      </div>
+    `);
+  }
+  cards.innerHTML = rows.join("") || "<p class='hint'>no aggregate manifests found</p>";
+}
+
+async function publish(clusterId) {
+  const logEl = document.getElementById("log");
+  log(logEl, `POST /api/demo/publish-to-registry/${clusterId} …`);
+  const { ok, body } = await apiPost(`/api/demo/publish-to-registry/${clusterId}`);
+  if (!ok || body.status_code >= 400) { log(logEl, `FAILED: ${JSON.stringify(body)}`); return; }
+  log(logEl, `  saved -> version ${body.body.ref.version}, sha256 ${body.body.sha256.slice(0,16)}…`);
+  loadRegistry();
+}
+
+async function loadRegistry() {
+  const { ok, body } = await apiGet("/api/registry/adapters");
+  const tbody = document.getElementById("registry-body");
+  if (!ok || !body.adapters || body.adapters.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7">no adapters published yet</td></tr>`;
+    return;
+  }
+  let rows = [];
+  for (const name of body.adapters) {
+    const vres = await apiGet(`/api/registry/adapters/${name}/versions`);
+    if (!vres.ok) continue;
+    for (const v of vres.body.versions) {
+      rows.push(`
+        <tr>
+          <td>${name}</td>
+          <td>v${v.ref.version}</td>
+          <td>${v.ref.version === vres.body.active ? '<span class="badge promote">ACTIVE</span>' : ''}</td>
+          <td class="mono">${v.sha256.slice(0, 16)}…</td>
+          <td>${v.aggregation ?? '—'}</td>
+          <td class="mono">${v.source_clients.join(", ")}</td>
+          <td>${v.created_at.slice(0, 19)}</td>
+        </tr>
+      `);
+    }
+  }
+  tbody.innerHTML = rows.join("") || `<tr><td colspan="7">no versions yet</td></tr>`;
+}
+
+loadCluster();
+loadD2();
+loadRegistry();
+setInterval(loadCluster, 6000);
+</script>
+</body>
+</html>
