@@ -1,6 +1,6 @@
 # CLASP-P5 · P2 Client-Count Cross-Check
 
-_Week 4 · Wednesday deliverable — project-level and per-developer counts vs P2's current contract_  
+_project-level and per-developer counts vs P2's current contract_  
 **Generated:** 2026-08-10T06:57:38Z
 
 ## 1. Verdict
@@ -16,14 +16,14 @@ _Week 4 · Wednesday deliverable — project-level and per-developer counts vs P
 
 ## 3. Why the counts differ
 
-P2's Cluster Layer currently simulates a fixed, small number of Flower clients (`expected_client_count` in `configs/partition*.yaml`'s `integration` section — 3 as of Week 2/3, per `interfaces/cluster_client.py`'s `DEFAULT_EXPECTED_CLIENTS`, rising to 5 per cluster from Week 8). Both P5 partition strategies derive their client count from the corpus and the strategy, not from P2's simulator width:
+P2's Cluster Layer currently simulates a fixed, small number of Flower clients (`expected_client_count` in `configs/partition*.yaml`'s `integration` section — 3, per `interfaces/cluster_client.py`'s `DEFAULT_EXPECTED_CLIENTS`, rising to 5 per cluster later). Both P5 partition strategies derive their client count from the corpus and the strategy, not from P2's simulator width:
 
-- **project_level** — one client per source project (6 in D1). Already exceeded P2's Week-2/3 simulated count of 3; this is the same finding Week 2's `check_contract_compliance.py` already surfaced and the README already documents.
+- **project_level** — one client per source project (6 in D1). Already exceeds P2's simulated count of 3; this is the same finding `check_contract_compliance.py` already surfaced and the README already documents.
 - **per_developer** — one client per developer slice *within* each project (module-path or hash-chunk groups; see `partitions/strategies.py`), which is structurally always >= the project-level count and typically several times larger, because it is meant to model individual-scale federated clients, not project-scale ones.
 
 ## 4. What needs to be decided during integration
 
-- Whether P2's simulator width should scale to match P5's per-developer client count for any experiment that specifically exercises per-developer federation, or whether per-developer partitioning is intended for a *future* phase where P2's simulator has already scaled (the Phase-II swimlane's Week 8 client-count increase is a step in that direction, but even 5 clients/cluster is below the per-developer count here).
+- Whether P2's simulator width should scale to match P5's per-developer client count for any experiment that specifically exercises per-developer federation, or whether per-developer partitioning is intended for a *future* phase where P2's simulator has already scaled (a later planned client-count increase is a step in that direction, but even 5 clients/cluster is below the per-developer count here).
 - Whether project-level remains the client boundary for the Phase-II demo (matching P2's current 3-5 simulated clients) while per-developer is evaluated/reported separately as a data-pipeline capability, without being wired into a live FedProx round this phase.
 - Neither option requires a P5 code change — both configs and both manifests already exist and validate cleanly; this is purely a scope/scheduling decision across P2 and P5.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 2 · Tuesday and Thursday — build federated partitions and their metadata.
+"""Build federated partitions and their metadata.
 
 Reads the collected corpus, applies the configured partition strategy, writes
 one JSONL shard per federated client, the contract manifest, and the
@@ -65,7 +65,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 2 Tue/Thu — Partition Build",
+        "CLASP-P5 · Partition Build",
         "=" * 68,
         f"  strategy: {manifest.strategy.value}",
         f"  seed:     {manifest.seed}",

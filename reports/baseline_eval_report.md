@@ -1,7 +1,7 @@
 # CLASP-P5 · Baseline Pass@k Report
 
-_Week 3 · Thursday/Friday deliverable — baseline run, sanity-checked, stored to results.json_  
-**Generated:** 2026-08-10T06:33:23Z
+_baseline run, sanity-checked, stored to results.json_  
+**Generated:** 2026-09-07T08:16:48Z
 
 ## 1. Verdict
 
@@ -15,16 +15,16 @@ DEMO/TEST — P1's real merged DeepSeek-Coder-6.7B model is not available in thi
 
 | Benchmark | Dataset split | Problems | Samples/task | Pass@k |
 | --- | --- | --- | --- | --- |
-| HumanEval | full (164 problems, no filtering) | 164 | 10 | pass@1=0.0000, pass@10=0.0000 |
-| MBPP | test split, task_id 11-510 (Austin et al. 2021 few-shot/eval convention) | 392 | 10 | pass@1=0.0000, pass@10=0.0000 |
+| HumanEval | full (164 problems, no filtering) | 5 | 1 | pass@1=0.0000, pass@10=0.0000 |
+| MBPP | test split, task_id 11-510 (Austin et al. 2021 few-shot/eval convention) | 5 | 1 | pass@1=0.0000, pass@10=0.0000 |
 
 ## 4. Generation configuration
 
 - **max_new_tokens:** 384
 - **temperature:** 0.2
 - **execution_timeout_seconds:** 10
-- **run_id:** p5-20260810T063132Z
-- **created_at:** 2026-08-10T06:31:32Z
+- **run_id:** p5-20260907T081647Z
+- **created_at:** 2026-09-07T08:16:47Z
 
 ---
 

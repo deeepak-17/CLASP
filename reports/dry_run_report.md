@@ -1,27 +1,27 @@
 # CLASP-P5 · Evaluation Harness Dry Run
 
-_Week 1 · Friday deliverable — tiny-sample dry run and path/config verification_  
-**Generated:** 2026-08-18T04:54:10Z
+_tiny-sample dry run and path/config verification_  
+**Generated:** 2026-09-07T08:16:48Z
 
 ## 1. Verdict
 
-**PASS** — 6 task(s) across 2 benchmark(s) produced 6 completion(s) with no generation errors
+**PASS** — 10 task(s) across 2 benchmark(s) produced 10 completion(s) with no generation errors
 
-- **Run id:** `p5-20260818T045410Z`
+- **Run id:** `p5-20260907T081648Z`
 - **Mode:** dry_run
 - **Backend:** mock (`mock/deepseek-coder-6.7b-base`)
 - **Samples per task:** 1
 - **Task limit:** 5
-- **Elapsed:** 0.005s
+- **Elapsed:** 0.004s
 - **Privacy:** DP off (baseline)
-- **Artefact:** `evaluation/results/p5-20260818T045410Z.json`
+- **Artefact:** `evaluation/results/p5-20260907T081648Z.json`
 
 ## 2. Per-benchmark results
 
 | Benchmark | Tasks | Generated | Failed | Completions | Scored | Elapsed (s) |
 | --- | --- | --- | --- | --- | --- | --- |
-| HumanEval | 3 | 3 | 0 | 3 | no | 0.000 |
-| MBPP | 3 | 3 | 0 | 3 | no | 0.000 |
+| HumanEval | 5 | 5 | 0 | 5 | no | 0.000 |
+| MBPP | 5 | 5 | 0 | 5 | no | 0.000 |
 
 ## 3. What this dry run verifies
 
@@ -33,10 +33,10 @@ _Week 1 · Friday deliverable — tiny-sample dry run and path/config verificati
 - `assemble_program` produces a program for every task/completion pair.
 - The run artefact is written to `evaluation/results/` in the expected shape.
 
-## 4. Explicitly out of scope this week
+## 4. Explicitly out of scope for this run
 
-- **Pass@k scoring** — Week 3 (`Implement Pass@k scoring function`). `scored` is false and every `passed` field is null.
-- **Real model inference** — Week 3 (`Wire HumanEval runner to call the merged model`). Completions come from `MockEdgeInferenceClient` and are placeholders.
+- **Pass@k scoring** is not enabled here. `scored` is false and every `passed` field is null.
+- **Real model inference** is not wired here. Completions come from `MockEdgeInferenceClient` and are placeholders.
 - **Sandboxed execution** — generated code is assembled but never executed; the isolation policy needs P3 sign-off first.
 - **Published benchmark data** — the bundled `sample_tasks.jsonl` fixtures are original, format-compatible tasks, not HumanEval/MBPP proper.
 

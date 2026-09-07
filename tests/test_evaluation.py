@@ -353,7 +353,7 @@ class TestEvaluationHarness:
         text = render_dry_run_report(run, evaluation_config).render()
         assert "Harness Dry Run" in text
         assert "Pass@k" in text
-        assert "Week 3" in text
+        assert "out of scope" in text
 
 
 class TestWeekThreeSeams:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 4 · Wednesday — cross-check both partition strategies against P2's client count.
+"""Cross-check both partition strategies against P2's client count.
 
 "Cross-check both partition types against Prasanth's client count."
 
@@ -91,7 +91,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 4 Wednesday — P2 Client-Count Cross-Check",
+        "CLASP-P5 · P2 Client-Count Cross-Check",
         "=" * 68,
         "",
     ]
@@ -132,7 +132,7 @@ def main(args: argparse.Namespace) -> int:
 def _render_report(results: list[dict]) -> MarkdownReport:
     report = MarkdownReport(
         title="CLASP-P5 · P2 Client-Count Cross-Check",
-        subtitle="Week 4 · Wednesday deliverable — project-level and per-developer counts vs P2's current contract",
+        subtitle="project-level and per-developer counts vs P2's current contract",
     )
     report.heading("1. Verdict")
     mismatches = [r for r in results if not r["matches_p2_expectation"]]
@@ -184,7 +184,7 @@ def _render_report(results: list[dict]) -> MarkdownReport:
             "Whether P2's simulator width should scale to match P5's per-developer client count "
             "for any experiment that specifically exercises per-developer federation, or whether "
             "per-developer partitioning is intended for a *future* phase where P2's simulator has "
-            "already scaled (the Phase-II swimlane's Week 8 client-count increase is a step in "
+            "already scaled (a later planned client-count increase is a step in "
             "that direction, but even 5 clients/cluster is below the per-developer count here).",
             "Whether project-level remains the client boundary for the Phase-II demo (matching "
             "P2's current 3-5 simulated clients) while per-developer is evaluated/reported "

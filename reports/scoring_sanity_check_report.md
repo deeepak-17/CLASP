@@ -1,7 +1,7 @@
 # CLASP-P5 · Scoring Sanity Check
 
-_Week 3 · Thursday — real HumanEval/MBPP canonical solutions through the real execution path_  
-**Generated:** 2026-08-18T04:54:19Z
+_real HumanEval/MBPP canonical solutions through the real execution path_  
+**Generated:** 2026-09-07T08:16:47Z
 
 ## 1. Verdict
 
@@ -11,8 +11,8 @@ _Week 3 · Thursday — real HumanEval/MBPP canonical solutions through the real
 
 | Benchmark | Tasks | Pass@1 | Failures | Elapsed (s) |
 | --- | --- | --- | --- | --- |
-| HumanEval | 164 | 1.0000 | 0 | 2.05 |
-| MBPP | 392 | 1.0000 | 0 | 6.51 |
+| HumanEval | 164 | 1.0000 | 0 | 2.28 |
+| MBPP | 392 | 1.0000 | 0 | 6.97 |
 
 ---
 

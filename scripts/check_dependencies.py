@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 1 · Thursday — verify HumanEval/MBPP harness dependencies.
+"""Verify HumanEval/MBPP harness dependencies.
 
 Reports which declared dependencies are present, which are missing and
 blocking now, and which are deferred to a later week.
@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Also fail when dependencies deferred to later weeks are absent.",
+        help="Also fail when optional dependencies are absent.",
     )
     return parser
 
@@ -47,7 +47,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 1 Thursday — Harness Dependencies",
+        "CLASP-P5 · Harness Dependencies",
         "=" * 60,
         f"  python:   {result.python_version}  ({'ok' if result.python_ok else 'TOO OLD'})",
         f"  platform: {result.platform}",
@@ -55,7 +55,7 @@ def main(args: argparse.Namespace) -> int:
     ]
     for status in result.statuses:
         flag = "ok " if status.ok else "!! "
-        needed = "now" if status.spec.required_now else f"wk{status.spec.required_from_week}"
+        needed = "now" if status.spec.required_now else "later"
         lines.append(
             f"  {flag}{status.spec.package:<14} {(status.version or '-'):<12} "
             f"[{needed:<3}] {status.state}"
@@ -68,14 +68,14 @@ def main(args: argparse.Namespace) -> int:
             lines.append(f"    - {status.spec.package}: {status.spec.hint()}")
         lines.append("")
     else:
-        lines.append("  All dependencies required for Week-1/Week-2 scope are satisfied.")
+        lines.append("  All required dependencies are satisfied.")
         lines.append("")
 
     if result.deferred:
-        lines.append(f"  {len(result.deferred)} dependency/ies deferred to later weeks:")
+        lines.append(f"  {len(result.deferred)} optional dependency/ies not required yet:")
         for status in result.deferred:
             lines.append(
-                f"    - {status.spec.package} (needed from Week {status.spec.required_from_week})"
+                f"    - {status.spec.package} (optional — not required yet)"
             )
         lines.append("")
 

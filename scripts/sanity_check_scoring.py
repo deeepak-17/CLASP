@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 3 · Thursday — a REAL sanity check of the scoring pipeline.
+"""A REAL sanity check of the scoring pipeline.
 
 "Run Pass@k on the Week-1 baseline model; sanity-check the numbers."
 
@@ -108,7 +108,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 3 Thursday — Real Scoring Sanity Check",
+        "CLASP-P5 · Real Scoring Sanity Check",
         "=" * 68,
         "  (canonical reference solutions, real benchmark data, real execution — no model)",
         "",
@@ -140,7 +140,7 @@ def main(args: argparse.Namespace) -> int:
     if not args.no_report:
         report = MarkdownReport(
             title="CLASP-P5 · Scoring Sanity Check",
-            subtitle="Week 3 · Thursday — real HumanEval/MBPP canonical solutions through the real execution path",
+            subtitle="real HumanEval/MBPP canonical solutions through the real execution path",
         )
         report.heading("1. Verdict")
         report.status_line(all_ok, "every canonical solution passed its own test" if all_ok else "failures found")

@@ -1,6 +1,6 @@
 # CLASP-P5 · Dataset Survey (D1 Corpus Selection)
 
-_Week 1 · Monday deliverable · Aditya S (P5 - Eval & Data / Data & Demo Lead)_  
+_Aditya S (P5 - Eval & Data / Data & Demo Lead)_  
 **Generated:** 2026-08-08T17:52:50Z
 
 ## 1. Decision
@@ -114,7 +114,7 @@ Recorded here so they can be cited as threats to validity in the Phase-II report
 
 - Six OSS libraries are a proxy for an enterprise monorepo estate; generalisation to closed-source style is an assumption, not a result.
 - Four of six repositories are Pallets projects, so inter-project distance is smaller than a true multi-vendor estate would exhibit.
-- Per-developer partitioning (Week 4) is simulated from directory structure, not from real git authorship.
+- Per-developer partitioning is simulated from directory structure, not from real git authorship.
 - The corpus is Python-only; multi-language federation is out of Phase-II scope.
 
 ---

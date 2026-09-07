@@ -1,4 +1,4 @@
-"""Harness dependency preflight — Week 1, Thursday.
+"""Harness dependency preflight.
 
 "Set up HumanEval/MBPP harness dependencies."
 
@@ -111,7 +111,7 @@ DEPENDENCIES: Final[tuple[DependencySpec, ...]] = (
         import_name="jsonschema",
         purpose=(
             "Structurally validate partition manifests and eval results against the "
-            "interface contracts (Week-2 Friday sign-off)."
+            "interface contracts."
         ),
         required_from_week=2,
         required_now=True,
@@ -122,7 +122,7 @@ DEPENDENCIES: Final[tuple[DependencySpec, ...]] = (
         import_name="datasets",
         purpose=(
             "Fetch the published HumanEval/MBPP task sets from the Hugging Face Hub. "
-            "The Week-1 dry run uses bundled fixtures and does not need it."
+            "The bundled fixtures cover the dry run; it does not need this."
         ),
         required_from_week=3,
         required_now=False,
@@ -132,10 +132,7 @@ DEPENDENCIES: Final[tuple[DependencySpec, ...]] = (
     DependencySpec(
         package="human-eval",
         import_name="human_eval",
-        purpose=(
-            "Reference Pass@k implementation, used to cross-check P5's own scorer "
-            "when it lands in Week 3."
-        ),
+        purpose="Reference Pass@k implementation, used to cross-check P5's own scorer.",
         required_from_week=3,
         required_now=False,
         install_hint="pip install human-eval",
@@ -297,7 +294,7 @@ def check_dependencies(
         log("  %-14s %-12s %s", status.spec.package, status.version or "-", status.state)
 
     if result.ok:
-        _LOG.info("Dependency preflight PASSED for Week-1/Week-2 scope")
+        _LOG.info("Dependency preflight PASSED")
     else:
         _LOG.error("Dependency preflight FAILED: %d blocking issue(s)", len(result.blocking))
     return result
@@ -307,13 +304,13 @@ def render_dependency_report(result: DependencyCheckResult) -> MarkdownReport:
     """Render the Week-1 Thursday dependency status as Markdown."""
     report = MarkdownReport(
         title="CLASP-P5 · Evaluation Harness Dependency Report",
-        subtitle="Week 1 · Thursday deliverable — HumanEval/MBPP harness dependencies",
+        subtitle="HumanEval/MBPP harness dependencies",
     )
 
     report.heading("1. Verdict")
     report.status_line(
         result.ok,
-        "environment satisfies every dependency required for Week-1/Week-2 scope"
+        "environment satisfies every currently required dependency"
         if result.ok
         else f"{len(result.blocking)} blocking dependency issue(s)",
     )
@@ -322,7 +319,7 @@ def render_dependency_report(result: DependencyCheckResult) -> MarkdownReport:
             "Python": f"{result.python_version} (minimum {MIN_PYTHON[0]}.{MIN_PYTHON[1]})",
             "Platform": result.platform,
             "Required now": sum(1 for s in result.statuses if s.spec.required_now),
-            "Deferred to later weeks": sum(1 for s in result.statuses if not s.spec.required_now),
+            "Optional (not yet required)": sum(1 for s in result.statuses if not s.spec.required_now),
         }
     )
     command = result.install_command()
@@ -332,11 +329,10 @@ def render_dependency_report(result: DependencyCheckResult) -> MarkdownReport:
 
     report.heading("2. Dependency matrix")
     report.table(
-        ["Package", "Required from", "Needed now", "Installed", "Version", "State", "Purpose"],
+        ["Package", "Needed now", "Installed", "Version", "State", "Purpose"],
         [
             [
                 status.spec.package,
-                f"Week {status.spec.required_from_week}",
                 status.spec.required_now,
                 status.installed,
                 status.version or "—",
@@ -351,7 +347,7 @@ def render_dependency_report(result: DependencyCheckResult) -> MarkdownReport:
         report.heading("3. Deferred dependencies")
         report.paragraph(
             "Absent but not yet needed. These become required when the harness starts calling "
-            "P1's real merged model and scoring Pass@k (Week 3), so they are declared now to "
+            "P1's real merged model and scoring Pass@k, so they are declared now to "
             "avoid a surprise at integration time."
         )
         report.bullets(

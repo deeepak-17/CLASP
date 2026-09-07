@@ -1,6 +1,6 @@
 # CLASP-P5 · Project-Level vs Per-Developer Partition Comparison
 
-_Week 4 · Thursday deliverable — read from the actual generated manifests, metadata and validation runs_  
+_read from the actual generated manifests, metadata and validation runs_  
 **Generated:** 2026-08-10T07:02:51Z
 
 ## 1. Headline numbers

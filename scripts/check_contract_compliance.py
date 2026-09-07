@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 2 · Friday — sanity-check partitions against the interface contracts.
+"""Sanity-check partitions against the interface contracts.
 
 "Sanity-check partitions against Deepak's interface contract."
 
@@ -202,7 +202,7 @@ def check_eval_result_shape(run: ComplianceRun, manifest: PartitionManifest) -> 
         )
     )
     run.note(
-        "EvalResult values are placeholders — Pass@k scoring is a Week-3 deliverable; "
+        "EvalResult values are placeholders; scoring runs against the mock backend; "
         "only the shape is being certified here"
     )
 
@@ -210,7 +210,7 @@ def check_eval_result_shape(run: ComplianceRun, manifest: PartitionManifest) -> 
 def render_report(run: ComplianceRun, manifest: PartitionManifest | None) -> MarkdownReport:
     report = MarkdownReport(
         title="CLASP-P5 · Interface Contract Compliance Report",
-        subtitle="Week 2 · Friday deliverable — partition sign-off against the P1–P4 seam",
+        subtitle="partition sign-off against the P1–P4 seam",
     )
 
     report.heading("1. Verdict")
@@ -285,9 +285,9 @@ def render_report(run: ComplianceRun, manifest: PartitionManifest | None) -> Mar
             "`interfaces/contracts.py` is P5's **mirror** of the contracts package P4 owns. "
             "When P4 freezes `/contracts`, re-point the mirror and re-run this check — a "
             "divergence will surface here rather than at integration time.",
-            "Pass@k values in the certified `EvalResult` are placeholders; scoring is Week 3.",
+            "Pass@k values in the certified `EvalResult` are placeholders (mock backend).",
             "`SnapshotMetadata` is exercised against `MockRegistryClient`, not P4's live "
-            "FastAPI service, which does not exist until Week 3.",
+            "FastAPI service, which is integrated separately.",
         ]
     )
 
@@ -343,7 +343,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 2 Friday — Interface Contract Compliance",
+        "CLASP-P5 · Interface Contract Compliance",
         "=" * 68,
         f"  manifest: {paths.relative(manifest_path)}",
         f"  verdict:  {'PASS' if run.ok else 'FAIL'}",

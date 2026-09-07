@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 3 · Thursday & Friday — baseline Pass@k run, stored to results.json.
+"""Baseline Pass@k run, stored to results.json.
 
 Thu: "Run Pass@k on the Week-1 baseline model; sanity-check the numbers."
 Fri: "Store results in a simple results.json the dashboard can read."
@@ -160,7 +160,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 3 Thu/Fri — Baseline Pass@k Run",
+        "CLASP-P5 · Baseline Pass@k Run",
         "=" * 68,
         f"  run id:    {run.run_id}",
         f"  model:     {_BASELINE_MODEL_ID}  (DEMO/TEST — see notes)",
@@ -202,7 +202,7 @@ def main(args: argparse.Namespace) -> int:
 def _render_report(run, records: list[ResultRecord], sanity_failures: list[str], config) -> MarkdownReport:
     report = MarkdownReport(
         title="CLASP-P5 · Baseline Pass@k Report",
-        subtitle="Week 3 · Thursday/Friday deliverable — baseline run, sanity-checked, stored to results.json",
+        subtitle="baseline run, sanity-checked, stored to results.json",
     )
     report.heading("1. Verdict")
     report.status_line(not sanity_failures, f"{len(sanity_failures)} sanity-check failure(s)")

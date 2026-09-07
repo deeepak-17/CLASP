@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 2 · Wednesday — validate partitions are non-overlapping and balanced.
+"""Validate partitions are non-overlapping and balanced.
 
 Reads the manifest and every shard back from disk, then checks disjointness,
 content disjointness, coverage, project purity, minimum shard size and the
@@ -91,7 +91,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 2 Wednesday — Partition Validation",
+        "CLASP-P5 · Partition Validation",
         "=" * 68,
         f"  manifest: {paths.relative(Path(manifest_path))}",
         f"  verdict:  {'PASS' if result.ok else 'FAIL'}",

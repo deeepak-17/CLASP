@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 1 · Tuesday — collect the D1 corpus.
+"""Collect the D1 corpus.
 
 Acquires each configured source, filters it, and writes
 ``datasets/processed/corpus.jsonl`` plus a provenance manifest.
@@ -53,7 +53,7 @@ def _render_report(result, config) -> MarkdownReport:
     manifest = result.manifest
     report = MarkdownReport(
         title="CLASP-P5 · D1 Corpus Collection Report",
-        subtitle="Week 1 · Tuesday deliverable — dataset sourcing and collection",
+        subtitle="dataset sourcing and collection",
     )
 
     report.heading("1. Run summary")
@@ -143,7 +143,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 1 Tuesday — Corpus Collection",
+        "CLASP-P5 · Corpus Collection",
         "=" * 60,
         f"  mode:      {manifest.acquisition_mode}{'  (SYNTHETIC)' if manifest.synthetic else ''}",
         f"  clusters:  {manifest.num_clusters}",

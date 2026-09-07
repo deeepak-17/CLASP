@@ -345,7 +345,7 @@ def render_dry_run_report(run: HarnessRun, config: EvaluationConfig) -> Markdown
     """Render the Week-1 Friday dry-run outcome as Markdown."""
     report = MarkdownReport(
         title="CLASP-P5 · Evaluation Harness Dry Run",
-        subtitle="Week 1 · Friday deliverable — tiny-sample dry run and path/config verification",
+        subtitle="tiny-sample dry run and path/config verification",
     )
 
     report.heading("1. Verdict")
@@ -399,12 +399,12 @@ def render_dry_run_report(run: HarnessRun, config: EvaluationConfig) -> Markdown
         ]
     )
 
-    report.heading("4. Explicitly out of scope this week")
+    report.heading("4. Explicitly out of scope for this run")
     report.bullets(
         [
-            "**Pass@k scoring** — Week 3 (`Implement Pass@k scoring function`). "
+            "**Pass@k scoring** is not enabled here. "
             "`scored` is false and every `passed` field is null.",
-            "**Real model inference** — Week 3 (`Wire HumanEval runner to call the merged model`). "
+            "**Real model inference** is not wired here. "
             "Completions come from `MockEdgeInferenceClient` and are placeholders.",
             "**Sandboxed execution** — generated code is assembled but never executed; "
             "the isolation policy needs P3 sign-off first.",

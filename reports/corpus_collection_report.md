@@ -1,6 +1,6 @@
 # CLASP-P5 · D1 Corpus Collection Report
 
-_Week 1 · Tuesday deliverable — dataset sourcing and collection_  
+_dataset sourcing and collection_  
 **Generated:** 2026-08-05T19:49:23Z
 
 ## 1. Run summary

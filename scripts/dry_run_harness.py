@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 1 · Friday — dry-run the evaluation harness on a tiny sample.
+"""Dry-run the evaluation harness on a tiny sample.
 
 Exercises the whole harness path end to end against the mock Edge client:
 config resolution, task loading, prompt construction, generation, truncation,
@@ -76,7 +76,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 1 Friday — Harness Dry Run",
+        "CLASP-P5 · Harness Dry Run",
         "=" * 60,
         f"  run id:   {run.run_id}",
         f"  mode:     {run.mode}",
@@ -92,7 +92,7 @@ def main(args: argparse.Namespace) -> int:
             f"{summary.tasks_failed} failed"
         )
     lines.append("")
-    lines.append("  NOTE: Pass@k scoring is a Week-3 deliverable — this run is unscored.")
+    lines.append("  NOTE: Pass@k scoring is not enabled for this run — it is unscored.")
     lines.append("")
 
     if run.artifact_path:

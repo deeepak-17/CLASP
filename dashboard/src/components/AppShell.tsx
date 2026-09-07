@@ -39,7 +39,7 @@ export function AppShell({ children, topbarRight }: AppShellProps) {
         <div className="sidebar-footer">
           Team 102 · CLASP
           <br />
-          Phase II · Week 5
+          Evaluation &amp; Data
         </div>
       </aside>
       <header className="topbar">

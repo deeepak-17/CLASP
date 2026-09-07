@@ -222,7 +222,7 @@ def render_survey_report(outcome: SurveyOutcome) -> MarkdownReport:
     config = outcome.config
     report = MarkdownReport(
         title="CLASP-P5 · Dataset Survey (D1 Corpus Selection)",
-        subtitle=f"Week 1 · Monday deliverable · {config.owner}",
+        subtitle=f"Data & Demo · {config.owner}",
     )
 
     report.heading("1. Decision")

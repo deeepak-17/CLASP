@@ -196,7 +196,7 @@ def render_metadata_report(metadata: PartitionMetadata) -> MarkdownReport:
     """Render partition metadata as a human-readable Markdown summary."""
     report = MarkdownReport(
         title="CLASP-P5 · Partition Metadata",
-        subtitle="Week 2 · Thursday deliverable — sizes, project labels and provenance",
+        subtitle="sizes, project labels and provenance",
     )
 
     report.heading("1. Partition summary")

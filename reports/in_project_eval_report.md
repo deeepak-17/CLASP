@@ -1,7 +1,7 @@
 # CLASP-P5 · In-Project Completion Metric
 
 _in-project eval v1 — D5 primary metric (edit similarity + exact match on held-out client files)_  
-**Generated:** 2026-09-06T17:02:43Z
+**Generated:** 2026-09-07T08:16:48Z
 
 ## 1. Verdict
 

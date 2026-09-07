@@ -1,6 +1,6 @@
 # CLASP-P5 · Partition Validation Report
 
-_Week 2 · Wednesday deliverable — non-overlap and balance_  
+_non-overlap and balance_  
 **Generated:** 2026-08-10T06:56:23Z
 
 ## 1. Verdict

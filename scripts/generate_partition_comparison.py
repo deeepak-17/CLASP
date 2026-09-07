@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 4 · Thursday — project-level vs per-developer partition comparison.
+"""Project-level vs per-developer partition comparison.
 
 "Write a small report comparing project-level vs per-dev splits."
 
@@ -98,7 +98,7 @@ def main(args: argparse.Namespace) -> int:
 
     report = MarkdownReport(
         title="CLASP-P5 · Project-Level vs Per-Developer Partition Comparison",
-        subtitle="Week 4 · Thursday deliverable — read from the actual generated manifests, metadata and validation runs",
+        subtitle="read from the actual generated manifests, metadata and validation runs",
     )
 
     report.heading("1. Headline numbers")
@@ -211,7 +211,7 @@ def main(args: argparse.Namespace) -> int:
         "See `scripts/cross_check_client_counts.py` / `reports/client_count_cross_check.md` for the "
         "full client-count finding. In short: neither partition's client count matches P2's current "
         "simulated width, and per-developer's is the larger mismatch of the two. This is a "
-        "coordination item for integration week, not a defect in either module."
+        "coordination item for integration, not a defect in either module."
     )
 
     report.rule()
@@ -223,7 +223,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 4 Thursday — Project vs Developer Comparison",
+        "CLASP-P5 · Project vs Developer Comparison",
         "=" * 68,
         f"  project_level clients: {data['project_level']['manifest'].num_clients}",
         f"  per_developer clients: {data['per_developer']['manifest'].num_clients}",

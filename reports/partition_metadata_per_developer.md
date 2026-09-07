@@ -1,6 +1,6 @@
 # CLASP-P5 · Partition Metadata
 
-_Week 2 · Thursday deliverable — sizes, project labels and provenance_  
+_sizes, project labels and provenance_  
 **Generated:** 2026-08-10T06:56:23Z
 
 ## 1. Partition summary

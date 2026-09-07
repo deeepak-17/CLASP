@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 3 · Monday/Tuesday — fetch the real HumanEval and MBPP problem sets.
+"""Fetch the real HumanEval and MBPP problem sets.
 
 "The HumanEval/MBPP runner must load the intended HumanEval/MBPP problems."
 
@@ -341,7 +341,7 @@ def main(args: argparse.Namespace) -> int:
     paths = project_paths()
     targets = ["humaneval", "mbpp"] if args.benchmark == "all" else [args.benchmark]
 
-    lines = ["", "CLASP-P5 · Week 3 Mon/Tue — Fetch Real Benchmark Data", "=" * 68, ""]
+    lines = ["", "CLASP-P5 · Fetch Real Benchmark Data", "=" * 68, ""]
     results: list[FetchResult] = []
 
     for name in targets:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Week 1 · Monday — survey candidate datasets and record the selection.
+"""Survey candidate datasets and record the selection.
 
 Scores every candidate in ``configs/dataset_survey.yaml`` against the weighted
 criteria and writes ``reports/dataset_survey.md``.
@@ -55,7 +55,7 @@ def main(args: argparse.Namespace) -> int:
 
     lines = [
         "",
-        "CLASP-P5 · Week 1 Monday — Dataset Survey",
+        "CLASP-P5 · Dataset Survey",
         "=" * 60,
         f"  criteria:  {len(config.criteria)} weighted",
         f"  candidates: {len(config.candidates)} scored",

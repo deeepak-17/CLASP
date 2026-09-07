@@ -1,7 +1,7 @@
 # CLASP-P5 · Interface Contract Compliance Report
 
-_Week 2 · Friday deliverable — partition sign-off against the P1–P4 seam_  
-**Generated:** 2026-08-12T05:34:46Z
+_partition sign-off against the P1–P4 seam_  
+**Generated:** 2026-09-07T08:16:48Z
 
 ## 1. Verdict
 
@@ -33,7 +33,7 @@ _Week 2 · Friday deliverable — partition sign-off against the P1–P4 seam_
 - all 6 shard file(s) present with the declared counts
 - Cluster Layer accepted the plan: 6 client(s), 6 cluster(s), 1 warning(s), 0 error(s)
 - registry read path round-trips (cluster/click@1)
-- EvalResult values are placeholders — Pass@k scoring is a Week-3 deliverable; only the shape is being certified here
+- EvalResult values are placeholders; scoring runs against the mock backend; only the shape is being certified here
 
 ## 4. Seam coverage
 
@@ -48,8 +48,8 @@ _Week 2 · Friday deliverable — partition sign-off against the P1–P4 seam_
 ## 5. Standing caveats
 
 - `interfaces/contracts.py` is P5's **mirror** of the contracts package P4 owns. When P4 freezes `/contracts`, re-point the mirror and re-run this check — a divergence will surface here rather than at integration time.
-- Pass@k values in the certified `EvalResult` are placeholders; scoring is Week 3.
-- `SnapshotMetadata` is exercised against `MockRegistryClient`, not P4's live FastAPI service, which does not exist until Week 3.
+- Pass@k values in the certified `EvalResult` are placeholders (mock backend).
+- `SnapshotMetadata` is exercised against `MockRegistryClient`, not P4's live FastAPI service, which is integrated separately.
 
 ---
 

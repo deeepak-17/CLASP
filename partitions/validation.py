@@ -450,7 +450,7 @@ def render_validation_report(
     """Render the Week-2 Wednesday validation outcome as Markdown."""
     report = MarkdownReport(
         title="CLASP-P5 · Partition Validation Report",
-        subtitle="Week 2 · Wednesday deliverable — non-overlap and balance",
+        subtitle="non-overlap and balance",
     )
 
     report.heading("1. Verdict")
