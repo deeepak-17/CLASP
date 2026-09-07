@@ -49,3 +49,30 @@ jobs:
           pip install pytest httpx
       - name: Run tests
         run: pytest "${{ matrix.package.tests }}" -q
+
+  e2e:
+    name: e2e (cluster -> registry loop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            contracts/pyproject.toml
+            services/cluster/pyproject.toml
+            services/registry/pyproject.toml
+      # Edge itself isn't installed here (it needs transformers/peft on top
+      # of torch, and this test never imports edge), but services/cluster's
+      # own pyproject.toml lists torch as a hard dependency regardless, so
+      # this job pulls the same CPU torch wheel cluster's own test job does —
+      # it is not meaningfully lighter than that job, just edge-free.
+      - name: Install contracts + cluster + registry
+        run: |
+          pip install -e contracts
+          pip install -e services/cluster
+          pip install -e services/registry
+          pip install pytest httpx safetensors
+      - name: Run the cross-service loop test
+        run: pytest tests/e2e -q
