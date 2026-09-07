@@ -179,12 +179,35 @@ async def proxy_registry(path: str, request: Request) -> Response:
 # --------------------------------------------------------------------------- #
 # Demo orchestration — sequences real HTTP calls, computes nothing itself
 # --------------------------------------------------------------------------- #
+def _require_json(path: Path, what: str) -> dict:
+    """`_read_json`, but a missing artifact fails as a clean, specific HTTP
+    error instead of a TypeError 500 three lines later.
+
+    /api/edge/clients already None-checks and reports what's missing; the
+    demo actions need the same treatment, because the failure mode here is
+    a blank 500 in the middle of a live panel demo rather than a message
+    naming the file to go and look at.
+    """
+    data = _read_json(path)
+    if data is None:
+        raise HTTPException(
+            503,
+            f"{what} is missing at {path.relative_to(REPO_ROOT)} — the demo "
+            f"reads real committed artifacts, so this client cannot be sent "
+            f"to the cluster until that file exists",
+        )
+    return data
+
+
 def _synthetic_tensors_for(cid: str) -> dict:
     """Shapes + hyperparams match this client's REAL adapter_config.json
     exactly (rank, target_modules, alpha). Tensor VALUES are synthetic --
     the real trained safetensors are gitignored and not present in this
     checkout. Labeled as such everywhere this appears in the UI."""
-    cfg = _read_json(EDGE_ARTIFACTS / "round1" / cid / "adapter" / "adapter_config.json")
+    cfg = _require_json(
+        EDGE_ARTIFACTS / "round1" / cid / "adapter" / "adapter_config.json",
+        f"{cid}'s adapter_config.json",
+    )
     rank = cfg["r"]
     alpha = float(cfg["lora_alpha"])
     # Canonical order, not each client's own adapter_config.json key order --
@@ -229,7 +252,10 @@ async def demo_send_to_cluster(cluster_id: str) -> dict:
     members = [c for c, cl in CLUSTER_OF.items() if cl == cluster_id]
     if not members:
         raise HTTPException(404, f"no clients mapped to cluster {cluster_id!r}")
-    manifests = {c: _read_json(EDGE_ARTIFACTS / "round1" / c / "manifest.json") for c in members}
+    manifests = {
+        c: _require_json(EDGE_ARTIFACTS / "round1" / c / "manifest.json", f"{c}'s manifest.json")
+        for c in members
+    }
 
     uploads = []
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -352,10 +378,24 @@ async def demo_demonstrate_rollback(adapter_name: str) -> dict:
     real version (same real aggregated bytes) and evaluates it against an
     intentionally regressed candidate. Labeled as such everywhere it appears."""
     async with httpx.AsyncClient(timeout=30.0) as client:
-        file_resp = await client.get(f"{REGISTRY_BASE}/adapters/{adapter_name}/versions/1/file")
+        # Duplicate whatever is CURRENTLY active, not a hardcoded v1 — after a
+        # second publish the active version is v2, and duplicating v1's bytes
+        # there would quietly stage a rollback demo on top of stale content
+        # that no longer matches the metadata copied from `active` below.
+        active_resp = await client.get(f"{REGISTRY_BASE}/adapters/{adapter_name}/active")
+        if active_resp.status_code != 200:
+            raise HTTPException(
+                404, f"no active version for {adapter_name!r} to duplicate — publish it first"
+            )
+        active = active_resp.json()
+        active_version = active["ref"]["version"]
+        file_resp = await client.get(
+            f"{REGISTRY_BASE}/adapters/{adapter_name}/versions/{active_version}/file"
+        )
         if file_resp.status_code != 200:
-            raise HTTPException(404, f"no v1 for {adapter_name!r} to duplicate — publish it first")
-        active = (await client.get(f"{REGISTRY_BASE}/adapters/{adapter_name}/active")).json()
+            raise HTTPException(
+                404, f"active version v{active_version} of {adapter_name!r} has no stored payload"
+            )
         meta = {
             "kind": "cluster",
             "hparams": active["hparams"],
