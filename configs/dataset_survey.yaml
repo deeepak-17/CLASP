@@ -1,0 +1,190 @@
+# =============================================================================
+# CLASP-P5 · Week 1 · Monday
+# "Survey candidate datasets (multi-project code corpora)"
+#
+# This file IS the survey. corpus/survey.py scores every candidate against the
+# weighted criteria below and emits reports/dataset_survey.md, so the written
+# deliverable and the decision the code acts on can never drift apart.
+#
+# Scores are 1-5 (5 = best) and are editorial judgements recorded here with
+# their justification, not measurements.
+# =============================================================================
+survey:
+  name: "CLASP D1 corpus selection"
+  owner: "Aditya S (P5 - Eval & Data / Data & Demo Lead)"
+
+  # Requirement CLASP places on its training corpus, in priority order.
+  # Weights must sum to 1.0 (validated at load time).
+  criteria:
+    - key: multi_project_structure
+      label: "Multi-project structure"
+      weight: 0.25
+      description: >
+        CLASP trains one cluster-LoRA per project. The corpus must carry a
+        clean, unambiguous project boundary; a flat bag of functions cannot be
+        partitioned non-IID by project at all.
+
+    - key: non_iid_suitability
+      label: "Non-IID suitability"
+      weight: 0.20
+      description: >
+        Projects must differ in idiom, API surface and style. If every shard
+        looks alike, FedProx's proximal term has nothing to correct for and
+        the central hypothesis is untestable.
+
+    - key: license_clarity
+      label: "License clarity"
+      weight: 0.20
+      description: >
+        CLASP's premise is on-premise enterprise use. Every file must carry a
+        permissive, individually verifiable licence; aggregate corpora with
+        mixed or unstated licensing are disqualifying.
+
+    - key: offline_reproducibility
+      label: "Offline reproducibility"
+      weight: 0.15
+      description: >
+        The corpus must pin to an exact commit, fit on a workstation, and
+        rebuild identically without a data-platform account.
+
+    - key: size_manageability
+      label: "Size manageability"
+      weight: 0.10
+      description: >
+        Must train a 6.7B model with LoRA on available GPUs within a weekly
+        iteration cycle.
+
+    - key: code_quality
+      label: "Code quality"
+      weight: 0.10
+      description: >
+        Maintained, tested, idiomatic Python. Low-quality code produces a
+        weak personalisation signal and noisy Pass@k deltas.
+
+  candidates:
+    - key: curated_oss_python
+      name: "Curated multi-repo OSS Python (D1)"
+      url: "https://github.com/pallets, https://github.com/psf"
+      kind: "self-assembled"
+      approx_size: "~6 repositories, ~2-5k Python files"
+      licensing: "BSD-3-Clause / Apache-2.0, verified per repository"
+      scores:
+        multi_project_structure: 5
+        non_iid_suitability: 5
+        license_clarity: 5
+        offline_reproducibility: 5
+        size_manageability: 5
+        code_quality: 5
+      notes: >
+        Repository boundaries are exactly the cluster boundaries CLASP needs,
+        with no heuristic inference required. Each repo pins to a commit SHA,
+        licences are per-repo and permissive, and total size fits a laptop.
+
+    - key: codesearchnet
+      name: "CodeSearchNet"
+      url: "https://github.com/github/CodeSearchNet"
+      kind: "public benchmark corpus"
+      approx_size: "~2M functions, ~500k documented (6 languages)"
+      licensing: "Mixed OSS licences; per-function provenance retained"
+      scores:
+        multi_project_structure: 2
+        non_iid_suitability: 3
+        license_clarity: 3
+        offline_reproducibility: 4
+        size_manageability: 3
+        code_quality: 3
+      notes: >
+        Function-level granularity destroys the intra-project context CLASP is
+        built to exploit; reconstructing project boundaries from provenance
+        metadata is possible but lossy and unverifiable.
+
+    - key: the_stack_v2
+      name: "The Stack v2 (BigCode)"
+      url: "https://huggingface.co/datasets/bigcode/the-stack-v2"
+      kind: "large-scale pretraining corpus"
+      approx_size: ">3B files, ~900B tokens"
+      licensing: "Permissive-filtered, but heterogeneous at scale"
+      scores:
+        multi_project_structure: 3
+        non_iid_suitability: 4
+        license_clarity: 3
+        offline_reproducibility: 2
+        size_manageability: 1
+        code_quality: 3
+      notes: >
+        Overwhelming for a 16-week project on workstation GPUs. Gated access
+        and opt-out churn mean a rebuild months later is not guaranteed to
+        reproduce, which breaks the Phase-III ablation requirement.
+
+    - key: codeparrot_github_code
+      name: "CodeParrot github-code"
+      url: "https://huggingface.co/datasets/codeparrot/github-code"
+      kind: "large-scale pretraining corpus"
+      approx_size: "~115M files, ~1TB"
+      licensing: "Filtered to permissive, but not individually verified"
+      scores:
+        multi_project_structure: 2
+        non_iid_suitability: 3
+        license_clarity: 2
+        offline_reproducibility: 2
+        size_manageability: 1
+        code_quality: 2
+      notes: >
+        Same scale objection as The Stack, with weaker deduplication and no
+        stable per-project grouping key.
+
+    - key: py150
+      name: "py150 (ETH SRI)"
+      url: "https://www.sri.inf.ethz.ch/py150"
+      kind: "static-analysis dataset"
+      approx_size: "150k Python files"
+      licensing: "Research use; redistribution terms restrictive"
+      scores:
+        multi_project_structure: 3
+        non_iid_suitability: 3
+        license_clarity: 2
+        offline_reproducibility: 3
+        size_manageability: 4
+        code_quality: 2
+      notes: >
+        Python 2 era code, ASTs rather than raw source in the canonical
+        release, and research-only terms that conflict with CLASP's
+        enterprise-deployment framing.
+
+    - key: proprietary_enterprise
+      name: "Real proprietary enterprise codebase"
+      url: "n/a"
+      kind: "ideal but unavailable"
+      approx_size: "unknown"
+      licensing: "Not obtainable for an academic project"
+      scores:
+        multi_project_structure: 5
+        non_iid_suitability: 5
+        license_clarity: 1
+        offline_reproducibility: 1
+        size_manageability: 3
+        code_quality: 4
+      notes: >
+        The deployment target CLASP is designed for, and therefore the ideal
+        evaluation substrate. Recorded here to make explicit that D1 is a
+        deliberate proxy for it, not a first choice. No industry partner and
+        no lawful access within Phase II.
+
+  # The candidate the pipeline proceeds with. corpus/survey.py fails loudly if
+  # this key is absent from `candidates`, and warns if it is not the
+  # top-scoring option -- a documented override, never a silent one.
+  selected: curated_oss_python
+
+  selection_rationale: >
+    D1 is the only candidate that scores maximally on the two criteria CLASP
+    cannot compromise on: an unambiguous project boundary to define clusters,
+    and per-file licence certainty consistent with the on-premise premise.
+    The large pretraining corpora are rejected on reproducibility and scale
+    rather than quality; a real proprietary codebase is rejected only on
+    availability, and D1 is explicitly a proxy for it.
+
+  known_limitations:
+    - "Six OSS libraries are a proxy for an enterprise monorepo estate; generalisation to closed-source style is an assumption, not a result."
+    - "Four of six repositories are Pallets projects, so inter-project distance is smaller than a true multi-vendor estate would exhibit."
+    - "Per-developer partitioning (Week 4) is simulated from directory structure, not from real git authorship."
+    - "The corpus is Python-only; multi-language federation is out of Phase-II scope."

@@ -1,0 +1,98 @@
+{
+  "metadata_version": "1.0.0",
+  "created_at": "2026-08-13T17:30:56Z",
+  "strategy": "project_level",
+  "seed": 20260616,
+  "manifest_path": "datasets/partitions/scientific/manifest.json",
+  "corpus_path": "datasets/processed/corpus_scientific.jsonl",
+  "corpus_sha256": "5901ae1ae5c8327f853f707bcd002411bf8b0b5811565cf61b540a0b472333ed",
+  "num_clients": 3,
+  "num_clusters": 3,
+  "total_files": 733,
+  "total_lines": 510799,
+  "total_code_lines": 403675,
+  "total_bytes": 17239317,
+  "balance": {
+    "num_shards": 3,
+    "min_files": 221,
+    "max_files": 265,
+    "mean_files": 244.3333,
+    "median_files": 247.0,
+    "imbalance_ratio": 1.199095,
+    "gini": 0.040018,
+    "coefficient_of_variation": 0.073922,
+    "min_client": "client-numpy",
+    "max_client": "client-pandas"
+  },
+  "clusters": [
+    {
+      "cluster_id": "numpy",
+      "project_label": "NumPy",
+      "client_ids": [
+        "client-numpy"
+      ],
+      "num_files": 221,
+      "num_lines": 133941,
+      "num_code_lines": 106425,
+      "total_bytes": 4400666,
+      "mean_code_lines_per_file": 481.561,
+      "median_code_lines_per_file": 151.0,
+      "max_code_lines_in_file": 5361,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "98464cc0cbc1f211482a0756ded305bed1599f18"
+      ],
+      "share_of_corpus_files": 0.301501,
+      "share_of_corpus_code_lines": 0.26364
+    },
+    {
+      "cluster_id": "pandas",
+      "project_label": "pandas",
+      "client_ids": [
+        "client-pandas"
+      ],
+      "num_files": 265,
+      "num_lines": 191273,
+      "num_code_lines": 151447,
+      "total_bytes": 6187594,
+      "mean_code_lines_per_file": 571.498,
+      "median_code_lines_per_file": 284.0,
+      "max_code_lines_in_file": 5468,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "0691c5cf90477d3503834d983f69350f250a6ff7"
+      ],
+      "share_of_corpus_files": 0.361528,
+      "share_of_corpus_code_lines": 0.375171
+    },
+    {
+      "cluster_id": "scikit-learn",
+      "project_label": "scikit-learn",
+      "client_ids": [
+        "client-scikit-learn"
+      ],
+      "num_files": 247,
+      "num_lines": 185585,
+      "num_code_lines": 145803,
+      "total_bytes": 6651057,
+      "mean_code_lines_per_file": 590.296,
+      "median_code_lines_per_file": 403.0,
+      "max_code_lines_in_file": 3586,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "156ef141f3b270edb06c8ae9af37c55253c0aabe"
+      ],
+      "share_of_corpus_files": 0.336971,
+      "share_of_corpus_code_lines": 0.361189
+    }
+  ],
+  "license_summary": {
+    "BSD-3-Clause": 733
+  }
+}

@@ -1,0 +1,111 @@
+# =============================================================================
+# CLASP-P5 · D1 scientific-domain sibling corpus
+#
+# Additive to configs/dataset.yaml, not a replacement. The original six
+# projects (flask/requests/click/colorama/werkzeug/jinja) and every artefact
+# derived from them (datasets/processed/corpus.jsonl,
+# datasets/partitions/manifest.json, datasets/materialized/client-*/) are
+# untouched by this file — it reads none of them and writes to none of them.
+#
+# Requested by the project guide: D1 is meant to carry two semantically
+# distinct domains (web/tooling — the original six — and scientific). This
+# file defines the scientific side: numpy, pandas, scikit-learn.
+#
+# Reuses the identical acquisition/filter mechanism as configs/dataset.yaml
+# (GitAcquirer, same include/exclude globs, same min_code_lines/max_file_bytes/
+# dedup rule) — no parallel/incompatible selection logic.
+#
+# Run:  python scripts/collect_dataset.py --config configs/dataset_scientific.yaml
+# =============================================================================
+corpus:
+  name: "D1-scientific"
+  version: "1.0.0"
+  description: "Three permissively licensed OSS scientific-Python libraries — the scientific domain of D1's two-domain design."
+
+  output:
+    # Same raw_dir as the six-project corpus: git clones land in sibling
+    # subfolders (datasets/raw/numpy, .../pandas, .../scikit-learn) keyed by
+    # cluster_id, so nothing here collides with datasets/raw/flask etc.
+    raw_dir: "datasets/raw"
+    # Separate corpus + manifest paths — never overwrites the six-project
+    # datasets/processed/corpus.jsonl or datasets/metadata/corpus_manifest.json.
+    corpus_path: "datasets/processed/corpus_scientific.jsonl"
+    manifest_path: "datasets/metadata/corpus_manifest_scientific.json"
+    include_content: true
+
+  acquisition:
+    mode: "${CLASP_P5_ACQUISITION_MODE:git}"
+    git_depth: 1
+    # Higher than the six-project corpus's 600s: numpy/pandas/scikit-learn
+    # are substantially larger shallow clones even at depth 1.
+    timeout_seconds: 1800
+    fail_fast: true
+
+  # Identical selection rule to configs/dataset.yaml — the project's one
+  # documented eligible-file strategy, reused verbatim, not reinvented.
+  filters:
+    include_globs:
+      - "**/*.py"
+    exclude_globs:
+      - "**/tests/**"
+      - "**/test/**"
+      - "**/test_*.py"
+      - "**/*_test.py"
+      - "**/conftest.py"
+      - "**/setup.py"
+      - "**/docs/**"
+      - "**/doc/**"
+      - "**/examples/**"
+      - "**/benchmarks/**"
+      - "**/asv_benchmarks/**"
+      - "**/scripts/**"
+      - "**/tools/**"
+      - "**/.tox/**"
+      - "**/.venv/**"
+      - "**/venv/**"
+      - "**/build/**"
+      - "**/dist/**"
+      - "**/__pycache__/**"
+      - "**/migrations/**"
+      - "**/_version.py"
+      - "**/versioneer.py"
+    min_code_lines: 10
+    max_file_bytes: 262144
+    drop_duplicate_content: true
+
+  # ---------------------------------------------------------------------
+  # The scientific domain. `subpaths` restricts each source to its core
+  # library package (mirrors how configs/dataset.yaml scopes flask to
+  # src/flask, requests to src/requests, etc.) — excludes each repo's
+  # top-level tooling, docs, and benchmark scaffolding, which the exclude
+  # globs above would mostly catch anyway but subpaths makes the scoping
+  # explicit and auditable per source, matching D1's existing convention.
+  # ---------------------------------------------------------------------
+  sources:
+    - cluster_id: "numpy"
+      project_label: "NumPy"
+      repo_url: "https://github.com/numpy/numpy.git"
+      ref: "v2.1.3"
+      license: "BSD-3-Clause"
+      subpaths: ["numpy"]
+      rationale: "Array computing core. Dense C-interop shims and broadcasting-heavy pure-Python surface; the scientific domain's numerical foundation."
+
+    - cluster_id: "pandas"
+      project_label: "pandas"
+      repo_url: "https://github.com/pandas-dev/pandas.git"
+      ref: "v2.2.3"
+      license: "BSD-3-Clause"
+      subpaths: ["pandas"]
+      rationale: "Tabular data analysis. Heavy use of Cython-backed accessors from the Python layer, method-chaining idiom distinct from D1's web-tooling projects."
+
+    - cluster_id: "scikit-learn"
+      project_label: "scikit-learn"
+      repo_url: "https://github.com/scikit-learn/scikit-learn.git"
+      ref: "1.5.2"
+      license: "BSD-3-Clause"
+      subpaths: ["sklearn"]
+      rationale: "Machine learning library. Estimator/fit-predict class-hierarchy idiom; the domain's most distinctive pattern relative to web/CLI tooling."
+
+  synthetic:
+    files_per_source: 12
+    seed: 20260616

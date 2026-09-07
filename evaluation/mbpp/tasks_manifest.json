@@ -1,0 +1,15 @@
+{
+  "benchmark": "MBPP",
+  "source_url": "https://raw.githubusercontent.com/google-research/google-research/master/mbpp/mbpp.jsonl",
+  "license": "CC-BY-4.0 (google-research/google-research, mbpp)",
+  "split": "test split, task_id 11-510 (Austin et al. 2021 few-shot/eval convention)",
+  "raw_download_sha256": "ccf64ceae9c5403bf50a044cb6d505bfd2a2963ee58338ba268fd65beab92a9f",
+  "fetched_at": "2026-08-10T06:19:19Z",
+  "tasks_written": 392,
+  "tasks_skipped": 582,
+  "skip_reasons": {
+    "out_of_split": 474,
+    "unparseable_solution": 108
+  },
+  "provenance": "REAL — fetched from the published benchmark's canonical source."
+}

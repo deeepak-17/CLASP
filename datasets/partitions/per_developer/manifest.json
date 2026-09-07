@@ -1,0 +1,242 @@
+{
+  "manifest_version": "1.0.0",
+  "strategy": "per_developer",
+  "seed": 20260616,
+  "created_at": "2026-08-10T06:56:23Z",
+  "corpus_path": "datasets/processed/corpus.jsonl",
+  "corpus_sha256": "1d2d6f6eae8eb65bb1b4ce0c22cc6f4fa7f86b2782b259025f03e77e3e2f3dac",
+  "num_clients": 20,
+  "num_clusters": 6,
+  "total_files": 135,
+  "cluster_ids": [
+    "click",
+    "colorama",
+    "flask",
+    "jinja",
+    "requests",
+    "werkzeug"
+  ],
+  "shards": [
+    {
+      "client_id": "client-click-dev0",
+      "cluster_id": "click",
+      "project_label": "Click",
+      "num_files": 8,
+      "num_lines": 5347,
+      "num_code_lines": 4093,
+      "total_bytes": 188857,
+      "files_path": "datasets/partitions/per_developer/client-click-dev0.jsonl",
+      "content_sha256": "3555a77b6d5eb792ebaaa5867e2bf4ea781ae5dc316feaf61e6ab0bbba1d6fb6"
+    },
+    {
+      "client_id": "client-click-dev1",
+      "cluster_id": "click",
+      "project_label": "Click",
+      "num_files": 8,
+      "num_lines": 4777,
+      "num_code_lines": 3590,
+      "total_bytes": 158676,
+      "files_path": "datasets/partitions/per_developer/client-click-dev1.jsonl",
+      "content_sha256": "d72dd20cb9b72b0e369c296308a088487117e79e23820e2ab301ecb04873163e"
+    },
+    {
+      "client_id": "client-colorama-dev0",
+      "cluster_id": "colorama",
+      "project_label": "Colorama",
+      "num_files": 5,
+      "num_lines": 875,
+      "num_code_lines": 658,
+      "total_bytes": 30290,
+      "files_path": "datasets/partitions/per_developer/client-colorama-dev0.jsonl",
+      "content_sha256": "f6e33335f5c44d4fc78523676336d4b9e749740150c77c2cb80c9578775cd689"
+    },
+    {
+      "client_id": "client-flask-dev0",
+      "cluster_id": "flask",
+      "project_label": "Flask",
+      "num_files": 17,
+      "num_lines": 5912,
+      "num_code_lines": 4396,
+      "total_bytes": 213926,
+      "files_path": "datasets/partitions/per_developer/client-flask-dev0.jsonl",
+      "content_sha256": "ea44208c130b59286a23711d50059edb2945bf54f4ffeb46ba1baabf330e5f6b"
+    },
+    {
+      "client_id": "client-flask-dev1",
+      "cluster_id": "flask",
+      "project_label": "Flask",
+      "num_files": 3,
+      "num_lines": 712,
+      "num_code_lines": 512,
+      "total_bytes": 22529,
+      "files_path": "datasets/partitions/per_developer/client-flask-dev1.jsonl",
+      "content_sha256": "c8b48ebf0bab2dd7d2917a4fe003d3b13791ae692753f6542d1c7c3244200e38"
+    },
+    {
+      "client_id": "client-flask-dev2",
+      "cluster_id": "flask",
+      "project_label": "Flask",
+      "num_files": 3,
+      "num_lines": 2397,
+      "num_code_lines": 1686,
+      "total_bytes": 93323,
+      "files_path": "datasets/partitions/per_developer/client-flask-dev2.jsonl",
+      "content_sha256": "b3c16c509afb57e1505dded1cac3a11a9ec40b13f8740b8704dd1a049cbb57ab"
+    },
+    {
+      "client_id": "client-jinja-dev0",
+      "cluster_id": "jinja",
+      "project_label": "Jinja2",
+      "num_files": 6,
+      "num_lines": 2011,
+      "num_code_lines": 1625,
+      "total_bytes": 73180,
+      "files_path": "datasets/partitions/per_developer/client-jinja-dev0.jsonl",
+      "content_sha256": "41ce9fea91106cf11a861019433afed163f1951322654d1c89f875606c047e2e"
+    },
+    {
+      "client_id": "client-jinja-dev1",
+      "cluster_id": "jinja",
+      "project_label": "Jinja2",
+      "num_files": 6,
+      "num_lines": 4845,
+      "num_code_lines": 3730,
+      "total_bytes": 166481,
+      "files_path": "datasets/partitions/per_developer/client-jinja-dev1.jsonl",
+      "content_sha256": "7ddf50218b613ca190e47ba2ecc0823e0c2439d919bfe18622d1d38b458df60f"
+    },
+    {
+      "client_id": "client-jinja-dev2",
+      "cluster_id": "jinja",
+      "project_label": "Jinja2",
+      "num_files": 6,
+      "num_lines": 4701,
+      "num_code_lines": 3609,
+      "total_bytes": 152738,
+      "files_path": "datasets/partitions/per_developer/client-jinja-dev2.jsonl",
+      "content_sha256": "409a7e2c82fe7a4a3e21bbd310a06e75182f329d736d411b660fee63d9a61675"
+    },
+    {
+      "client_id": "client-jinja-dev3",
+      "cluster_id": "jinja",
+      "project_label": "Jinja2",
+      "num_files": 6,
+      "num_lines": 2747,
+      "num_code_lines": 2061,
+      "total_bytes": 90272,
+      "files_path": "datasets/partitions/per_developer/client-jinja-dev3.jsonl",
+      "content_sha256": "9b63dbbf1aef67fc02507334aa7f72aee5f4405cae623ba0c7548182e04ea394"
+    },
+    {
+      "client_id": "client-requests-dev0",
+      "cluster_id": "requests",
+      "project_label": "Requests",
+      "num_files": 6,
+      "num_lines": 2747,
+      "num_code_lines": 2066,
+      "total_bytes": 94986,
+      "files_path": "datasets/partitions/per_developer/client-requests-dev0.jsonl",
+      "content_sha256": "18243508293217bbc4e8c71e0a129388e6833bfcd6db42796b178351c0a3d05f"
+    },
+    {
+      "client_id": "client-requests-dev1",
+      "cluster_id": "requests",
+      "project_label": "Requests",
+      "num_files": 6,
+      "num_lines": 1301,
+      "num_code_lines": 923,
+      "total_bytes": 43636,
+      "files_path": "datasets/partitions/per_developer/client-requests-dev1.jsonl",
+      "content_sha256": "0c06511b611f765518fe6f8474f3bfdc7133767b0cde11b236c24622398d3b97"
+    },
+    {
+      "client_id": "client-requests-dev2",
+      "cluster_id": "requests",
+      "project_label": "Requests",
+      "num_files": 6,
+      "num_lines": 1594,
+      "num_code_lines": 1134,
+      "total_bytes": 49840,
+      "files_path": "datasets/partitions/per_developer/client-requests-dev2.jsonl",
+      "content_sha256": "c230e52889ad5c5b52117cd7c880f61128e795a760c2927094079ed6f2b237f1"
+    },
+    {
+      "client_id": "client-werkzeug-dev0",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 15,
+      "num_lines": 8494,
+      "num_code_lines": 6424,
+      "total_bytes": 286432,
+      "files_path": "datasets/partitions/per_developer/client-werkzeug-dev0.jsonl",
+      "content_sha256": "ac00fce24f416125283bef27aa268a19868d6788d14e5bdd4a79c6573d885e2a"
+    },
+    {
+      "client_id": "client-werkzeug-dev1",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 11,
+      "num_lines": 3183,
+      "num_code_lines": 2438,
+      "total_bytes": 101184,
+      "files_path": "datasets/partitions/per_developer/client-werkzeug-dev1.jsonl",
+      "content_sha256": "a94365a559de3b3c06646237b8a4eaa693c7db9b10574daa5c4e0c69846c557b"
+    },
+    {
+      "client_id": "client-werkzeug-dev2",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 4,
+      "num_lines": 1500,
+      "num_code_lines": 1188,
+      "total_bytes": 48495,
+      "files_path": "datasets/partitions/per_developer/client-werkzeug-dev2.jsonl",
+      "content_sha256": "851af73a7cb4208c1ba9dbae902e7445ef895826a0f14fac1ee791ed2bb4b691"
+    },
+    {
+      "client_id": "client-werkzeug-dev3",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 6,
+      "num_lines": 1376,
+      "num_code_lines": 1101,
+      "total_bytes": 46730,
+      "files_path": "datasets/partitions/per_developer/client-werkzeug-dev3.jsonl",
+      "content_sha256": "2337fb655847d625c111f45dd764a9d974bf4071afe65795028396afc324426e"
+    },
+    {
+      "client_id": "client-werkzeug-dev4",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 6,
+      "num_lines": 2617,
+      "num_code_lines": 2075,
+      "total_bytes": 93460,
+      "files_path": "datasets/partitions/per_developer/client-werkzeug-dev4.jsonl",
+      "content_sha256": "2f36183220d689a406b89e35137c7f7218df16dbe2ea755407a13cc79a0b72ea"
+    },
+    {
+      "client_id": "client-werkzeug-dev5",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 5,
+      "num_lines": 1941,
+      "num_code_lines": 1503,
+      "total_bytes": 69385,
+      "files_path": "datasets/partitions/per_developer/client-werkzeug-dev5.jsonl",
+      "content_sha256": "5ff70c7165d038661bee137963002b52d346f6db371f3f9481b0d7da91409ecd"
+    },
+    {
+      "client_id": "client-werkzeug-dev6",
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "num_files": 2,
+      "num_lines": 1478,
+      "num_code_lines": 1110,
+      "total_bytes": 57120,
+      "files_path": "datasets/partitions/per_developer/client-werkzeug-dev6.jsonl",
+      "content_sha256": "1b5e7a2ccaab70348b1712c944c017d4edec3fd7b9c564422c1262a1aef14ddc"
+    }
+  ],
+  "contract_version": "0.2.0"
+}

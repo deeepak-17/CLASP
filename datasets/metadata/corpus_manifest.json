@@ -1,0 +1,120 @@
+{
+  "corpus_name": "D1",
+  "corpus_version": "1.0.0",
+  "created_at": "2026-08-05T19:49:23Z",
+  "acquisition_mode": "git",
+  "synthetic": false,
+  "corpus_path": "datasets/processed/corpus.jsonl",
+  "corpus_sha256": "1d2d6f6eae8eb65bb1b4ce0c22cc6f4fa7f86b2782b259025f03e77e3e2f3dac",
+  "total_files": 135,
+  "total_lines": 60555,
+  "total_code_lines": 45922,
+  "total_bytes": 2081540,
+  "num_clusters": 6,
+  "include_content": true,
+  "sources": [
+    {
+      "cluster_id": "flask",
+      "project_label": "Flask",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/pallets/flask.git",
+      "resolved_ref": "c12a5d874c5a014495eb2db8a73f40037bc813ac",
+      "files_discovered": 24,
+      "files_kept": 23,
+      "files_skipped": {
+        "too_few_code_lines": 1
+      },
+      "num_lines": 9021,
+      "num_code_lines": 6594,
+      "num_bytes": 329778
+    },
+    {
+      "cluster_id": "requests",
+      "project_label": "Requests",
+      "license": "Apache-2.0",
+      "source_url": "https://github.com/psf/requests.git",
+      "resolved_ref": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "files_discovered": 18,
+      "files_kept": 18,
+      "files_skipped": {},
+      "num_lines": 5642,
+      "num_code_lines": 4123,
+      "num_bytes": 188462
+    },
+    {
+      "cluster_id": "click",
+      "project_label": "Click",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/pallets/click.git",
+      "resolved_ref": "874ca2bc1c30d93a4ac6e36a15ed685eafe89097",
+      "files_discovered": 16,
+      "files_kept": 16,
+      "files_skipped": {},
+      "num_lines": 10124,
+      "num_code_lines": 7683,
+      "num_bytes": 347533
+    },
+    {
+      "cluster_id": "colorama",
+      "project_label": "Colorama",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/tartley/colorama.git",
+      "resolved_ref": "3de9f013df4b470069d03d250224062e8cf15c49",
+      "files_discovered": 13,
+      "files_kept": 5,
+      "files_skipped": {
+        "too_few_code_lines": 1,
+        "excluded_glob": 7
+      },
+      "num_lines": 875,
+      "num_code_lines": 658,
+      "num_bytes": 30290
+    },
+    {
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/pallets/werkzeug.git",
+      "resolved_ref": "f9995e967979eb694d6b31536cc65314fd7e9c8c",
+      "files_discovered": 52,
+      "files_kept": 49,
+      "files_skipped": {
+        "empty": 2,
+        "too_few_code_lines": 1
+      },
+      "num_lines": 20589,
+      "num_code_lines": 15839,
+      "num_bytes": 702806
+    },
+    {
+      "cluster_id": "jinja",
+      "project_label": "Jinja2",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/pallets/jinja.git",
+      "resolved_ref": "dd4a8b5466d8790540c181590b14db4d4d889d57",
+      "files_discovered": 25,
+      "files_kept": 24,
+      "files_skipped": {
+        "too_few_code_lines": 1
+      },
+      "num_lines": 14304,
+      "num_code_lines": 11025,
+      "num_bytes": 482671
+    }
+  ],
+  "duplicates_dropped": 0,
+  "filter_summary": {
+    "include_globs": [
+      "**/*.py"
+    ],
+    "exclude_glob_count": 18,
+    "min_code_lines": 10,
+    "max_file_bytes": 262144,
+    "drop_duplicate_content": true,
+    "skipped_by_reason": {
+      "too_few_code_lines": 4,
+      "excluded_glob": 7,
+      "empty": 2
+    }
+  }
+}
