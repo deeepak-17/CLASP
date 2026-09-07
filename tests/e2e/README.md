@@ -16,11 +16,17 @@ Edge (synthetic)  --A--> Cluster  --B--> Registry  --C1--> (pulled back)
 - **B** `POST /adapters/{name}/versions` — Cluster's real `aggregate_svd`
   output, serialized to a real safetensors blob, saved to the Registry.
 - **C1** `GET .../active` + `.../file` — pulled back out and round-tripped;
-  also reassembles a loadable PEFT `adapter_config.json` from just the two
-  responses (Integration Sprint Defect 4).
+  also checks how much of a loadable PEFT `adapter_config.json` the
+  registry's stored metadata can reassemble, against cluster's own real
+  `peft_config` (Integration Sprint Defect 4). **Partially open, not
+  closed**: `contracts.LoRAHyperParams` has no field for PEFT's structural
+  config (`peft_type`, `use_rslora`, `use_dora`, `fan_in_fan_out`,
+  `lora_bias`) or `base_model_name_or_path`, and `lora_dropout` doesn't
+  round-trip either — the test asserts these gaps explicitly rather than
+  hiding them behind a hand-rolled config that happens to look complete.
 - **C2** `POST .../promote` — both PROMOTE and ROLLBACK exercised over the
-  real seam, not just asserted against `registry.promotion.decide` in
-  isolation.
+  real seam, and ROLLBACK is checked against the actual restored bytes (a
+  distinguishable v2), not only the reported active version number.
 
 Edge itself isn't imported (it needs torch/transformers/peft); a synthetic
 adapter stands in, the same way Cluster's own HTTP tests already do. Real

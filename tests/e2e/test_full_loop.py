@@ -16,15 +16,17 @@ Seams exercised (naming per Phase-2-Panel-1/CLASP_Integration_Sprint.md figure 2
                            (a real ClusterAdapterBroadcast, serialized to a
                            real safetensors blob)
     C1 Registry -> Edge    GET /adapters/{name}/active + .../versions/{v}/file
-                           — pull the cluster delta back out and reassemble a
-                           loadable PEFT config from JUST the two responses
-                           (Defect 4: "the registry returns tensors without
-                           their config")
+                           — pull the cluster delta back out and check how
+                           much of a loadable PEFT config the registry's
+                           stored metadata can actually reassemble (Defect 4:
+                           "the registry returns tensors without their
+                           config") — see the note at that assertion block for
+                           what this does and does NOT prove.
     C2 Edge -> Registry    POST /adapters/{name}/promote — an EvalResult in, a
                            PROMOTE or ROLLBACK decision out. Both outcomes are
-                           exercised over this real HTTP seam, not only
-                           asserted against `registry.promotion.decide`
-                           in isolation.
+                           exercised over this real HTTP seam, and ROLLBACK is
+                           checked against the actual restored bytes, not
+                           only the reported active version.
 
 No aggregation or promotion math is reimplemented here: every step calls
 straight into `cluster.server` / `cluster.aggregation` and `registry.app` /
@@ -40,38 +42,57 @@ import json
 
 import numpy as np
 import pytest
-from cluster.adapter_format import TARGET_MODULES, random_adapter
+import safetensors.numpy as safetensors_numpy  # hard dependency of this test, not optional:
+# the e2e CI job installs it explicitly (see .github/workflows/ci.yml) and
+# `pytest -q` exits 0 when every test in a run is skipped, so an
+# `importorskip` here would let the one job whose entire purpose is proving
+# the closed loop pass green on zero tests the moment this import ever
+# silently fails to resolve. A missing dependency should be a hard error.
+from cluster.adapter_format import random_adapter
 from cluster.schemas.messages import TensorPayload
 from fastapi.testclient import TestClient
 
 import cluster.server as cluster_server
 import registry.app as registry_appmod
-
-safetensors_numpy = pytest.importorskip("safetensors.numpy")
+from registry.storage import _NAME_RE
 
 RANK = 4
 IN_FEATURES = OUT_FEATURES = 8
 NUM_LAYERS = 2
-BASE_MODEL = "deepseek-ai/deepseek-coder-1.3b-base"  # project-wide constant, not per-adapter
+# Base-model identity is genuinely NOT carried by the registry today —
+# `contracts.LoRAHyperParams` has no field for it (see the Defect 4 assertion
+# block below), so this is a third hardcoded copy of the string alongside
+# `cluster.adapter_format.to_peft_config`'s default and edge's own config.
+# Out-of-band by necessity, not reconstructed from registry data; stated
+# plainly rather than folded into the "reassembled from just the two
+# responses" claim, which does NOT cover this field.
+BASE_MODEL = "deepseek-ai/deepseek-coder-1.3b-base"
 
 
 @pytest.fixture
-def cluster_client() -> TestClient:
-    cluster_server._state.uploads.clear()
-    cluster_server._state.round_id = 0
-    cluster_server._state.active = None
-    cluster_server._state.last_manifest = None
+def cluster_client(monkeypatch) -> TestClient:
+    # A fresh _ClusterState instance covers every field by construction and
+    # is restored on teardown by monkeypatch — resetting field-by-field (as
+    # services/cluster/tests/test_server_api.py's _reset_state does) silently
+    # stops isolating the moment _ClusterState gains a field nobody remembers
+    # to add here.
+    monkeypatch.setattr(cluster_server, "_state", cluster_server._ClusterState())
     return TestClient(cluster_server.app)
 
 
 @pytest.fixture
 def registry_client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "registry_e2e"))
-    registry_appmod._store = None  # force re-read of CLASP_REGISTRY_DATA
+    # setattr (not a plain assignment) so this is undone on teardown same as
+    # the env var above — a bare `registry_appmod._store = None` never gets
+    # restored, and leaves the module pointed at a RegistryStore rooted in a
+    # tmp_path pytest has already deleted for anything that runs after this
+    # test in the same interpreter.
+    monkeypatch.setattr(registry_appmod, "_store", None)
     return TestClient(registry_appmod.app)
 
 
-def _upload_payload(adapter, client_id: str, round_id: int = 0, num_examples: int = 100) -> dict:
+def _upload_payload(adapter, client_id: str, round_id: int, num_examples: int) -> dict:
     sd = adapter.to_state_dict()
     return {
         "client_id": client_id,
@@ -116,7 +137,10 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
         random_adapter(IN_FEATURES, OUT_FEATURES, rank=RANK, num_layers=NUM_LAYERS, seed=s)
         for s in (1, 2, 3)
     ]
-    weights = [30.0, 50.0, 20.0]
+    # Deliberately unequal so the weighted-average path is actually exercised
+    # (not just "three equal clients", which the FedAvg math can't be told
+    # apart from an unweighted average).
+    num_examples = [30, 50, 20]
     for i, adapter in enumerate(clients):
         # random_adapter's default lora_B is all-zero; give it real signal so
         # aggregation isn't just summing zeros (matches cluster's own tests).
@@ -126,7 +150,7 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
                 adapter.modules[layer][name]["lora_B"] = rng.normal(
                     size=adapter.modules[layer][name]["lora_B"].shape
                 ).astype(np.float32)
-        payload = _upload_payload(adapter, f"client-{i}", num_examples=int(weights[i]))
+        payload = _upload_payload(adapter, f"client-{i}", round_id=0, num_examples=num_examples[i])
         resp = cluster_client.post("/uploads", json=payload)
         assert resp.status_code == 201, resp.text
 
@@ -135,6 +159,12 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     broadcast = agg_resp.json()
     assert broadcast["num_clients"] == 3
     name = broadcast["cluster_id"]
+    # The cluster_id flows straight into the registry's adapter name below,
+    # and the registry gates that name with _NAME_RE while cluster.server
+    # validates it not at all ("cluster-default" is a hardcoded literal in
+    # aggregate()) — assert the seam's actual constraint here rather than
+    # relying on the current literal happening to be benign.
+    assert _NAME_RE.match(name), f"cluster_id {name!r} would 422 at the registry"
 
     # ---- Seam B: Cluster -> Registry, a real safetensors blob --------------
     tensor_dict = {t["name"]: TensorPayload(**t).to_numpy() for t in broadcast["tensors"]}
@@ -143,6 +173,13 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
         "kind": "cluster",
         "hparams": {
             "rank": broadcast["rank"],
+            # `contracts.LoRAHyperParams.lora_alpha` is int-typed, but
+            # cluster's own alpha is a float (DEFAULT_ALPHA = 32.0) — this
+            # cast is the exact spot the two teams' alpha conventions collide
+            # (edge's CONTRACT_HYPERPARAMS separately pins lora_alpha=16, a
+            # cross-team mismatch that's out of scope to resolve here). Assert
+            # the round-trip explicitly below instead of casting silently and
+            # moving on.
             "lora_alpha": int(broadcast["alpha"]),
             "target_modules": broadcast["target_modules"],
         },
@@ -165,6 +202,9 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     active_meta = registry_client.get(f"/adapters/{name}/active").json()
     assert active_meta["ref"]["version"] == 1
     assert active_meta["source_clients"] == meta["source_clients"]
+    # The lossy int(float) cast above is now visible in the round-trip rather
+    # than hidden: registry reports 32, cluster's own broadcast said 32.0.
+    assert active_meta["hparams"]["lora_alpha"] == int(broadcast["alpha"])
 
     file_resp = registry_client.get(f"/adapters/{name}/versions/1/file")
     assert file_resp.status_code == 200
@@ -172,22 +212,47 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     for k, v in tensor_dict.items():
         np.testing.assert_array_equal(recovered[k], v)
 
-    # Defect 4 ("the registry returns tensors without their config"):
-    # reassemble a loadable PEFT adapter_config.json from JUST the two
-    # registry responses above (metadata's hparams + the downloaded tensors),
-    # nothing else — proving the reassembly the merge path needs is possible
-    # with data the registry already stores, no registry change required.
-    reassembled_config = {
-        "peft_type": "LORA",
+    # Defect 4 ("the registry returns tensors without their config"): how
+    # much of a loadable PEFT adapter_config.json can be reassembled from
+    # JUST the registry's two responses (metadata's hparams + the downloaded
+    # tensors)? Compared against cluster's own real `peft_config` on the
+    # broadcast (LoRAAdapter.to_peft_config(), the ground truth edge.merge
+    # would actually need), not against a hand-rolled guess.
+    real_config = broadcast["peft_config"]
+    reassembled_from_registry = {
         "r": active_meta["hparams"]["rank"],
         "lora_alpha": active_meta["hparams"]["lora_alpha"],
         "target_modules": active_meta["hparams"]["target_modules"],
-        "base_model_name_or_path": BASE_MODEL,
-        "inference_mode": True,
-        "task_type": "CAUSAL_LM",
     }
-    assert reassembled_config["r"] == RANK
-    assert set(reassembled_config["target_modules"]) == set(TARGET_MODULES)
+    assert reassembled_from_registry["r"] == real_config["r"]
+    assert reassembled_from_registry["target_modules"] == real_config["target_modules"]
+    # int vs float — the exact lossy cast flagged above, made explicit here
+    # rather than silently comparing equal by coincidence.
+    assert reassembled_from_registry["lora_alpha"] == int(real_config["lora_alpha"])
+
+    # What does NOT round-trip, and matters to edge.merge.validate_compatibility:
+    # `contracts.LoRAHyperParams` has no field for any of these, so a
+    # consumer reassembling from registry data alone cannot recover them —
+    # this is Defect 4 still partially open, not closed by this PR. A real
+    # fix needs either these fields added to the registry's stored metadata,
+    # or the registry storing `peft_config` verbatim alongside the tensors.
+    structural_fields = ("peft_type", "use_rslora", "use_dora", "fan_in_fan_out", "lora_bias")
+    for field in structural_fields:
+        assert field not in reassembled_from_registry, (
+            f"{field!r} round-tripped through the registry's metadata but "
+            f"contracts.LoRAHyperParams has no field for it — either this "
+            f"assertion or the contract is now out of date"
+        )
+    # lora_dropout specifically: cluster's real config says 0.0 (rank-scaling
+    # exactly 1.0 convention), but nothing in `meta["hparams"]` above sets a
+    # dropout, so registry.app._hparams_from falls through to
+    # LoRAHyperParams.dropout's default (0.05) — a config reassembled from
+    # the registry would report a dropout the adapter was never built with.
+    assert active_meta["hparams"]["dropout"] == 0.05
+    assert real_config["lora_dropout"] == 0.0
+    # base_model_name_or_path: not stored by the registry at all (see the
+    # BASE_MODEL constant's docstring above) — out-of-band, not reassembled.
+    assert "base_model_name_or_path" not in active_meta["hparams"]
 
     # ---- Seam C2: Edge -> Registry, PROMOTE reachable -----------------------
     promote_resp = registry_client.post(
@@ -197,11 +262,18 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     assert promote_resp.status_code == 200, promote_resp.text
     assert promote_resp.json()["action"] == "promote"
 
-    # ---- a second round that regresses -> ROLLBACK, same real seam ---------
+    # ---- a second, DISTINGUISHABLE round that regresses -> ROLLBACK --------
+    # v2 must differ from v1's actual bytes, or "the active pointer was
+    # restored" only ever proves the reported version number moved, not that
+    # a consumer downloading the active file after rollback gets v1's real
+    # tensors back — which is the entire point of a restore.
+    tensor_dict_v2 = {k: v + 1.0 for k, v in tensor_dict.items()}
+    payload_bytes_v2 = safetensors_numpy.save(tensor_dict_v2)
+    meta_v2 = {**meta, "round": broadcast["round_id"] + 1}
     save2 = registry_client.post(
         f"/adapters/{name}/versions",
-        files={"file": ("adapter.safetensors", payload_bytes, "application/octet-stream")},
-        data={"meta": json.dumps(meta)},
+        files={"file": ("adapter.safetensors", payload_bytes_v2, "application/octet-stream")},
+        data={"meta": json.dumps(meta_v2)},
     )
     assert save2.status_code == 201, save2.text
     assert save2.json()["ref"]["version"] == 2
@@ -215,8 +287,15 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     assert decision["action"] == "rollback"
     assert decision["active_version_after"] == 1
 
-    # the active pointer actually moved back
+    # the active pointer says v1 again...
     assert registry_client.get(f"/adapters/{name}/active").json()["ref"]["version"] == 1
+    # ...and a consumer downloading it actually gets v1's real bytes back,
+    # not v2's — the claim a version number alone can't prove.
+    restored = safetensors_numpy.load(
+        registry_client.get(f"/adapters/{name}/versions/1/file").content
+    )
+    for k, v in tensor_dict.items():
+        np.testing.assert_array_equal(restored[k], v)
 
     # the audit trail carries both decisions, in order, non-destructively
     trail = registry_client.get(f"/adapters/{name}/promotions").json()["decisions"]
