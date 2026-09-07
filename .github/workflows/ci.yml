@@ -45,11 +45,22 @@ jobs:
       - name: Install contracts (shared seam) + package under test
         run: |
           pip install -e contracts
+          # services/edge depends on clasp-evaluation for the B5 in-project
+          # completion metric, so the shared packages go in before the matrix one.
+          pip install -e services/evaluation
           pip install -e "${{ matrix.package.path }}[test]" 2>/dev/null || pip install -e "${{ matrix.package.path }}"
           pip install pytest httpx
       - name: Run tests
         run: pytest "${{ matrix.package.tests }}" -q
 
+  # Two integration jobs, deliberately not consolidated tonight (panel-day
+  # merge of two independently-built suites): `e2e` is the narrower,
+  # Cluster<->Registry-only loop (goes deep on the registry/cluster contract
+  # mismatches — Defect 4's partial config reassembly, the alpha type cast —
+  # reviewed and hardened by Adithyaa in #12); `integration` is the fuller
+  # all-four-seams version including Edge. Different files
+  # (tests/e2e/ vs tests/integration/), not duplicates. Worth revisiting
+  # after the panel whether one subsumes the other.
   e2e:
     name: e2e (cluster -> registry loop)
     runs-on: ubuntu-latest
@@ -76,3 +87,24 @@ jobs:
           pip install pytest httpx safetensors
       - name: Run the cross-service loop test
         run: pytest tests/e2e -q
+
+  integration:
+    name: four-seam integration (CPU only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install every package the seams cross
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e contracts -e services/evaluation
+          pip install -e services/cluster -e services/registry
+          pip install --no-deps -e services/edge
+          pip install peft safetensors requests pytest httpx
+      - name: Run the four-seam test
+        # Tiny synthetic adapters, in-process TestClients: no GPU, no model
+        # download, no services to start, no HumanEval. See the module docstring
+        # in tests/integration/test_four_seams.py for what it does NOT prove.
+        run: pytest tests/integration -q

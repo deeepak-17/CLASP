@@ -11,6 +11,10 @@ dependencies = [
     "torch",
     "fastapi",
     "uvicorn",
+    # /adapters/{id}/download serializes the aggregate as safetensors bytes,
+    # and /adapters/{id}/publish (seam B) POSTs them to the registry.
+    "safetensors",
+    "httpx",
 ]
 
 [project.optional-dependencies]

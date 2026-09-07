@@ -28,6 +28,8 @@ CLASP/
 │   └── evaluation/     # Evaluation & Dashboard — HumanEval/MBPP, Pass@k, React/Recharts
 ├── security/           # Security library — Opacus DP-SGD + mTLS (imported, not deployed)
 ├── experiments/        # reproducible ablation configs and results
+├── scripts/            # demo_round.py (the four-seam round), run_services.py
+├── tests/integration/  # CPU-only end-to-end proof of all four seams
 └── docs/               # reports, paper draft, figures
 ```
 
@@ -45,6 +47,25 @@ pytest services/registry/tests
 
 # or bring up the full stack
 docker compose up --build
+```
+
+### Run one federated round across all four seams
+
+```bash
+docker compose up -d registry cluster
+```
+
+```bash
+python scripts/demo_round.py --round 1
+```
+
+Edge → Cluster → Registry → Edge → Registry, on the real trained adapters,
+writing to `experiments/w12-integration/results/`. `docs/integration-sprint.md`
+has the full record, including the known gaps. The same loop runs CPU-only over
+tiny synthetic adapters in CI:
+
+```bash
+python -m pytest tests/integration -q
 ```
 
 ## Modules

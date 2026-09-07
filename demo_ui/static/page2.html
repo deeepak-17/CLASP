@@ -67,17 +67,33 @@
 <script src="/static/common.js"></script>
 <script>
 async function loadCluster() {
+  // Cluster now tracks each project cluster's buffer/round/active adapter
+  // separately (multi-cluster HTTP service, integration/panel) -- healthz's
+  // "clusters" sub-object breaks it out per cluster_id instead of one global
+  // state.
   const cards = document.getElementById("cluster-cards");
   const { ok, body } = await apiGet("/api/cluster/healthz");
   if (!ok) { cards.innerHTML = `<div class="card"><h3>Cluster</h3><div class="big" style="color:var(--bad)">unreachable</div></div>`; return; }
-  const manifestRes = await apiGet("/api/cluster/aggregate/manifest");
-  const m = manifestRes.ok ? manifestRes.body : null;
-  cards.innerHTML = `
-    <div class="card"><h3>Round</h3><div class="big">${body.round_id}</div><div class="sub">${body.pending_uploads} pending uploads</div></div>
-    <div class="card"><h3>Active aggregated adapter</h3><div class="big">${body.has_active_adapter ? "yes" : "not yet"}</div></div>
-    <div class="card"><h3>Last SVD reconstruction error</h3><div class="big">${m ? fmt(m.svd_reconstruction_error.mean, 4) : "—"}</div><div class="sub">mean, vs exact average delta_W</div></div>
-    <div class="card"><h3>Last aggregation source clients</h3><div class="big" style="font-size:15px">${m ? m.source_clients.join(", ") : "—"}</div></div>
-  `;
+  const clusters = body.clusters || {};
+  const rows = [];
+  for (const cid of ["web", "scientific"]) {
+    const c = clusters[cid];
+    const manifestRes = await apiGet(`/api/cluster/adapters/${cid}/manifest`);
+    const m = manifestRes.ok ? manifestRes.body : null;
+    rows.push(`
+      <div class="card">
+        <h3>${cid} cluster</h3>
+        <table>
+          <tr><td>round</td><td>${c ? c.round_id : "—"}</td></tr>
+          <tr><td>pending uploads</td><td>${c ? c.pending_uploads : 0}</td></tr>
+          <tr><td>active adapter</td><td>${c && c.has_active_adapter ? "yes" : "not yet"}</td></tr>
+          <tr><td>last SVD reconstruction error</td><td>${m && m.svd_reconstruction_error ? fmt(m.svd_reconstruction_error.mean, 4) : "—"}</td></tr>
+          <tr><td>last source clients</td><td class="mono">${m ? m.source_clients.join(", ") : "—"}</td></tr>
+        </table>
+      </div>
+    `);
+  }
+  cards.innerHTML = rows.join("");
 }
 
 async function loadD2() {
