@@ -19,6 +19,11 @@ const SOURCE = resolve(REPO_ROOT, "evaluation", "results", "results.json");
 const DEST_DIR = resolve(__dirname, "..", "public", "data");
 const DEST = resolve(DEST_DIR, "results.json");
 
+// In-project completion metric artifact (the D5 primary signal). Copied the
+// same way as results.json; the In-Project page fetches it at runtime.
+const IN_PROJECT_SOURCE = resolve(REPO_ROOT, "evaluation", "results", "in_project_metric.json");
+const IN_PROJECT_DEST = resolve(DEST_DIR, "in_project_metric.json");
+
 if (!existsSync(SOURCE)) {
   console.error(
     `[sync-data] ${SOURCE} does not exist.\n` +
@@ -34,3 +39,10 @@ mkdirSync(DEST_DIR, { recursive: true });
 copyFileSync(SOURCE, DEST);
 const { size } = statSync(DEST);
 console.log(`[sync-data] copied ${SOURCE} -> ${DEST} (${size} bytes)`);
+
+if (existsSync(IN_PROJECT_SOURCE)) {
+  copyFileSync(IN_PROJECT_SOURCE, IN_PROJECT_DEST);
+  console.log(`[sync-data] copied ${IN_PROJECT_SOURCE} -> ${IN_PROJECT_DEST} (${statSync(IN_PROJECT_DEST).size} bytes)`);
+} else {
+  console.warn(`[sync-data] ${IN_PROJECT_SOURCE} not found — In-Project page will show an error state.`);
+}

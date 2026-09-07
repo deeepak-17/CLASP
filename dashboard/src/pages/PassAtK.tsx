@@ -21,6 +21,12 @@ export function PassAtK() {
           that at least one of k sampled completions passes, given n generated samples of which c passed.
           See <code>evaluation/scoring.py</code>.
         </p>
+        <div className="note">
+          This is the <strong>regression guard</strong> only. Bars at 0.0 are the offline mock generator,
+          which never produces a passing program — the correct output of a working scorer given that input,
+          verified independently by <code>scripts/sanity_check_scoring.py</code> (all 556 reference solutions
+          pass, pass@1 = 1.0). The <strong>primary</strong> promotion signal is on the In-Project Metric page.
+        </div>
       </div>
 
       {results.length === 0 ? (

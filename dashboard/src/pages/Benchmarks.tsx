@@ -20,6 +20,12 @@ export function Benchmarks() {
           (see <code>scripts/fetch_benchmark_data.py</code>) — not hand-written stand-ins — and scored by
           actually executing every generated candidate against the task's own tests.
         </p>
+        <div className="note">
+          <strong>Pass@k here is the D5 regression guard, not the primary signal.</strong> It is currently
+          run against the offline mock generator (so every rate is 0.0 by construction) — full guard
+          scoring needs a Linux container for <code>evalplus</code>. The metric the promotion rule actually
+          decides on is on the <strong>In-Project Metric</strong> page.
+        </div>
       </div>
 
       {results.length === 0 ? (
