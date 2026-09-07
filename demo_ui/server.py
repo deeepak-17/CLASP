@@ -179,12 +179,35 @@ async def proxy_registry(path: str, request: Request) -> Response:
 # --------------------------------------------------------------------------- #
 # Demo orchestration — sequences real HTTP calls, computes nothing itself
 # --------------------------------------------------------------------------- #
+def _require_json(path: Path, what: str) -> dict:
+    """`_read_json`, but a missing artifact fails as a clean, specific HTTP
+    error instead of a TypeError 500 three lines later.
+
+    /api/edge/clients already None-checks and reports what's missing; the
+    demo actions need the same treatment, because the failure mode here is
+    a blank 500 in the middle of a live panel demo rather than a message
+    naming the file to go and look at.
+    """
+    data = _read_json(path)
+    if data is None:
+        raise HTTPException(
+            503,
+            f"{what} is missing at {path.relative_to(REPO_ROOT)} — the demo "
+            f"reads real committed artifacts, so this client cannot be sent "
+            f"to the cluster until that file exists",
+        )
+    return data
+
+
 def _synthetic_tensors_for(cid: str) -> dict:
     """Shapes + hyperparams match this client's REAL adapter_config.json
     exactly (rank, target_modules, alpha). Tensor VALUES are synthetic --
     the real trained safetensors are gitignored and not present in this
     checkout. Labeled as such everywhere this appears in the UI."""
-    cfg = _read_json(EDGE_ARTIFACTS / "round1" / cid / "adapter" / "adapter_config.json")
+    cfg = _require_json(
+        EDGE_ARTIFACTS / "round1" / cid / "adapter" / "adapter_config.json",
+        f"{cid}'s adapter_config.json",
+    )
     rank = cfg["r"]
     alpha = float(cfg["lora_alpha"])
     # Canonical order, not each client's own adapter_config.json key order --
@@ -219,26 +242,35 @@ def _b64(arr: np.ndarray) -> str:
 async def demo_send_to_cluster(cluster_id: str) -> dict:
     """Seam A, live: POST one real /uploads call per client in this cluster,
     then a real /aggregate call. Exercises cluster's actual validation and
-    aggregate_svd, unchanged."""
+    aggregation, unchanged.
+
+    Cluster now tracks each project cluster's upload buffer separately
+    (multi-cluster HTTP service, landed on integration/panel) — every call
+    below passes cluster_id explicitly rather than relying on the server's
+    single default bucket, which is what made web/scientific mutually
+    exclusive in this file's first version."""
     members = [c for c, cl in CLUSTER_OF.items() if cl == cluster_id]
     if not members:
         raise HTTPException(404, f"no clients mapped to cluster {cluster_id!r}")
-    manifests = {c: _read_json(EDGE_ARTIFACTS / "round1" / c / "manifest.json") for c in members}
+    manifests = {
+        c: _require_json(EDGE_ARTIFACTS / "round1" / c / "manifest.json", f"{c}'s manifest.json")
+        for c in members
+    }
 
     uploads = []
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Cluster's real /uploads now validates round_id against its own
-        # counter (hardening added after this sprint's PR #10 review) --
-        # a single cluster server tracks one round at a time, so ask it what
-        # round it's actually on rather than assuming 0.
+        # Cluster's real /uploads validates round_id against that cluster's
+        # own counter (hardening added after this sprint's PR #10 review) --
+        # ask it what round this specific cluster is on rather than assuming 0.
         health = await client.get(f"{CLUSTER_BASE}/healthz")
-        current_round = health.json()["round_id"] if health.status_code == 200 else 0
+        clusters_health = health.json().get("clusters", {}) if health.status_code == 200 else {}
+        current_round = clusters_health.get(cluster_id, {}).get("round_id", 0)
 
         for cid in members:
             synth = _synthetic_tensors_for(cid)
             weight = manifests[cid]["data"]["train"]["n_chunks"]
             payload = {
-                "client_id": cid, "round_id": current_round,
+                "client_id": cid, "cluster_id": cluster_id, "round_id": current_round,
                 "rank": synth["rank"], "target_modules": synth["target_modules"],
                 "alpha": synth["alpha"], "num_layers": 1,
                 "num_examples": weight, "tensors": synth["tensors"],
@@ -249,75 +281,40 @@ async def demo_send_to_cluster(cluster_id: str) -> dict:
                 return {"uploads": uploads, "aggregate": None,
                         "error": f"upload for {cid} failed"}
 
-        agg_resp = await client.post(f"{CLUSTER_BASE}/aggregate", json={"aggregation": "svd"})
+        agg_resp = await client.post(
+            f"{CLUSTER_BASE}/aggregate",
+            json={"cluster_id": cluster_id, "aggregation": "svd", "include_manifest": True},
+        )
         aggregate = {"status_code": agg_resp.status_code, "body": agg_resp.json()}
 
     return {
         "uploads": uploads, "aggregate": aggregate,
         "note": "tensor values are synthetic placeholders (real weights are gitignored "
                 "and absent from this checkout); shapes/hyperparams match each client's "
-                "real adapter_config.json; aggregation itself is the real cluster.aggregation.aggregate_svd.",
+                "real adapter_config.json; aggregation itself is the real "
+                "cluster.aggregation code, unchanged.",
     }
 
 
 @app.post("/api/demo/publish-to-registry/{cluster_id}")
 async def demo_publish_to_registry(cluster_id: str) -> dict:
-    """Seam B, live: pull the last real aggregate result back off Cluster,
-    serialize to a real safetensors blob, POST it to the real Registry."""
-    from safetensors.numpy import save as st_save
-
-    expected_members = sorted(c for c, cl in CLUSTER_OF.items() if cl == cluster_id)
-
+    """Seam B, live: cluster's own native POST /adapters/{cluster_id}/publish
+    now does exactly what this endpoint used to hand-roll (fetch the active
+    aggregate, embed adapter_config.json in the safetensors header, POST to
+    the registry) — including the lora_dropout fix Adithyaa's review on #12
+    caught in the e2e test's version of this reassembly. Multi-cluster state
+    on the cluster server also means the cross-cluster mislabeling this
+    function used to guard against by hand can no longer happen server-side:
+    each cluster_id has its own buffer and its own active aggregate."""
     async with httpx.AsyncClient(timeout=30.0) as client:
-        active_resp = await client.get(f"{CLUSTER_BASE}/adapters/cluster/active")
-        if active_resp.status_code != 200:
-            raise HTTPException(502, "cluster has no active aggregated adapter yet — run send-to-cluster first")
-        broadcast = active_resp.json()
-
-        # Cluster's real server holds exactly ONE active aggregate at a time
-        # (one process, one cluster, one upload buffer — by its own design,
-        # see cluster/server.py's _ClusterState docstring). Nothing in its API
-        # says WHICH cluster that adapter belongs to beyond a hardcoded
-        # "cluster-default" id, so publishing under the wrong label here would
-        # silently mislabel real bytes with the wrong source_clients. Verify
-        # against the last aggregation's manifest before trusting it.
-        manifest_resp = await client.get(f"{CLUSTER_BASE}/aggregate/manifest")
-        actual_members = sorted(manifest_resp.json().get("source_clients", [])) if manifest_resp.status_code == 200 else []
-        if actual_members != expected_members:
-            raise HTTPException(
-                409,
-                f"cluster's active aggregate came from {actual_members}, not "
-                f"{cluster_id}'s clients {expected_members} — re-run "
-                f"'Send to Cluster' for {cluster_id!r} before publishing it "
-                f"(the cluster service holds one active aggregate at a time)",
-            )
-
-        tensor_dict = {}
-        for t in broadcast["tensors"]:
-            import base64
-            raw = base64.b64decode(t["data_b64"])
-            tensor_dict[t["name"]] = np.frombuffer(raw, dtype=t["dtype"]).reshape(t["shape"]).copy()
-        payload_bytes = st_save(tensor_dict)
-
-        meta = {
-            "kind": "cluster",
-            "hparams": {
-                "rank": broadcast["rank"],
-                "lora_alpha": int(broadcast["alpha"]),
-                "target_modules": broadcast["target_modules"],
-            },
-            "aggregation": "svd_exact",
-            "round": broadcast["round_id"],
-            "cluster_id": cluster_id,
-            "source_clients": [c for c, cl in CLUSTER_OF.items() if cl == cluster_id],
-            "set_active": True,
-        }
-        save_resp = await client.post(
-            f"{REGISTRY_BASE}/adapters/{cluster_id}/versions",
-            files={"file": ("adapter.safetensors", payload_bytes, "application/octet-stream")},
-            data={"meta": json.dumps(meta)},
+        publish_resp = await client.post(
+            f"{CLUSTER_BASE}/adapters/{cluster_id}/publish",
+            json={"registry_url": REGISTRY_BASE, "set_active": True},
         )
-    return {"status_code": save_resp.status_code, "body": save_resp.json()}
+    if publish_resp.status_code != 201:
+        raise HTTPException(publish_resp.status_code, publish_resp.text)
+    body = publish_resp.json()
+    return {"status_code": publish_resp.status_code, "body": body["version"]}
 
 
 @app.post("/api/demo/promote/{adapter_name}")
@@ -381,10 +378,24 @@ async def demo_demonstrate_rollback(adapter_name: str) -> dict:
     real version (same real aggregated bytes) and evaluates it against an
     intentionally regressed candidate. Labeled as such everywhere it appears."""
     async with httpx.AsyncClient(timeout=30.0) as client:
-        file_resp = await client.get(f"{REGISTRY_BASE}/adapters/{adapter_name}/versions/1/file")
+        # Duplicate whatever is CURRENTLY active, not a hardcoded v1 — after a
+        # second publish the active version is v2, and duplicating v1's bytes
+        # there would quietly stage a rollback demo on top of stale content
+        # that no longer matches the metadata copied from `active` below.
+        active_resp = await client.get(f"{REGISTRY_BASE}/adapters/{adapter_name}/active")
+        if active_resp.status_code != 200:
+            raise HTTPException(
+                404, f"no active version for {adapter_name!r} to duplicate — publish it first"
+            )
+        active = active_resp.json()
+        active_version = active["ref"]["version"]
+        file_resp = await client.get(
+            f"{REGISTRY_BASE}/adapters/{adapter_name}/versions/{active_version}/file"
+        )
         if file_resp.status_code != 200:
-            raise HTTPException(404, f"no v1 for {adapter_name!r} to duplicate — publish it first")
-        active = (await client.get(f"{REGISTRY_BASE}/adapters/{adapter_name}/active")).json()
+            raise HTTPException(
+                404, f"active version v{active_version} of {adapter_name!r} has no stored payload"
+            )
         meta = {
             "kind": "cluster",
             "hparams": active["hparams"],

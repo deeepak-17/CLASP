@@ -131,7 +131,8 @@ button.primary {
 }
 button.primary:hover { filter: brightness(1.1); }
 button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
-button.secondary {
+button.secondary,
+a.secondary {
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
@@ -140,6 +141,18 @@ button.secondary {
   font-size: 14px;
   cursor: pointer;
 }
+
+/* Page-to-page navigation stays a real anchor (middle-click, keyboard, screen
+   readers all behave) rather than a <button> nested inside an <a>, which is
+   invalid HTML — nested interactive elements. */
+a.secondary {
+  display: inline-block;
+  text-decoration: none;
+  font-family: inherit;
+  font-weight: 500;
+  line-height: normal;
+}
+a.secondary:hover { border-color: var(--accent); }
 
 .note {
   background: rgba(251,191,36,0.08);

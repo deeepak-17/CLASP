@@ -50,6 +50,7 @@ import safetensors.numpy as safetensors_numpy  # hard dependency of this test, n
 # silently fails to resolve. A missing dependency should be a hard error.
 from cluster.adapter_format import random_adapter
 from cluster.schemas.messages import TensorPayload
+from contracts import LoRAHyperParams
 from fastapi.testclient import TestClient
 
 import cluster.server as cluster_server
@@ -71,12 +72,21 @@ BASE_MODEL = "deepseek-ai/deepseek-coder-1.3b-base"
 
 @pytest.fixture
 def cluster_client(monkeypatch) -> TestClient:
-    # A fresh _ClusterState instance covers every field by construction and
-    # is restored on teardown by monkeypatch — resetting field-by-field (as
-    # services/cluster/tests/test_server_api.py's _reset_state does) silently
-    # stops isolating the moment _ClusterState gains a field nobody remembers
-    # to add here.
-    monkeypatch.setattr(cluster_server, "_state", cluster_server._ClusterState())
+    # Isolation has to happen in `_clusters`, NOT on the `_state` name.
+    # `_state` is only an alias bound to `_clusters[DEFAULT_CLUSTER_ID]` at
+    # import time; every request handler reads its state through
+    # `_cluster(cluster_id)` -> `_clusters.setdefault(...)`. Rebinding
+    # `_state` with setattr therefore isolates nothing — the handlers keep
+    # using whatever object the dict still holds, so a stale round_id or
+    # leftover uploads from anything earlier in the same interpreter (e.g.
+    # services/cluster/tests/test_server_api.py) would silently corrupt the
+    # aggregation asserted below. setitem restores the original entry on
+    # teardown, and a fresh _ClusterState covers every field by construction.
+    monkeypatch.setitem(
+        cluster_server._clusters,
+        cluster_server.DEFAULT_CLUSTER_ID,
+        cluster_server._ClusterState(),
+    )
     return TestClient(cluster_server.app)
 
 
@@ -246,10 +256,14 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     # lora_dropout specifically: cluster's real config says 0.0 (rank-scaling
     # exactly 1.0 convention), but nothing in `meta["hparams"]` above sets a
     # dropout, so registry.app._hparams_from falls through to
-    # LoRAHyperParams.dropout's default (0.05) — a config reassembled from
-    # the registry would report a dropout the adapter was never built with.
-    assert active_meta["hparams"]["dropout"] == 0.05
+    # LoRAHyperParams.dropout's default — a config reassembled from the
+    # registry would report a dropout the adapter was never built with. Read
+    # that default off the contract rather than hardcoding it, so this asserts
+    # the *behaviour* (registry falls back to the default) and doesn't break
+    # when the contract's default value legitimately changes.
+    assert active_meta["hparams"]["dropout"] == LoRAHyperParams().dropout
     assert real_config["lora_dropout"] == 0.0
+    assert active_meta["hparams"]["dropout"] != real_config["lora_dropout"]
     # base_model_name_or_path: not stored by the registry at all (see the
     # BASE_MODEL constant's docstring above) — out-of-band, not reassembled.
     assert "base_model_name_or_path" not in active_meta["hparams"]

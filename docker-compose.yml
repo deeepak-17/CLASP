@@ -23,6 +23,15 @@ services:
       dockerfile: services/cluster/Dockerfile
     ports: ["8002:8002"]
     depends_on: [registry]
+    # Seam B target. On the compose network the registry answers to its service
+    # name; on the host it is localhost:8004 (cluster.server's own default).
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8002/healthz').status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   edge:
     build:
