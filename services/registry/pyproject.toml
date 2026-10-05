@@ -11,6 +11,8 @@ dependencies = [
     # D6 composites: exact factor concatenation, no torch needed.
     "numpy>=1.26",
     "safetensors>=0.4",
+    # experiment configs (registry.runs)
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]

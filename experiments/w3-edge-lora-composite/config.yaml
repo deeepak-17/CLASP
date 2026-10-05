@@ -10,6 +10,9 @@ base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile
 # results/ is a 1.3B-dev-profile number and is NOT comparable to a 6.7B one.
 device_profile: dev
 seed: 0
+# D8: GPU-hours per run. Back-filled from the recorded run, not estimated in advance:
+# one 1200-block round ~61 min + LR sweep 43.5 min (RESULTS.md).
+gpu_hours_estimate: 1.75
 
 # --- data (E3.1) ---
 corpus_root: datasets/materialized
