@@ -9,11 +9,13 @@ Endpoints:
     GET  /adapters/{name}/versions/{v}             metadata for one version
     GET  /adapters/{name}/versions/{v}/file        download the safetensors blob
     GET  /adapters/{name}/active                   metadata for the active version
+    GET  /adapters/{name}/lineage                  versions + parents + decisions
     POST /adapters/{name}/promote                  D5 two-sided rule on the active version
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
 
-Composite-adapter storage (D6) is the W8 follow-on, still to build.
-mTLS in front of these endpoints is a W10 deliverable (D7).
+Storage errors map to HTTP status in one place (see the exception handlers):
+unknown adapter/version -> 404, bad name -> 422, version race -> 409, and a
+corrupt on-disk record -> a clean 500 with the reason, never a traceback.
 """
 from __future__ import annotations
 
@@ -22,21 +24,23 @@ import json
 from contracts import (
     CONTRACTS_VERSION,
     AdapterKind,
-    AdapterRef,
     AggregationMethod,
+    CompositeProvenance,
     EvalResult,
     GuardMetrics,
-    InProjectMetrics,
     LoRAHyperParams,
     PrivacySpec,
     PromotionAction,
 )
-from fastapi import Body, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import JSONResponse
 
 from . import __version__
+from .lineage import build_lineage
 from .promotion import decide
 from .storage import (
     AdapterNotFound,
+    InvalidAdapterName,
     RegistryStore,
     StorageError,
     VersionExists,
@@ -61,61 +65,54 @@ def get_store() -> RegistryStore:
     return _store
 
 
-def _hparams_from(d: dict | None) -> LoRAHyperParams:
-    d = d or {}
-    base = LoRAHyperParams()
-    return LoRAHyperParams(
-        rank=d.get("rank", base.rank),
-        lora_alpha=d.get("lora_alpha", base.lora_alpha),
-        dropout=d.get("dropout", base.dropout),
-        target_modules=tuple(d.get("target_modules", base.target_modules)),
-        alpha=d.get("alpha", base.alpha),
-        beta=d.get("beta", base.beta),
-    )
+# --------------------------------------------------------------------------- #
+# storage error -> HTTP status, in one place
+# --------------------------------------------------------------------------- #
+@app.exception_handler(AdapterNotFound)
+async def _not_found(_: Request, exc: AdapterNotFound) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": f"not found: {exc}"})
 
 
-def _in_project_from(d: dict | None) -> InProjectMetrics | None:
-    if d is None:
-        return None
-    return InProjectMetrics(
-        edit_similarity=d["edit_similarity"],
-        exact_match=d["exact_match"],
-        perplexity=d["perplexity"],
-        n_examples=d["n_examples"],
-    )
+@app.exception_handler(InvalidAdapterName)
+async def _bad_name(_: Request, exc: InvalidAdapterName) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
-def _guard_metrics_from(d: dict) -> GuardMetrics:
-    return GuardMetrics(
-        benchmark=d["benchmark"],
-        pass_at_k={int(k): v for k, v in d["pass_at_k"].items()},
-    )
+@app.exception_handler(VersionExists)
+async def _version_race(_: Request, exc: VersionExists) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
-def _get_active_version(store: RegistryStore, name: str) -> int | None:
-    """`store.get_active` but with a corrupt on-disk pointer turned into a
-    clean HTTP 500 instead of an unhandled `StorageError` (L1)."""
+@app.exception_handler(StorageError)
+async def _data_error(_: Request, exc: StorageError) -> JSONResponse:
+    # L1: e.g. a corrupt/hand-edited `active` pointer — clean 500, not a crash.
+    return JSONResponse(status_code=500, content={"detail": f"registry data error: {exc}"})
+
+
+def _parse_save_meta(raw: str) -> dict:
+    """Decode the save envelope into ``RegistryStore.save`` keyword arguments."""
     try:
-        return store.get_active(name)
-    except StorageError as e:
-        raise HTTPException(500, f"registry data error: {e}") from e
-
-
-def _eval_result_from(d: dict) -> EvalResult:
-    ref = d["adapter"]
-    return EvalResult(
-        adapter=AdapterRef(
-            name=ref["name"],
-            version=ref["version"],
-            kind=AdapterKind(ref.get("kind", "client")),
-            cluster_id=ref.get("cluster_id"),
-        ),
-        in_project=_in_project_from(d["in_project"]),
-        guard=tuple(_guard_metrics_from(g) for g in d.get("guard", ())),
-        baseline_in_project=_in_project_from(d.get("baseline_in_project")),
-        baseline_noise_band=d.get("baseline_noise_band", 0.0),
-        seed=d.get("seed", 0),
-    )
+        m = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(422, f"meta is not valid JSON: {e}") from e
+    if not isinstance(m, dict):
+        raise HTTPException(422, "meta must be a JSON object")
+    try:
+        composed = m.get("composed_from")
+        return {
+            "kind": AdapterKind(m.get("kind", "client")),
+            "hparams": LoRAHyperParams.from_json(m.get("hparams")),
+            "privacy": PrivacySpec.from_json(m["privacy"]) if m.get("privacy") else None,
+            "aggregation": AggregationMethod(m["aggregation"]) if m.get("aggregation") else None,
+            "round": m.get("round"),
+            "seed": m.get("seed", 0),
+            "cluster_id": m.get("cluster_id"),
+            "source_clients": tuple(m.get("source_clients", ())),
+            "set_active": m.get("set_active", True),
+            "composed_from": CompositeProvenance.from_json(composed) if composed else None,
+        }
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(422, f"invalid meta: {e}") from e
 
 
 @app.get("/healthz")
@@ -125,8 +122,7 @@ def healthz() -> dict:
 
 @app.get("/adapters")
 def list_adapters() -> dict:
-    store = get_store()
-    return {"adapters": store.list_adapters()}
+    return {"adapters": get_store().list_adapters()}
 
 
 @app.post("/adapters/{name}/versions", status_code=201)
@@ -136,32 +132,13 @@ async def save_version(
     meta: str = Form("{}", description="JSON metadata envelope"),
 ) -> dict:
     """Write a new immutable version and return its metadata."""
-    store = get_store()
-    try:
-        m = json.loads(meta)
-    except json.JSONDecodeError as e:
-        raise HTTPException(422, f"meta is not valid JSON: {e}") from e
-
+    kwargs = _parse_save_meta(meta)
     payload = await file.read()
     try:
-        kind = AdapterKind(m.get("kind", "client"))
-        aggregation = AggregationMethod(m["aggregation"]) if m.get("aggregation") else None
-        written = store.save(
-            name,
-            payload,
-            kind=kind,
-            hparams=_hparams_from(m.get("hparams")),
-            privacy=PrivacySpec(**m["privacy"]) if m.get("privacy") else None,
-            aggregation=aggregation,
-            round=m.get("round"),
-            seed=m.get("seed", 0),
-            cluster_id=m.get("cluster_id"),
-            source_clients=tuple(m.get("source_clients", ())),
-            set_active=m.get("set_active", True),
-        )
-    except VersionExists as e:  # M4: concurrent save lost the version race
-        raise HTTPException(409, str(e)) from e
-    except (StorageError, ValueError) as e:
+        written = get_store().save(name, payload, **kwargs)
+    except (VersionExists, InvalidAdapterName):  # M4 race -> 409, bad name -> 422
+        raise
+    except StorageError as e:  # bad payload / inconsistent envelope: client error
         raise HTTPException(422, str(e)) from e
     return _metadata_to_dict(written)
 
@@ -169,10 +146,7 @@ async def save_version(
 @app.get("/adapters/{name}/versions")
 def list_versions(name: str) -> dict:
     store = get_store()
-    try:
-        versions = store.list_versions(name)
-    except AdapterNotFound as e:
-        raise HTTPException(404, f"adapter not found: {name}") from e
+    versions = store.list_versions(name)
     return {
         "name": name,
         "active": store.get_active(name),
@@ -182,19 +156,12 @@ def list_versions(name: str) -> dict:
 
 @app.get("/adapters/{name}/versions/{version}")
 def get_version(name: str, version: int) -> dict:
-    try:
-        return _metadata_to_dict(get_store().get_metadata(name, version))
-    except AdapterNotFound as e:
-        raise HTTPException(404, str(e)) from e
+    return _metadata_to_dict(get_store().get_metadata(name, version))
 
 
 @app.get("/adapters/{name}/versions/{version}/file")
 def download_version(name: str, version: int) -> Response:
-    store = get_store()
-    try:
-        payload = store.load_payload(name, version)
-    except AdapterNotFound as e:
-        raise HTTPException(404, str(e)) from e
+    payload = get_store().load_payload(name, version)
     return Response(
         content=payload,
         media_type="application/octet-stream",
@@ -205,37 +172,47 @@ def download_version(name: str, version: int) -> Response:
 @app.get("/adapters/{name}/active")
 def get_active(name: str) -> dict:
     store = get_store()
-    active = _get_active_version(store, name)
+    active = store.get_active(name)
     if active is None:
         raise HTTPException(404, f"no active version for {name}")
     return _metadata_to_dict(store.get_metadata(name, active))
+
+
+@app.get("/adapters/{name}/lineage")
+def get_lineage(name: str) -> dict:
+    """Every version with its parents (clients / cluster+client) and decisions."""
+    return build_lineage(get_store(), name)
+
+
+def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...]]:
+    try:
+        eval_result = EvalResult.from_json(body["eval"])
+        baseline_guard = tuple(GuardMetrics.from_json(g) for g in body.get("baseline_guard", ()))
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
+        raise HTTPException(422, f"invalid promote payload: {e}") from e
+    return eval_result, baseline_guard
 
 
 @app.post("/adapters/{name}/promote")
 def promote(name: str, body: dict = Body(...)) -> dict:
     """Apply the D5 two-sided rule to the currently-active version.
 
-    Saves auto-activate (D9 groundwork); this endpoint is the checkpoint that
-    confirms or reverts that activation once P5's evaluation lands. Body::
+    Saves auto-activate; this endpoint is the checkpoint that confirms or
+    reverts that activation once evaluation lands. Body::
 
         {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...]}
 
-    ``baseline_guard`` isn't part of the frozen EvalResult contract (v1.0) —
-    it's an API-boundary extension, same pattern as `save`'s ``meta`` envelope.
+    ``baseline_guard`` isn't part of the EvalResult contract — it's an
+    API-boundary extension, same pattern as `save`'s ``meta`` envelope.
     """
     store = get_store()
-    try:
-        eval_result = _eval_result_from(body["eval"])
-        baseline_guard = tuple(_guard_metrics_from(g) for g in body.get("baseline_guard", ()))
-    except (KeyError, ValueError, TypeError) as e:
-        raise HTTPException(422, f"invalid promote payload: {e}") from e
-
+    eval_result, baseline_guard = _parse_promote_body(body)
     if eval_result.adapter.name != name:
         raise HTTPException(
             422, f"eval.adapter.name {eval_result.adapter.name!r} does not match path {name!r}"
         )
 
-    active_before = _get_active_version(store, name)
+    active_before = store.get_active(name)
     if active_before is None:
         raise HTTPException(404, f"no active version for {name}")
     if active_before != eval_result.adapter.version:

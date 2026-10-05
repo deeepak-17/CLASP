@@ -27,7 +27,6 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import asdict
 from pathlib import Path
 
 from contracts import (
@@ -35,9 +34,9 @@ from contracts import (
     AdapterMetadata,
     AdapterRef,
     AggregationMethod,
+    CompositeProvenance,
     LoRAHyperParams,
     PrivacySpec,
-    PromotionAction,
     PromotionDecision,
     utcnow_iso,
 )
@@ -54,13 +53,17 @@ class AdapterNotFound(StorageError):
     pass
 
 
+class InvalidAdapterName(StorageError):
+    """Name fails the path-safe pattern — a client error, never a 500."""
+
+
 class VersionExists(StorageError):
     """Refused to overwrite an existing immutable version (D9)."""
 
 
 def _validate_name(name: str) -> str:
     if not _NAME_RE.match(name or ""):
-        raise StorageError(f"invalid adapter name: {name!r}")
+        raise InvalidAdapterName(f"invalid adapter name: {name!r}")
     return name
 
 
@@ -186,11 +189,16 @@ class RegistryStore:
         cluster_id: str | None = None,
         source_clients: tuple[str, ...] = (),
         set_active: bool = True,
+        composed_from: CompositeProvenance | None = None,
     ) -> AdapterMetadata:
         """Write a new immutable version. Assigns the next version number."""
         _validate_name(name)
         if not is_safetensors(payload):
             raise StorageError("payload is not a valid safetensors blob")
+        if (kind is AdapterKind.COMPOSITE) != (composed_from is not None):
+            raise StorageError(
+                "composed_from is required for composite adapters and only allowed on them"
+            )
 
         adapter_dir = self._adapter_dir(name)
         adapter_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +223,7 @@ class RegistryStore:
                 num_bytes=len(payload),
                 source_clients=tuple(source_clients),
                 created_at=utcnow_iso(),
+                composed_from=composed_from,
             )
             (staging / "metadata.json").write_text(json.dumps(_metadata_to_dict(meta), indent=2))
         except BaseException:
@@ -234,65 +243,20 @@ class RegistryStore:
 
 
 # --------------------------------------------------------------------------- #
-# (de)serialization helpers — dataclasses <-> JSON-safe dicts
+# (de)serialization helpers — thin wrappers over the contracts' own JSON codecs
+# (contracts v1.1), kept as module functions so tests can fault-inject them.
 # --------------------------------------------------------------------------- #
 def _metadata_to_dict(meta: AdapterMetadata) -> dict:
-    d = asdict(meta)
-    d["ref"]["kind"] = meta.ref.kind.value
-    d["aggregation"] = meta.aggregation.value if meta.aggregation else None
-    # tuples -> lists for JSON
-    d["hparams"]["target_modules"] = list(meta.hparams.target_modules)
-    d["source_clients"] = list(meta.source_clients)
-    return d
+    return meta.to_json()
 
 
 def _metadata_from_dict(d: dict) -> AdapterMetadata:
-    ref = d["ref"]
-    return AdapterMetadata(
-        ref=AdapterRef(
-            name=ref["name"],
-            version=ref["version"],
-            kind=AdapterKind(ref["kind"]),
-            cluster_id=ref.get("cluster_id"),
-        ),
-        hparams=LoRAHyperParams(
-            rank=d["hparams"]["rank"],
-            lora_alpha=d["hparams"]["lora_alpha"],
-            dropout=d["hparams"]["dropout"],
-            target_modules=tuple(d["hparams"]["target_modules"]),
-            alpha=d["hparams"]["alpha"],
-            beta=d["hparams"]["beta"],
-        ),
-        privacy=PrivacySpec(**d["privacy"]),
-        aggregation=AggregationMethod(d["aggregation"]) if d.get("aggregation") else None,
-        round=d.get("round"),
-        seed=d["seed"],
-        sha256=d["sha256"],
-        num_bytes=d["num_bytes"],
-        source_clients=tuple(d.get("source_clients", ())),
-        created_at=d["created_at"],
-        contracts_version=d.get("contracts_version", "1.0.0"),
-    )
+    return AdapterMetadata.from_json(d)
 
 
 def _promotion_decision_to_dict(decision: PromotionDecision) -> dict:
-    d = asdict(decision)
-    d["action"] = decision.action.value
-    d["adapter"]["kind"] = decision.adapter.kind.value
-    return d
+    return decision.to_json()
 
 
 def _promotion_decision_from_dict(d: dict) -> PromotionDecision:
-    ref = d["adapter"]
-    return PromotionDecision(
-        adapter=AdapterRef(
-            name=ref["name"],
-            version=ref["version"],
-            kind=AdapterKind(ref["kind"]),
-            cluster_id=ref.get("cluster_id"),
-        ),
-        action=PromotionAction(d["action"]),
-        active_version_after=d["active_version_after"],
-        reason=d["reason"],
-        timestamp=d["timestamp"],
-    )
+    return PromotionDecision.from_json(d)
