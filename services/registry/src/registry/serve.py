@@ -17,6 +17,7 @@ a startup error, never a silent fallback to plain HTTP.
 """
 from __future__ import annotations
 
+import logging
 import os
 import ssl
 import sys
@@ -73,7 +74,11 @@ def build_config(env: Mapping[str, str]) -> uvicorn.Config:
     """A loaded uvicorn config; with TLS, hardened to mTLS + TLS 1.3."""
     tls = tls_settings_from_env(env)
     kwargs: dict = {}
-    if tls is not None:
+    if tls is None:
+        logging.getLogger("registry").warning(
+            "serving plain HTTP with no client authentication — set CLASP_TLS_CERT, "
+            "CLASP_TLS_KEY and CLASP_TLS_CA for mTLS (D7)")
+    else:
         kwargs = {
             "ssl_certfile": str(tls.cert),
             "ssl_keyfile": str(tls.key),

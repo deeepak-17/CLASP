@@ -8,13 +8,14 @@ set -euo pipefail
 
 OUT="${1:-.runtime/certs}"
 DAYS=30
-mkdir -p "$OUT"
+umask 077                      # keys are never group/world readable, even briefly
+mkdir -p "$OUT/ca-private"
 cd "$OUT"
 
 ec_key() { openssl ecparam -name prime256v1 -genkey -noout -out "$1" 2>/dev/null; }
 
-ec_key ca.key
-openssl req -x509 -new -key ca.key -sha256 -days "$DAYS" -subj "/CN=clasp-dev-ca" \
+ec_key ca-private/ca.key
+openssl req -x509 -new -key ca-private/ca.key -sha256 -days "$DAYS" -subj "/CN=clasp-dev-ca" \
   -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
   -out ca.pem
 
@@ -27,12 +28,13 @@ issue() {  # issue <name> <cn> <extendedKeyUsage> [subjectAltName]
     echo "extendedKeyUsage=$3"
     [ -n "${4:-}" ] && echo "subjectAltName=$4"
   } > "$1.ext"
-  openssl x509 -req -in "$1.csr" -CA ca.pem -CAkey ca.key -CAcreateserial -days "$DAYS" \
+  openssl x509 -req -in "$1.csr" -CA ca.pem -CAkey ca-private/ca.key -CAcreateserial -CAserial ca-private/ca.srl -days "$DAYS" \
     -sha256 -extfile "$1.ext" -out "$1.pem" 2>/dev/null
   rm -f "$1.csr" "$1.ext"
 }
 
 issue registry registry serverAuth,clientAuth "DNS:registry,DNS:localhost,IP:127.0.0.1"
 issue client clasp-dev-client clientAuth
-chmod 600 ./*.key
-echo "wrote $(pwd): ca.pem registry.pem/.key client.pem/.key"
+mkdir -p registry && cp ca.pem registry.pem registry.key registry/
+echo "wrote $(pwd): ca.pem client.pem/.key; registry/ (mounted into the container);"
+echo "ca-private/ca.key stays on the host — the container never sees the CA key"

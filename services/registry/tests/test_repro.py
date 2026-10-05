@@ -116,3 +116,11 @@ def test_cli_pack_and_verify(tmp_path, capsys):
     assert main(["verify", str(out)]) == 0
     assert "OK" in capsys.readouterr().out
     assert main(["verify", str(tmp_path / "missing.tar.gz")]) == 2
+
+
+def test_verify_reports_a_corrupt_manifest_cleanly(tmp_path):
+    repo, store = _repo(tmp_path)
+    pack = build_pack(repo_root=repo, store=store, out=tmp_path / "pack.tar.gz")
+    bad = _rewrite(pack, tmp_path / "bad.tar.gz", "MANIFEST.json", b"{not json")
+    report = verify_pack(bad)
+    assert not report.ok and "not valid JSON" in report.problems[0]

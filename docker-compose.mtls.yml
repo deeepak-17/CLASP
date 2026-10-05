@@ -17,4 +17,5 @@ services:
       CLASP_TLS_KEY: /certs/registry.key
       CLASP_TLS_CA: /certs/ca.pem
     volumes:
-      - ./.runtime/certs:/certs:ro
+      # Only the registry's own cert/key and the CA cert — never the CA key.
+      - ./.runtime/certs/registry:/certs:ro

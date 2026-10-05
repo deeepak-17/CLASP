@@ -31,6 +31,7 @@ import platform
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from importlib import metadata
@@ -89,8 +90,10 @@ def _registry_files(base_url: str) -> dict[str, bytes]:
                            ("promotions", "promotions")):
             try:
                 body = _get_json(f"{base}/adapters/{name}/{path}")
-            except OSError:
-                continue  # e.g. an empty adapter dir has no versions
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    continue  # e.g. an adapter dir with no versions yet
+                raise  # a 500 or an auth failure must not yield a silently partial pack
             files[f"registry/{name}/{leaf}.json"] = json.dumps(body, indent=2).encode()
     return files
 
@@ -165,9 +168,12 @@ def verify_pack(path: str | Path) -> VerifyReport:
     report = VerifyReport()
     with tarfile.open(path) as tar:
         contents = {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
-    manifest = json.loads(contents.pop("MANIFEST.json", b"{}") or b"{}")
-    expected = manifest.get("files", {})
-    if not expected:
+    try:
+        manifest = json.loads(contents.pop("MANIFEST.json", b"{}") or b"{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return VerifyReport(problems=["MANIFEST.json is not valid JSON"])
+    expected = manifest.get("files", {}) if isinstance(manifest, dict) else {}
+    if not isinstance(expected, dict) or not expected:
         return VerifyReport(problems=["MANIFEST.json missing or empty"])
     for name in sorted(set(expected) | set(contents)):
         if name not in contents:
@@ -183,7 +189,12 @@ def verify_pack(path: str | Path) -> VerifyReport:
             report.problems += [f"{name}: {p}" for p in
                                 validate_config(config if isinstance(config, dict) else {})]
         elif name.startswith("runs/") and name.endswith("/run.json"):
-            _check_run(name, json.loads(data), report)
+            try:
+                record = json.loads(data)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                report.problems.append(f"{name}: not valid JSON")
+                continue
+            _check_run(name, record if isinstance(record, dict) else {}, report)
     return report
 
 

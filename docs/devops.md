@@ -122,3 +122,12 @@ everything, re-validates every config, and requires every run to be complete.
   seeds and are identified by sha256 in the registry snapshot.
 - Composite ε uses basic composition. That is an upper bound, conservative, and
   correct, but looser than an accountant-level bound.
+- Without the mTLS overlay the registry serves plain HTTP with no
+  authentication on every interface. It logs a warning at startup. Use the
+  overlay anywhere beyond a trusted lab network.
+- The registry container runs as root. Switching to a non-root user would
+  make the existing root-owned `registry-data` volume unwritable, so that
+  change needs a one-time `chown` migration first.
+- Uploads are capped by `CLASP_MAX_UPLOAD_BYTES` (default 1 GiB), and payloads
+  are read into memory. Composing holds about 3–4× the parts' size while it
+  runs. That is fine at rank 16; revisit it for much larger adapters.
