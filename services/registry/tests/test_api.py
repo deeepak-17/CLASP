@@ -18,7 +18,7 @@ def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
-    assert r.json()["contracts"] == "1.0.0"
+    assert r.json()["contracts"] == "1.1.0"
 
 
 def test_empty_registry_lists_nothing(client):
