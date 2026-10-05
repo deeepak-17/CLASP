@@ -1,0 +1,19 @@
+# Phase III ablation — composition coefficients in Wnew = Wbase + alpha*dWcluster + beta*dWclient.
+# No retraining: re-composes the round's adapters (registry /compose) and re-evaluates.
+name: alpha-beta-sweep
+owner: P1 Adithyaa (composition runs) · P5 (sensitivity curves) · P4 (orchestration)
+base_model: deepseek-ai/deepseek-coder-1.3b-base
+seed: 0
+# Compose + in-project eval of one composite: the 27.8 min round covers 4 composites
+# plus 2 aggregations, so ~7 min per composite; 0.15 h leaves headroom.
+gpu_hours_estimate: 0.15
+gpus: 1
+budget:
+  gpu_hours_total: 2           # 5 x 2 points x 0.15 = 1.5 (greedy eval: one seed suffices)
+clients: 6
+rank: 16
+seq_len: 1024
+sweep:
+  alpha: [0.0, 0.25, 0.5, 0.75, 1.0]
+  beta: [0.5, 1.0]
+notes: ""
