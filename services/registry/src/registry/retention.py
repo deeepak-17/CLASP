@@ -62,7 +62,10 @@ def plan_retention(
         raise ValueError(f"keep_last must be >= 1, got {keep_last}")
     ordered = sorted(versions)
     recent = set(ordered[-keep_last:])
-    promoted = {d.adapter.version for d in decisions if d.action is PromotionAction.PROMOTE}
+    # active_version_after is the version that went live: for a D5 PROMOTE it is
+    # the candidate itself, for an operator restore forward it is the target.
+    promoted = {d.active_version_after for d in decisions
+                if d.action is PromotionAction.PROMOTE}
     restored = {d.active_version_after for d in decisions
                 if d.action is PromotionAction.ROLLBACK}
 

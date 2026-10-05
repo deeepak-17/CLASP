@@ -34,6 +34,7 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -53,6 +54,14 @@ STORE_ENV = "CLASP_RESULT_STORE"
 #: D8 compute-conservative caps. Raise per config only with a justification.
 D8_CAPS = {"clients": 6, "rank": 16, "seq_len": 1024, "max_steps": 200, "rounds": 5}
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
+#: Experiment names become directory names in the result store.
+_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _check_name(name: object) -> str:
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        raise ConfigError(f"experiment name {name!r} must match {_NAME_RE.pattern}")
+    return name
 
 
 class ConfigError(ValueError):
@@ -76,6 +85,8 @@ def _cap_problems(config: dict) -> list[str]:
     if override and not str(override.get("justification", "")).strip():
         problems.append("caps_override needs a justification (D8: raise caps only with reason)")
     sweep = config.get("sweep") or {}
+    if not isinstance(sweep, dict) or not all(isinstance(v, list) for v in sweep.values()):
+        return [*problems, "sweep must map each parameter to a list of values"]
     for field, cap in D8_CAPS.items():
         limit = override.get(field, cap)
         values = [config[field]] if _number(config.get(field)) else []
@@ -100,14 +111,18 @@ def expand_sweep(config: dict) -> list[dict]:
 def validate_config(config: dict) -> list[str]:
     """Every reason this config may not run yet; empty means it may."""
     problems = []
-    if not isinstance(config.get("name"), str) or not config.get("name"):
-        problems.append("name is required")
+    name = config.get("name")
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        problems.append(f"name is required and must match {_NAME_RE.pattern} (it is a directory)")
     if not isinstance(config.get("seed"), int) or isinstance(config.get("seed"), bool):
         problems.append("seed is required (an integer) — D9 reproducibility")
     estimate = config.get("gpu_hours_estimate")
     if not _number(estimate) or estimate < 0:
         problems.append("gpu_hours_estimate is required (per run, >= 0) — D8: estimate first")
-    problems += _cap_problems(config)
+    cap_problems = _cap_problems(config)
+    problems += cap_problems
+    if any(p.startswith("sweep must") for p in cap_problems):
+        return problems
     budget = (config.get("budget") or {}).get("gpu_hours_total")
     if _number(estimate) and _number(budget):
         total = estimate * len(expand_sweep(config))
@@ -140,7 +155,10 @@ def check_configs(experiments_dir: str | Path) -> dict[str, list[str]]:
 
 
 def run_id_for(config: dict, point: dict) -> str:
-    digest = config_hash({"config": config, "point": dict(sorted(point.items()))})
+    """Stable across sweep edits: growing ``sweep``/``seeds`` keeps old ids, so
+    completed points are still skipped; any other config change is a new id."""
+    fixed = {k: v for k, v in config.items() if k not in ("sweep", "seeds", "budget", "notes")}
+    digest = config_hash({"config": fixed, "point": dict(sorted(point.items()))})
     return f"{config['name']}-{digest[:10]}"
 
 
@@ -167,10 +185,10 @@ class ResultStore:
         (self.root / "runs").mkdir(parents=True, exist_ok=True)
 
     def experiment_dir(self, experiment: str) -> Path:
-        return self.root / "runs" / experiment
+        return self.root / "runs" / _check_name(experiment)
 
     def run_dir(self, experiment: str, run_id: str) -> Path:
-        return self.experiment_dir(experiment) / run_id
+        return self.experiment_dir(experiment) / _check_name(run_id)
 
     def is_frozen(self, experiment: str) -> bool:
         return (self.experiment_dir(experiment) / "FROZEN").exists()
@@ -192,7 +210,7 @@ class ResultStore:
 
     def list_runs(self, experiment: str | None = None) -> list[dict]:
         base = self.root / "runs"
-        pattern = f"{experiment}/*/run.json" if experiment else "*/*/run.json"
+        pattern = f"{_check_name(experiment)}/*/run.json" if experiment else "*/*/run.json"
         return [json.loads(p.read_text()) for p in sorted(base.glob(pattern))]
 
     def freeze(self, experiment: str, *, tag: str) -> None:
@@ -284,6 +302,7 @@ def _run_point(config: dict, point: dict, command: str | list[str], store: Resul
     (run_dir / "config.resolved.json").write_text(json.dumps(resolved, indent=2, sort_keys=True))
 
     outputs = run_dir / "outputs"
+    shutil.rmtree(outputs, ignore_errors=True)  # a retry must not archive stale files
     values = {**resolved, "seed": seed, "run_dir": run_dir, "outputs_dir": outputs,
               "run_id": run_id}
     start = time.perf_counter()

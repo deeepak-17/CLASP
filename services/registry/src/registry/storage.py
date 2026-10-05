@@ -42,7 +42,12 @@ from contracts import (
 )
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_ST_MAGIC_MAX_HEADER = 100_000_000  # sanity bound on safetensors header length
+#: Header size bound. A real 24-layer adapter's header is ~30 KB; parsing a
+#: hostile 100 MB header would cost hundreds of MB of RAM.
+_ST_MAX_HEADER = 8 * 1024 * 1024
+_ST_DTYPE_BYTES = {"BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1, "I16": 2,
+                   "U16": 2, "F16": 2, "BF16": 2, "I32": 4, "U32": 4, "F32": 4, "I64": 8,
+                   "U64": 8, "F64": 8}
 
 
 class StorageError(Exception):
@@ -66,23 +71,50 @@ class VersionExists(StorageError):
 
 
 def _validate_name(name: str) -> str:
-    if not _NAME_RE.match(name or ""):
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
         raise InvalidAdapterName(f"invalid adapter name: {name!r}")
     return name
 
 
+def _tensor_span(entry: object) -> tuple[int, int] | None:
+    """(begin, end) of a well-formed header entry, else None."""
+    if not isinstance(entry, dict):
+        return None
+    dtype, shape, offsets = entry.get("dtype"), entry.get("shape"), entry.get("data_offsets")
+    if dtype not in _ST_DTYPE_BYTES or not isinstance(shape, list) or not isinstance(offsets, list):
+        return None
+    if len(offsets) != 2 or not all(isinstance(x, int) and x >= 0 for x in [*shape, *offsets]):
+        return None
+    count = 1
+    for dim in shape:
+        count *= dim
+    begin, end = offsets
+    return (begin, end) if end - begin == count * _ST_DTYPE_BYTES[dtype] else None
+
+
 def is_safetensors(payload: bytes) -> bool:
-    """Cheap structural check: 8-byte LE header length + valid JSON header."""
+    """Structural check without numpy: bounded JSON header whose tensors tile the
+    data section exactly (contiguous, in bounds, sized by dtype x shape)."""
     if len(payload) < 8:
         return False
     header_len = int.from_bytes(payload[:8], "little")
-    if header_len <= 0 or header_len > _ST_MAGIC_MAX_HEADER or 8 + header_len > len(payload):
+    if header_len <= 0 or header_len > _ST_MAX_HEADER or 8 + header_len > len(payload):
         return False
     try:
-        json.loads(payload[8 : 8 + header_len].decode("utf-8"))
+        header = json.loads(payload[8 : 8 + header_len].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return False
-    return True
+    if not isinstance(header, dict):
+        return False
+    spans = [_tensor_span(v) for k, v in header.items() if k != "__metadata__"]
+    if any(span is None for span in spans):
+        return False
+    cursor = 0
+    for begin, end in sorted(spans):
+        if begin != cursor:
+            return False
+        cursor = end
+    return cursor == len(payload) - 8 - header_len
 
 
 class RegistryStore:

@@ -30,6 +30,7 @@ corrupt on-disk record -> a clean 500 with the reason, never a traceback.
 from __future__ import annotations
 
 import json
+import os
 import threading
 
 from contracts import (
@@ -74,6 +75,11 @@ app = FastAPI(
     summary="Versioned safetensors adapter storage with two-sided promotion (P4).",
 )
 
+#: Uploads above this are refused with 413 before they reach storage.
+#: A 6.7B-class rank-16 adapter is ~100 MB; 1 GiB leaves ample headroom.
+MAX_UPLOAD_ENV = "CLASP_MAX_UPLOAD_BYTES"
+DEFAULT_MAX_UPLOAD = 1024 * 1024 * 1024
+
 _store: RegistryStore | None = None
 _WRITE_LOCK = threading.RLock()
 
@@ -115,6 +121,21 @@ async def _data_error(_: Request, exc: StorageError) -> JSONResponse:
     return JSONResponse(status_code=500, content={"detail": f"registry data error: {exc}"})
 
 
+def _max_upload() -> int:
+    try:
+        return int(os.environ.get(MAX_UPLOAD_ENV, DEFAULT_MAX_UPLOAD))
+    except ValueError as e:
+        raise HTTPException(500, f"registry misconfigured: {MAX_UPLOAD_ENV}: {e}") from e
+
+
+def _read_capped(file: UploadFile) -> bytes:
+    limit = _max_upload()
+    payload = file.file.read(limit + 1)
+    if len(payload) > limit:
+        raise HTTPException(413, f"payload exceeds {limit} bytes ({MAX_UPLOAD_ENV})")
+    return payload
+
+
 def _parse_save_meta(raw: str) -> dict:
     """Decode the save envelope into ``RegistryStore.save`` keyword arguments."""
     try:
@@ -125,6 +146,8 @@ def _parse_save_meta(raw: str) -> dict:
         raise HTTPException(422, "meta must be a JSON object")
     try:
         composed = m.get("composed_from")
+        if not isinstance(m.get("set_active", True), bool):
+            raise ValueError("set_active must be a boolean")
         return {
             "kind": AdapterKind(m.get("kind", "client")),
             "hparams": LoRAHyperParams.from_json(m.get("hparams")),
@@ -159,7 +182,7 @@ def save_version(
 ) -> dict:
     """Write a new immutable version and return its metadata."""
     kwargs = _parse_save_meta(meta)
-    payload = file.file.read()
+    payload = _read_capped(file)
     try:
         with _WRITE_LOCK:
             written = get_store().save(name, payload, **kwargs)
@@ -252,6 +275,9 @@ def _composite_on_promote(spec: object, candidate: str) -> tuple[str, PlannedCom
 
 def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...]]:
     try:
+        if not isinstance(body.get("eval"), dict) or not isinstance(
+                body["eval"].get("in_project"), dict):
+            raise ValueError("eval.in_project is required (the D5 primary metric)")
         eval_result = EvalResult.from_json(body["eval"])
         baseline_guard = tuple(GuardMetrics.from_json(g) for g in body.get("baseline_guard", ()))
     except (KeyError, ValueError, TypeError, AttributeError) as e:

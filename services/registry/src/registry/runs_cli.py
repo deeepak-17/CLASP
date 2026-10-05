@@ -37,7 +37,7 @@ def _plan(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    command = [token for token in args.command if token]
+    command = list(args.command)
     if not command:
         print("give the command after --, e.g. -- python train.py --rank {rank}", file=sys.stderr)
         return 2

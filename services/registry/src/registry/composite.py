@@ -32,6 +32,14 @@ _LAYER_MODULE_RE = re.compile(r"(?:^|\.)layers\.(?P<layer>\d+)\.(?:.*\.)?(?P<mod
 
 #: Fields of a PEFT adapter_config that the registry also records.
 _RECORDED_FIELDS = (("rank", "r"), ("lora_alpha", "lora_alpha"))
+#: adapter_config fields that change what the stored tensors MEAN. Plain
+#: rank concatenation is only exact for vanilla LoRA (same as edge.merge's
+#: STRUCTURAL_FIELDS check), so any of these set to a non-default refuses.
+_STRUCTURAL_FIELDS = ("use_dora", "fan_in_fan_out", "lora_bias")
+#: Only these template keys are carried into the composite's adapter_config;
+#: anything else in an uploaded config (e.g. auto_mapping) is dropped.
+_TEMPLATE_KEYS = ("peft_type", "task_type", "bias", "lora_dropout",
+                  "base_model_name_or_path", "revision", "layers_to_transform", "modules_to_save")
 
 
 class CompositeError(ValueError):
@@ -89,7 +97,12 @@ def _embedded_config(payload: bytes) -> dict | None:
     header_len = int.from_bytes(payload[:8], "little")
     header = json.loads(payload[8 : 8 + header_len].decode("utf-8"))
     raw = (header.get("__metadata__") or {}).get("adapter_config")
-    return json.loads(raw) if raw else None
+    if not raw:
+        return None
+    cfg = json.loads(raw)
+    if not isinstance(cfg, dict):
+        raise CompositeError("embedded adapter_config is not a JSON object")
+    return cfg
 
 
 def _module_id(prefix: str) -> str:
@@ -113,7 +126,10 @@ def _factors(tensors: dict[str, np.ndarray]) -> dict[str, tuple[str, np.ndarray,
         a, b = parts["lora_A"], parts["lora_B"]
         if a.ndim != 2 or b.ndim != 2 or a.shape[0] != b.shape[1]:
             raise CompositeError(f"{prefix}: inconsistent factor shapes A{a.shape} B{b.shape}")
-        out[_module_id(prefix)] = (prefix, a, b)
+        module = _module_id(prefix)
+        if module in out:
+            raise CompositeError(f"{prefix} and {out[module][0]} map to the same module {module}")
+        out[module] = (prefix, a, b)
     return out
 
 
@@ -126,20 +142,38 @@ def _check_recorded(cfg: dict, hparams: LoRAHyperParams, label: str) -> None:
             )
 
 
+def _check_rank(factors: dict, rank: object, label: str) -> int:
+    if isinstance(rank, bool) or not isinstance(rank, int) or rank < 1:
+        raise CompositeError(f"{label}: rank must be a positive integer, got {rank!r}")
+    for prefix, a, _ in factors.values():
+        if a.shape[0] != rank:
+            raise CompositeError(
+                f"{label}: registry rank={rank} but {prefix} has rank {a.shape[0]} tensors"
+            )
+    return rank
+
+
 def _prepare(spec: PartSpec, label: str) -> _Part:
     if not math.isfinite(spec.coefficient):
         raise CompositeError(f"{label}: coefficient must be finite, got {spec.coefficient}")
     try:
         tensors = load(spec.payload)
         cfg = _embedded_config(spec.payload)
+    except CompositeError as e:
+        raise CompositeError(f"{label}: {e}") from e
     except Exception as e:  # safetensors raises its own error types
         raise CompositeError(f"{label}: unreadable safetensors payload: {e}") from e
     if cfg is not None:
         _check_recorded(cfg, spec.hparams, label)
-    rank, lora_alpha = spec.hparams.rank, spec.hparams.lora_alpha
+        odd = [f for f in _STRUCTURAL_FIELDS if cfg.get(f)]
+        if odd:
+            raise CompositeError(f"{label}: {', '.join(odd)} set — only plain LoRA merges exactly")
+    factors = _factors(tensors)
+    rank = _check_rank(factors, spec.hparams.rank, label)
+    lora_alpha = spec.hparams.lora_alpha
     rslora = bool(cfg and cfg.get("use_rslora"))
     scale = lora_alpha / math.sqrt(rank) if rslora else lora_alpha / rank
-    return _Part(_factors(tensors), cfg, scale, rank, spec.coefficient)
+    return _Part(factors, cfg, scale, rank, spec.coefficient)
 
 
 def _merge_module(module: str, live: list[_Part]) -> tuple[np.ndarray, np.ndarray]:
@@ -159,16 +193,26 @@ def _merge_module(module: str, live: list[_Part]) -> tuple[np.ndarray, np.ndarra
 
 
 def _output_prefix(module: str, cluster: _Part, client: _Part) -> str:
-    source = client if module in client.factors else cluster
-    return source.factors[module][0]
+    """Keys follow the client's convention, even for a cluster-only module."""
+    if module in client.factors:
+        return client.factors[module][0]
+    cluster_prefix = cluster.factors[module][0]
+    template = next(iter(client.factors.items()), None)
+    if template is None or "." not in module:
+        return cluster_prefix
+    (t_id, (t_prefix, _, _)), (layer, name) = template, module.split(".", 1)
+    t_layer, t_name = t_id.split(".", 1) if "." in t_id else (None, None)
+    if t_layer is None or not t_prefix.endswith(f".{t_name}"):
+        return cluster_prefix
+    head = t_prefix[: -len(t_name)].replace(f"layers.{t_layer}.", f"layers.{layer}.", 1)
+    return head + name
 
 
 def _composite_config(rank: int, modules: tuple[str, ...], template: dict | None,
                       dropout: float) -> dict:
-    cfg = dict(template) if template else {
-        "peft_type": "LORA", "task_type": "CAUSAL_LM", "bias": "none",
-        "lora_dropout": dropout,
-    }
+    cfg = {"peft_type": "LORA", "task_type": "CAUSAL_LM", "bias": "none", "lora_dropout": dropout}
+    if template:
+        cfg.update({k: template[k] for k in _TEMPLATE_KEYS if k in template})
     cfg.update({
         "r": rank, "lora_alpha": rank, "use_rslora": False, "rank_pattern": {},
         "alpha_pattern": {}, "inference_mode": True, "target_modules": list(modules),
