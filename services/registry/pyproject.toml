@@ -4,10 +4,13 @@ version = "0.1.0"
 description = "CLASP State Registry — safetensors versioning, two-sided promotion, FastAPI (P4)."
 requires-python = ">=3.10"
 dependencies = [
-    "clasp-contracts>=1.0,<2.0",
+    "clasp-contracts>=1.1,<2.0",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
+    # D6 composites: exact factor concatenation, no torch needed.
+    "numpy>=1.26",
+    "safetensors>=0.4",
 ]
 
 [project.optional-dependencies]
