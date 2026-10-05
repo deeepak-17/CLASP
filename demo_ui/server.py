@@ -32,6 +32,7 @@ running on :8002/:8004).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import httpx
@@ -41,11 +42,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EDGE_ARTIFACTS = REPO_ROOT / "services" / "edge" / "artifacts"
+EDGE_ARTIFACTS = Path(
+    os.environ.get("CLASP_EDGE_ARTIFACTS", REPO_ROOT / "services" / "edge" / "artifacts")
+)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-CLUSTER_BASE = "http://localhost:8002"
-REGISTRY_BASE = "http://localhost:8004"
+# Host defaults; under compose these point at the service names instead.
+CLUSTER_BASE = os.environ.get("CLASP_CLUSTER_URL", "http://localhost:8002")
+REGISTRY_BASE = os.environ.get("CLASP_REGISTRY_URL", "http://localhost:8004")
 
 # cluster.aggregation.aggregate_svd compares target_modules across clients as
 # an ordered tuple; this is the canonical order every client is normalized to

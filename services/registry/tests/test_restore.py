@@ -79,7 +79,7 @@ def test_restore_unknown_adapter_404(client):
 
 
 def _realistic_adapter(seed: int) -> bytes:
-    """~50 MB: 24 layers x q/k/v/o, rank 16, hidden 2048 — a 1.3B-class adapter."""
+    """~24 MB: 24 layers x q/k/v/o, rank 16, hidden 2048 — a 1.3B-class adapter."""
     rng = np.random.default_rng(seed)
     sd = {}
     for layer in range(24):

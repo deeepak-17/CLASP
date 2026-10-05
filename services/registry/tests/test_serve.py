@@ -7,14 +7,13 @@ one is refused at the TLS layer, and partial TLS config refuses to start.
 from __future__ import annotations
 
 import datetime as dt
-import socket
 import ssl
-import threading
-import time
 
 import httpx
 import pytest
 from registry.serve import TLSConfigError, build_config, tls_settings_from_env
+
+from .conftest import free_port
 
 x509 = pytest.importorskip("cryptography.x509")
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
@@ -70,43 +69,6 @@ def pki(tmp_path):
         "client_cert": _write(tmp_path / "client.pem", cert=cli),
         "client_key": _write(tmp_path / "client.key", key=cli_key),
     }
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture
-def running(tmp_path, monkeypatch):
-    """Start the registry via build_config in a thread; yield its port."""
-    import uvicorn
-
-    servers = []
-
-    def start(env: dict[str, str]):
-        monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "data"))
-        import registry.app as appmod
-
-        appmod._store = None
-        port = _free_port()
-        config = build_config({**env, "CLASP_REGISTRY_HOST": "127.0.0.1",
-                               "CLASP_REGISTRY_PORT": str(port)})
-        server = uvicorn.Server(config)
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
-        deadline = time.time() + 10
-        while not server.started and time.time() < deadline:
-            time.sleep(0.05)
-        assert server.started, "registry did not start"
-        servers.append((server, thread))
-        return port
-
-    yield start
-    for server, thread in servers:
-        server.should_exit = True
-        thread.join(timeout=5)
 
 
 # --------------------------------------------------------------------------- #
@@ -195,4 +157,4 @@ def test_healthcheck_under_mtls_presents_a_client_cert(running, pki):
 def test_healthcheck_reports_down(pki):
     from registry.healthcheck import check
 
-    assert check({"CLASP_REGISTRY_PORT": str(_free_port())}) is False
+    assert check({"CLASP_REGISTRY_PORT": str(free_port())}) is False
