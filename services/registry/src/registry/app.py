@@ -14,7 +14,14 @@ Endpoints:
     POST /adapters/{name}/promote                  D5 two-sided rule on the active version
                                                    (+ optional build-on-promote composite)
     POST /adapters/{name}/restore                  operator restore / rollback drill
+    POST /adapters/{name}/gc                       retention: keep last N + ever-live
+    POST /gc                                       retention across every adapter
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
+
+Every mutating route runs under one process-wide write lock: FastAPI serves
+sync routes from a threadpool, and without it two concurrent saves race for
+the same version number (one gets a spurious 409) and a GC can delete the
+version a concurrent restore is pointing at. The service runs one worker.
 
 Storage errors map to HTTP status in one place (see the exception handlers):
 unknown adapter/version -> 404, bad name -> 422, version race -> 409, and a
@@ -23,6 +30,7 @@ corrupt on-disk record -> a clean 500 with the reason, never a traceback.
 from __future__ import annotations
 
 import json
+import threading
 
 from contracts import (
     CONTRACTS_VERSION,
@@ -48,6 +56,7 @@ from .composition import (
 )
 from .lineage import build_lineage
 from .promotion import decide, restore_decision
+from .retention import RetentionPlan, collect_referenced, default_keep_last, gc_adapter
 from .storage import (
     AdapterNotFound,
     InvalidAdapterName,
@@ -66,6 +75,7 @@ app = FastAPI(
 )
 
 _store: RegistryStore | None = None
+_WRITE_LOCK = threading.RLock()
 
 
 def get_store() -> RegistryStore:
@@ -142,16 +152,17 @@ def list_adapters() -> dict:
 
 
 @app.post("/adapters/{name}/versions", status_code=201)
-async def save_version(
+def save_version(
     name: str,
     file: UploadFile = File(..., description="safetensors payload"),
     meta: str = Form("{}", description="JSON metadata envelope"),
 ) -> dict:
     """Write a new immutable version and return its metadata."""
     kwargs = _parse_save_meta(meta)
-    payload = await file.read()
+    payload = file.file.read()
     try:
-        written = get_store().save(name, payload, **kwargs)
+        with _WRITE_LOCK:
+            written = get_store().save(name, payload, **kwargs)
     except (VersionExists, InvalidAdapterName, KindMismatch):  # mapped by the handlers
         raise
     except StorageError as e:  # bad payload / inconsistent envelope: client error
@@ -210,11 +221,12 @@ def compose(name: str, response: Response, body: dict = Body(...)) -> dict:
     existing version with 200 instead of writing a duplicate.
     """
     store = get_store()
-    try:
-        plan = plan_composite(store, parse_compose_request(body), name)
-    except CompositionError as e:
-        raise HTTPException(422, str(e)) from e
-    meta, created = store_composite(store, name, plan)
+    with _WRITE_LOCK:
+        try:
+            plan = plan_composite(store, parse_compose_request(body), name)
+        except CompositionError as e:
+            raise HTTPException(422, str(e)) from e
+        meta, created = store_composite(store, name, plan)
     if not created:
         response.status_code = 200
     return _metadata_to_dict(meta)
@@ -266,6 +278,11 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     composite request rejects the whole call and records no decision. A
     ROLLBACK builds nothing; the previous composite stays active.
     """
+    with _WRITE_LOCK:
+        return _promote(name, body)
+
+
+def _promote(name: str, body: dict) -> dict:
     store = get_store()
     eval_result, baseline_guard = _parse_promote_body(body)
     if eval_result.adapter.name != name:
@@ -317,6 +334,11 @@ def restore(name: str, body: dict = Body(...)) -> dict:
     Body: ``{"reason": str, "to_version"?: int}``; ``to_version`` defaults to
     the version before the current active one. Recorded in the audit trail.
     """
+    with _WRITE_LOCK:
+        return _restore(name, body)
+
+
+def _restore(name: str, body: dict) -> dict:
     reason, to_version = body.get("reason"), body.get("to_version")
     if not isinstance(reason, str) or not reason.strip():
         raise HTTPException(422, "reason is required (it goes in the audit trail)")
@@ -341,6 +363,67 @@ def restore(name: str, body: dict = Body(...)) -> dict:
     store.set_active(name, to_version)
     store.record_promotion(name, decision)
     return _promotion_decision_to_dict(decision)
+
+
+def _parse_gc_body(body: dict) -> tuple[int, bool]:
+    keep_last, dry_run = body.get("keep_last"), body.get("dry_run", True)
+    if keep_last is None:
+        try:
+            keep_last = default_keep_last()
+        except ValueError as e:
+            raise HTTPException(500, f"registry misconfigured: {e}") from e
+    if isinstance(keep_last, bool) or not isinstance(keep_last, int) or keep_last < 1:
+        raise HTTPException(422, f"keep_last must be an integer >= 1, got {keep_last!r}")
+    if not isinstance(dry_run, bool):
+        raise HTTPException(422, f"dry_run must be a boolean, got {dry_run!r}")
+    return keep_last, dry_run
+
+
+def _gc_report(name: str, plan: RetentionPlan, dry_run: bool) -> dict:
+    return {
+        "name": name,
+        "dry_run": dry_run,
+        "deleted": list(plan.delete),
+        "kept": {str(v): list(reasons) for v, reasons in plan.keep.items()},
+    }
+
+
+@app.post("/adapters/{name}/gc")
+def gc_one(name: str, body: dict = Body(default={})) -> dict:
+    """Retention for one adapter. Body: ``{"keep_last"?: int, "dry_run"?: bool}``.
+
+    Dry run by default; ``keep_last`` defaults to ``CLASP_REGISTRY_KEEP_LAST``
+    (else 5). See ``registry.retention`` for what is always protected.
+    """
+    with _WRITE_LOCK:
+        return _gc_one(name, body)
+
+
+def _gc_one(name: str, body: dict) -> dict:
+    keep_last, dry_run = _parse_gc_body(body)
+    plan = gc_adapter(get_store(), name, keep_last=keep_last, dry_run=dry_run)
+    return _gc_report(name, plan, dry_run)
+
+
+@app.post("/gc")
+def gc_all(body: dict = Body(default={})) -> dict:
+    """Retention across every adapter, with one shared composite-reference scan."""
+    with _WRITE_LOCK:
+        return _gc_all(body)
+
+
+def _gc_all(body: dict) -> dict:
+    keep_last, dry_run = _parse_gc_body(body)
+    store = get_store()
+    referenced = collect_referenced(store)
+    reports = []
+    for name in store.list_adapters():
+        if not store.list_versions(name):
+            continue
+        plan = gc_adapter(store, name, keep_last=keep_last, dry_run=dry_run,
+                          referenced=referenced)
+        reports.append(_gc_report(name, plan, dry_run))
+    return {"dry_run": dry_run, "keep_last": keep_last, "adapters": reports}
 
 
 @app.get("/adapters/{name}/promotions")

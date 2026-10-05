@@ -175,11 +175,14 @@ class RegistryStore:
         return max(earlier) if earlier else None
 
     # -- promotion audit trail (D5/D9) --------------------------------------- #
+    def append_log(self, name: str, log_name: str, line: str) -> None:
+        """Append one JSON line to an adapter's append-only log."""
+        with (self._adapter_dir(name) / log_name).open("a") as f:
+            f.write(line + "\n")
+
     def record_promotion(self, name: str, decision: PromotionDecision) -> None:
         """Append a PromotionDecision to this adapter's audit log (never rewritten)."""
-        log = self._adapter_dir(name) / "promotions.jsonl"
-        with log.open("a") as f:
-            f.write(json.dumps(_promotion_decision_to_dict(decision)) + "\n")
+        self.append_log(name, "promotions.jsonl", json.dumps(_promotion_decision_to_dict(decision)))
 
     def list_promotions(self, name: str) -> list[PromotionDecision]:
         log = self._adapter_dir(name) / "promotions.jsonl"
@@ -192,6 +195,21 @@ class RegistryStore:
         ]
 
     # -- mutation ----------------------------------------------------------- #
+    def delete_version(self, name: str, version: int) -> None:
+        """Remove one version — retention/GC only; refuses the active version.
+
+        The directory is renamed to a hidden trash name first (atomic), so
+        ``list_versions`` never sees a half-deleted version, then removed.
+        """
+        vdir = self._version_dir(name, version)
+        if not vdir.exists():
+            raise AdapterNotFound(f"{name} v{version}")
+        if self.get_active(name) == version:
+            raise StorageError(f"refusing to delete the active version {name} v{version}")
+        trash = Path(tempfile.mkdtemp(prefix=f".trash-v{version}-", dir=self._adapter_dir(name)))
+        os.replace(vdir, trash / "v")
+        shutil.rmtree(trash, ignore_errors=True)
+
     def save(
         self,
         name: str,
