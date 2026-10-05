@@ -10,7 +10,9 @@ Endpoints:
     GET  /adapters/{name}/versions/{v}/file        download the safetensors blob
     GET  /adapters/{name}/active                   metadata for the active version
     GET  /adapters/{name}/lineage                  versions + parents + decisions
+    POST /adapters/{name}/compose                  store a pre-merged D6 composite
     POST /adapters/{name}/promote                  D5 two-sided rule on the active version
+                                                   (+ optional build-on-promote composite)
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
 
 Storage errors map to HTTP status in one place (see the exception handlers):
@@ -36,11 +38,19 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, Response,
 from fastapi.responses import JSONResponse
 
 from . import __version__
+from .composition import (
+    CompositionError,
+    PlannedComposite,
+    parse_compose_request,
+    plan_composite,
+    store_composite,
+)
 from .lineage import build_lineage
 from .promotion import decide
 from .storage import (
     AdapterNotFound,
     InvalidAdapterName,
+    KindMismatch,
     RegistryStore,
     StorageError,
     VersionExists,
@@ -80,6 +90,11 @@ async def _bad_name(_: Request, exc: InvalidAdapterName) -> JSONResponse:
 
 @app.exception_handler(VersionExists)
 async def _version_race(_: Request, exc: VersionExists) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(KindMismatch)
+async def _kind_conflict(_: Request, exc: KindMismatch) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
@@ -136,7 +151,7 @@ async def save_version(
     payload = await file.read()
     try:
         written = get_store().save(name, payload, **kwargs)
-    except (VersionExists, InvalidAdapterName):  # M4 race -> 409, bad name -> 422
+    except (VersionExists, InvalidAdapterName, KindMismatch):  # mapped by the handlers
         raise
     except StorageError as e:  # bad payload / inconsistent envelope: client error
         raise HTTPException(422, str(e)) from e
@@ -184,6 +199,44 @@ def get_lineage(name: str) -> dict:
     return build_lineage(get_store(), name)
 
 
+@app.post("/adapters/{name}/compose", status_code=201)
+def compose(name: str, response: Response, body: dict = Body(...)) -> dict:
+    """Store ``alpha*cluster + beta*client`` as one COMPOSITE version of ``name``.
+
+    Body: ``{"cluster": "cluster-web" | {"name", "version"}, "client": ...,
+    "alpha": 0.5, "beta": 1.0, "base_model"?: str}``. Part versions default to
+    each part's active version. Re-composing identical inputs returns the
+    existing version with 200 instead of writing a duplicate.
+    """
+    store = get_store()
+    try:
+        plan = plan_composite(store, parse_compose_request(body), name)
+    except CompositionError as e:
+        raise HTTPException(422, str(e)) from e
+    meta, created = store_composite(store, name, plan)
+    if not created:
+        response.status_code = 200
+    return _metadata_to_dict(meta)
+
+
+def _composite_on_promote(spec: object, candidate: str) -> tuple[str, PlannedComposite]:
+    """Validate a promote body's ``composite`` block and plan it (writes nothing)."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("name"), str):
+        raise HTTPException(422, "composite must be an object with a 'name'")
+    try:
+        req = parse_compose_request(spec)
+    except CompositionError as e:
+        raise HTTPException(422, f"invalid composite: {e}") from e
+    if candidate not in (req.cluster_name, req.client_name):
+        raise HTTPException(
+            422, f"composite must include the promoted adapter {candidate!r} as cluster or client"
+        )
+    try:
+        return spec["name"], plan_composite(get_store(), req, spec["name"])
+    except CompositionError as e:
+        raise HTTPException(422, f"composite cannot be built: {e}") from e
+
+
 def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...]]:
     try:
         eval_result = EvalResult.from_json(body["eval"])
@@ -200,10 +253,17 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     Saves auto-activate; this endpoint is the checkpoint that confirms or
     reverts that activation once evaluation lands. Body::
 
-        {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...]}
+        {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...],
+         "composite"?: {"name", "cluster", "client", "alpha", "beta"}}
 
     ``baseline_guard`` isn't part of the EvalResult contract — it's an
     API-boundary extension, same pattern as `save`'s ``meta`` envelope.
+
+    With ``composite`` (D6), a PROMOTE also stores the pre-merged composite
+    built from the parts' active versions — i.e. including this candidate.
+    The composite is built in memory *before* anything is written, so a bad
+    composite request rejects the whole call and records no decision. A
+    ROLLBACK builds nothing; the previous composite stays active.
     """
     store = get_store()
     eval_result, baseline_guard = _parse_promote_body(body)
@@ -232,10 +292,21 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 
+    wants_composite = "composite" in body
+    planned = None
+    if wants_composite and decision.action == PromotionAction.PROMOTE:
+        planned = _composite_on_promote(body["composite"], name)
+
     if decision.action == PromotionAction.ROLLBACK:
         store.set_active(name, decision.active_version_after)
     store.record_promotion(name, decision)
-    return _promotion_decision_to_dict(decision)
+    result = _promotion_decision_to_dict(decision)
+    if wants_composite:
+        composite_name, plan = planned if planned else (None, None)
+        result["composite"] = (
+            _metadata_to_dict(store_composite(store, composite_name, plan)[0]) if plan else None
+        )
+    return result
 
 
 @app.get("/adapters/{name}/promotions")

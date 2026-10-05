@@ -142,3 +142,10 @@ def test_save_publishes_both_files_together(store, safetensors_blob):
     vdir = store._adapter_dir("atomic-pair") / "v1"
     assert (vdir / "adapter.safetensors").exists()
     assert (vdir / "metadata.json").exists()
+
+
+def test_save_refuses_to_change_an_adapters_kind(store, safetensors_blob):
+    store.save("flask", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    with pytest.raises(StorageError, match="kind"):
+        store.save("flask", safetensors_blob, kind=AdapterKind.CLUSTER, hparams=LoRAHyperParams())
+    assert store.list_versions("flask") == [1]

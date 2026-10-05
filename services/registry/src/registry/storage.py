@@ -53,6 +53,10 @@ class AdapterNotFound(StorageError):
     pass
 
 
+class KindMismatch(StorageError):
+    """A name's versions all share one AdapterKind; a save tried to change it."""
+
+
 class InvalidAdapterName(StorageError):
     """Name fails the path-safe pattern — a client error, never a 500."""
 
@@ -147,6 +151,19 @@ class RegistryStore:
         tmp.write_text(str(version))
         os.replace(tmp, target)
 
+    def check_kind(self, name: str, kind: AdapterKind) -> None:
+        """Raise KindMismatch if ``name`` already holds versions of another kind."""
+        if name not in self.list_adapters():
+            return
+        versions = self.list_versions(name)
+        if not versions:
+            return
+        existing = self.get_metadata(name, versions[-1]).ref.kind
+        if existing is not kind:
+            raise KindMismatch(
+                f"{name} holds kind {existing.value!r}; refusing to add a {kind.value!r} version"
+            )
+
     def previous_version(self, name: str, version: int) -> int | None:
         """The version immediately before ``version`` in this adapter's history.
 
@@ -199,6 +216,7 @@ class RegistryStore:
             raise StorageError(
                 "composed_from is required for composite adapters and only allowed on them"
             )
+        self.check_kind(name, kind)
 
         adapter_dir = self._adapter_dir(name)
         adapter_dir.mkdir(parents=True, exist_ok=True)
