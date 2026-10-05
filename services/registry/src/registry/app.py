@@ -13,6 +13,7 @@ Endpoints:
     POST /adapters/{name}/compose                  store a pre-merged D6 composite
     POST /adapters/{name}/promote                  D5 two-sided rule on the active version
                                                    (+ optional build-on-promote composite)
+    POST /adapters/{name}/restore                  operator restore / rollback drill
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
 
 Storage errors map to HTTP status in one place (see the exception handlers):
@@ -46,7 +47,7 @@ from .composition import (
     store_composite,
 )
 from .lineage import build_lineage
-from .promotion import decide
+from .promotion import decide, restore_decision
 from .storage import (
     AdapterNotFound,
     InvalidAdapterName,
@@ -307,6 +308,39 @@ def promote(name: str, body: dict = Body(...)) -> dict:
             _metadata_to_dict(store_composite(store, composite_name, plan)[0]) if plan else None
         )
     return result
+
+
+@app.post("/adapters/{name}/restore")
+def restore(name: str, body: dict = Body(...)) -> dict:
+    """Repoint ``active`` by hand — the rollback drill and the D11 restore path.
+
+    Body: ``{"reason": str, "to_version"?: int}``; ``to_version`` defaults to
+    the version before the current active one. Recorded in the audit trail.
+    """
+    reason, to_version = body.get("reason"), body.get("to_version")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(422, "reason is required (it goes in the audit trail)")
+    if to_version is not None and (isinstance(to_version, bool) or not isinstance(to_version, int)):
+        raise HTTPException(422, f"to_version must be an integer, got {to_version!r}")
+
+    store = get_store()
+    active = store.get_active(name)
+    if active is None:
+        store.list_versions(name)  # 404 for an unknown adapter
+        raise HTTPException(409, f"{name} has no active version to restore from")
+    if to_version is None:
+        to_version = store.previous_version(name, active)
+        if to_version is None:
+            raise HTTPException(409, f"{name} v{active} is the first version — nothing to restore")
+    if to_version == active:
+        raise HTTPException(409, f"{name} v{to_version} is already active")
+
+    store.get_metadata(name, to_version)  # 404 if that version does not exist
+    candidate = store.get_metadata(name, active).ref
+    decision = restore_decision(candidate, to_version=to_version, reason=reason.strip())
+    store.set_active(name, to_version)
+    store.record_promotion(name, decision)
+    return _promotion_decision_to_dict(decision)
 
 
 @app.get("/adapters/{name}/promotions")
