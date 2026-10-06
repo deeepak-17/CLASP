@@ -1,0 +1,226 @@
+{
+  "utc": "2026-10-06T08:01:55.311652+00:00",
+  "task": "E3.1/E3.2 client LoRA on real partition",
+  "client_id": "web/client-flask",
+  "client_dir": "C:\\Users\\admin\\Desktop\\Edu\\Final year project\\CLASP_Team_Bundle\\CLASP\\datasets\\materialized\\web\\client-flask",
+  "profile": "dev",
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "quantization": {
+    "load_in_4bit": true,
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_use_double_quant": true
+  },
+  "lora": {
+    "r": 16,
+    "lora_alpha": 16,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "lora_dropout": 0.0
+  },
+  "data": {
+    "seq_len": 1024,
+    "train": {
+      "n_files": 21,
+      "n_tokens": 82788,
+      "n_chunks": 80,
+      "file_order": [
+        "src/flask/__init__.py",
+        "src/flask/app.py",
+        "src/flask/blueprints.py",
+        "src/flask/cli.py",
+        "src/flask/ctx.py",
+        "src/flask/debughelpers.py",
+        "src/flask/globals.py",
+        "src/flask/helpers.py",
+        "src/flask/json/__init__.py",
+        "src/flask/json/provider.py",
+        "src/flask/json/tag.py",
+        "src/flask/logging.py",
+        "src/flask/sansio/app.py",
+        "src/flask/sansio/scaffold.py",
+        "src/flask/sessions.py",
+        "src/flask/signals.py",
+        "src/flask/templating.py",
+        "src/flask/testing.py",
+        "src/flask/typing.py",
+        "src/flask/views.py",
+        "src/flask/wrappers.py"
+      ],
+      "order_sha256": "ae3ecf47d479e1edab44aaf7c716687155da7e8e270147e4d9ce10728aa287f1",
+      "dropped_tail_tokens": 868
+    },
+    "held_out": {
+      "n_files": 2,
+      "n_tokens": 10560,
+      "n_chunks": 11,
+      "file_order": [
+        "src/flask/config.py",
+        "src/flask/sansio/blueprints.py"
+      ],
+      "order_sha256": "58410137e9ffa83a70e539ccaead965763806995a42d61dfae1ec6643646549e",
+      "dropped_tail_tokens": 0
+    }
+  },
+  "optimization": {
+    "lr": 0.001,
+    "scheduler": "cosine_with_warmup",
+    "warmup_ratio": 0.03,
+    "grad_clip": 1.0,
+    "micro_batch": 1,
+    "grad_accum": 1,
+    "chunk_budget": 73,
+    "epochs": 0.912,
+    "budget_plan": "budget_plan.json",
+    "dp_sgd": false,
+    "dp_epochs": null
+  },
+  "seed": 0,
+  "d3": {
+    "composition_order": "D3: client trained on frozen (base + alpha*cluster)",
+    "cluster_adapter": "artifacts\\round2_cluster\\cluster-web",
+    "alpha": 0.5,
+    "cluster_rank": 16,
+    "cluster_scaling_after_alpha": 0.5,
+    "lora_layers_scaled": 96,
+    "n_trainable_tensors": 192,
+    "compatibility": {
+      "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+      "target_modules": [
+        "k_proj",
+        "o_proj",
+        "q_proj",
+        "v_proj"
+      ],
+      "ranks": {
+        "cluster": 16,
+        "client": 16
+      },
+      "scalings": {
+        "cluster": 1.0,
+        "client": 1.0
+      }
+    },
+    "registry_provenance": {
+      "registry_url": "http://localhost:8004",
+      "adapter": "cluster-web",
+      "version": 2,
+      "kind": "cluster",
+      "cluster_id": "web",
+      "aggregation": "svd_exact",
+      "round": 1,
+      "source_clients": [
+        "client-flask",
+        "client-requests",
+        "client-werkzeug"
+      ],
+      "sha256_verified": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279"
+    }
+  },
+  "privacy": {
+    "epsilon": null,
+    "delta": 1e-05,
+    "noise_multiplier": null,
+    "max_grad_norm": null
+  },
+  "results": {
+    "history": [
+      {
+        "step": 10,
+        "loss": 1.0408,
+        "lr": 0.0009689998780094837,
+        "grad_norm": 0.1107
+      },
+      {
+        "step": 20,
+        "loss": 1.0066,
+        "lr": 0.0008496208505021571,
+        "grad_norm": 0.2279
+      },
+      {
+        "step": 30,
+        "loss": 0.9353,
+        "lr": 0.0006629002864800589,
+        "grad_norm": 0.2139
+      },
+      {
+        "step": 40,
+        "loss": 0.86,
+        "lr": 0.0004448030022923652,
+        "grad_norm": 0.1742
+      },
+      {
+        "step": 50,
+        "loss": 1.0275,
+        "lr": 0.0002373373798928507,
+        "grad_norm": 0.2153
+      },
+      {
+        "step": 60,
+        "loss": 0.8878,
+        "lr": 8.046400448777575e-05,
+        "grad_norm": 0.1746
+      },
+      {
+        "step": 70,
+        "loss": 0.9424,
+        "lr": 4.398734550292716e-06,
+        "grad_norm": 0.1872
+      },
+      {
+        "step": 73,
+        "loss": 0.9429,
+        "lr": 0.0,
+        "grad_norm": 0.1942
+      }
+    ],
+    "first_window": 1.0534,
+    "last_window": 0.8737,
+    "window_steps": 15,
+    "loss_slope": -0.001779,
+    "loss_decreased": true,
+    "n_steps_recorded": 73,
+    "optimizer_steps": 73,
+    "max_grad_norm": 0.2359,
+    "micro_batches": 73,
+    "n_trainable_params": 6291456,
+    "wall_seconds": 201.2,
+    "base_held_out": {
+      "loss": 0.8968,
+      "perplexity": 2.452,
+      "n_tokens": 10549
+    },
+    "cluster_start_held_out": {
+      "loss": 0.854,
+      "perplexity": 2.349,
+      "n_tokens": 10549
+    },
+    "final_held_out": {
+      "loss": 0.8162,
+      "perplexity": 2.262,
+      "n_tokens": 10549
+    },
+    "held_out_ppl_delta": -0.19,
+    "held_out_ppl_delta_vs_cluster_start": -0.087,
+    "clip_saturated": false,
+    "grad_clip_threshold": 1.0,
+    "diverging": false,
+    "improved_held_out": true,
+    "learned_signal": "held_out_ppl (D5 primary metric)",
+    "stable": true
+  },
+  "hardware": {
+    "peak_vram_gb": 1.771,
+    "device": "NVIDIA GeForce RTX 2050"
+  },
+  "versions": {
+    "python": "3.10.11",
+    "torch": "2.14.0+cu126",
+    "transformers": "5.16.1"
+  },
+  "d3_deviation": null
+}

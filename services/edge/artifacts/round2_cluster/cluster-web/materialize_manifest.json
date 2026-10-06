@@ -1,0 +1,39 @@
+{
+  "task": "Integration Sprint C1 \u2014 registry -> edge materialization",
+  "registry_url": "http://localhost:8004",
+  "adapter": "cluster-web",
+  "version": 2,
+  "kind": "cluster",
+  "cluster_id": "web",
+  "aggregation": "svd_exact",
+  "round": 1,
+  "source_clients": [
+    "client-flask",
+    "client-requests",
+    "client-werkzeug"
+  ],
+  "sha256_recorded": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279",
+  "sha256_verified": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279",
+  "num_bytes": 25192050,
+  "n_tensors": 192,
+  "adapter_config_provenance": {
+    "peft_type": "safetensors __metadata__ (producer-embedded)",
+    "task_type": "safetensors __metadata__ (producer-embedded)",
+    "use_rslora": "safetensors __metadata__ (producer-embedded)",
+    "use_dora": "safetensors __metadata__ (producer-embedded)",
+    "fan_in_fan_out": "safetensors __metadata__ (producer-embedded)",
+    "lora_bias": "safetensors __metadata__ (producer-embedded)",
+    "bias": "edge.registry_client.PEFT_STRUCTURAL_DEFAULTS",
+    "inference_mode": "safetensors __metadata__ (producer-embedded)",
+    "rank_pattern": "safetensors __metadata__ (producer-embedded)",
+    "alpha_pattern": "safetensors __metadata__ (producer-embedded)",
+    "modules_to_save": "edge.registry_client.PEFT_STRUCTURAL_DEFAULTS",
+    "init_lora_weights": "edge.registry_client.PEFT_STRUCTURAL_DEFAULTS",
+    "r": "registry metadata hparams.rank",
+    "lora_alpha": "registry metadata hparams.lora_alpha",
+    "lora_dropout": "registry metadata hparams.dropout",
+    "target_modules": "registry metadata hparams.target_modules",
+    "base_model_name_or_path": "safetensors __metadata__ (producer-embedded)"
+  },
+  "created_at": "2026-09-06T17:04:12.737821+00:00"
+}
