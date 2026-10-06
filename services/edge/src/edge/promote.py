@@ -149,27 +149,52 @@ def build_eval_result(*, adapter_name: str, version: int, kind: str,
     }
 
 
+def _guard_contract(metrics: Dict):
+    """A guard dict as sent over HTTP -> ``contracts.GuardMetrics`` (int k keys)."""
+    from contracts import GuardMetrics
+
+    return GuardMetrics(benchmark=metrics["benchmark"],
+                        pass_at_k={int(k): float(v) for k, v in metrics["pass_at_k"].items()})
+
+
 def predict_decision(in_project: Dict, baseline_in_project: Optional[Dict],
                      noise_band: float, guard: GuardStatus) -> Tuple[str, str]:
-    """What D5 will say, and why — computed locally for the manifest ONLY.
+    """What D5 will say, and why — for the manifest ONLY.
 
-    The authoritative decision is whatever the registry returns; this exists so
-    the round manifest can record the inputs' implications next to the actual
-    answer, which makes a disagreement between the two visible instead of
-    invisible. It is never substituted for the registry's decision.
+    Computed by the registry's own rule, ``registry.promotion.decide`` (P4), on
+    exactly the inputs being sent: the edge does not keep a copy of D5. The
+    authoritative decision is still whatever the live registry returns; this
+    sits beside it in the manifest so a disagreement between the inputs'
+    implications and the service's answer is visible instead of invisible.
+
+    Returns ("unavailable", why) if the registry package is not installed
+    alongside the edge — a prediction the edge cannot make is not made up.
     """
-    if baseline_in_project is None:
-        improved, why = False, "no baseline_in_project"
-    else:
-        delta = in_project["edit_similarity"] - baseline_in_project["edit_similarity"]
-        improved = delta > noise_band
-        why = f"edit_similarity delta {delta:+.4f} vs band {noise_band:.4f}"
-    if not guard.available:
-        return "rollback", f"{why}; guard unavailable ({guard.reason.split('—')[0].strip()})"
-    drop = guard.baseline["pass_at_k"]["1"] - guard.candidate["pass_at_k"]["1"]
-    guard_ok = drop <= GUARD_PASS_AT_1_TOLERANCE
-    action = "promote" if (improved and guard_ok) else "rollback"
-    return action, f"{why}; HumanEval pass@1 drop {drop:+.4f}"
+    try:
+        from contracts import AdapterKind, AdapterRef, EvalResult, InProjectMetrics
+        from registry.promotion import decide
+    except ImportError as exc:
+        return "unavailable", (f"registry.promotion is not importable here ({exc}); "
+                               f"the registry's live answer is the only decision")
+
+    def metrics(d: Dict) -> InProjectMetrics:
+        return InProjectMetrics(edit_similarity=float(d["edit_similarity"]),
+                                exact_match=float(d["exact_match"]),
+                                perplexity=float(d["perplexity"]),
+                                n_examples=int(d["n_examples"]))
+
+    # Placeholder versions: decide() reads them only to fill
+    # active_version_after; the action and reason depend on the metrics alone.
+    result = EvalResult(
+        adapter=AdapterRef(name="prediction", version=2, kind=AdapterKind.CLUSTER),
+        in_project=metrics(in_project),
+        guard=(_guard_contract(guard.candidate),) if guard.available else (),
+        baseline_in_project=metrics(baseline_in_project) if baseline_in_project else None,
+        baseline_noise_band=float(noise_band))
+    baseline_guard = (_guard_contract(guard.baseline),) if guard.available else ()
+    decision = decide(result, baseline_guard=baseline_guard,
+                      active_version_before=2, previous_version=1)
+    return decision.action.value, decision.reason
 
 
 def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
@@ -212,9 +237,11 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         "noise_band_source": noise_band_source or (
             "PLACEHOLDER 0.0 — with a band of zero 'improved' means 'improved by "
             "any amount'; P5's measured band is still outstanding"),
-        "locally_predicted": {"action": expected_action, "why": expected_why},
+        "locally_predicted": {"action": expected_action, "why": expected_why,
+                              "rule": "registry.promotion.decide"},
         "registry_agrees_with_local_prediction":
-            decision["action"] == expected_action,
+            (None if expected_action == "unavailable"
+             else decision["action"] == expected_action),
         "in_project_measured": measured,
         "in_project_note": (
             "measured on the client's held-out files"
