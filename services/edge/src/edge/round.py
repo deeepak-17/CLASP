@@ -3,7 +3,8 @@
 Runs the whole chain against real artifacts, with no stubs left in it:
 
     trained client adapters          (6, from edge.train_client)
-      -> SVD aggregation per cluster (edge.aggregate, D2)   => 2 REAL cluster adapters
+      -> SVD aggregation per cluster (P2's cluster.aggregation via edge.aggregate,
+         D2), or cluster adapters supplied by --cluster-adapters
       -> composite per client        (edge.merge, D6)        base + a*cluster + b*client
       -> in-project held-out eval    (D5 primary metric)
       -> alpha sweep, config-driven  (G2's "alpha/beta config-driven")
@@ -17,9 +18,11 @@ genuine 3-layer composition and the personalization delta is measurable.
 
 What is still NOT closed, stated plainly
 ----------------------------------------
-* **D3 composition order.** The clients were trained on the frozen BASE, not on
-  frozen (base + a*cluster) — the cluster adapter did not exist when they trained.
-  Fixing it needs a second training pass and is the natural next round.
+* **D3 composition order** is recorded per client (``training``) and for the
+  round (``known_deviations.d3_composition_order``). Round 1's clients trained
+  on the frozen base. A D3 round trains them with ``edge.train_client
+  --cluster-adapter`` and evaluates with ``--cluster-adapters`` pointing at the
+  SAME cluster adapters, so the composite uses the layer the client learned on.
 * **D5's regression guard.** The promotion rule is two-sided: in-project metric
   improves beyond the noise band AND HumanEval pass@1 drops <= 2 points. The
   HumanEval half cannot be scored on Windows (evalplus imports the Unix-only
@@ -82,6 +85,53 @@ def collect_adapters(adapters_root: Path, clients: Dict[str, Path]) -> Dict[str,
     return found
 
 
+def parse_cluster_adapters(specs: Optional[List[str]]) -> Dict[str, Path]:
+    """``["web=dir", "scientific=dir"]`` -> {cluster: Path}, checked to exist."""
+    out: Dict[str, Path] = {}
+    for spec in specs or []:
+        cluster, sep, path = spec.partition("=")
+        if not sep or not cluster or not path:
+            raise SystemExit(f"--cluster-adapters expects CLUSTER=DIR, got {spec!r}")
+        p = Path(path)
+        if not (p / "adapter_config.json").exists():
+            raise SystemExit(f"{p} is not an adapter directory (no adapter_config.json)")
+        out[cluster] = p
+    return out
+
+
+def cluster_provenance(cluster_dir: Path) -> Optional[Dict]:
+    """Where a supplied cluster adapter came from, if the registry pull recorded it."""
+    manifest = Path(cluster_dir) / "materialize_manifest.json"
+    if not manifest.exists():
+        return None
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    return {k: m.get(k) for k in ("registry_url", "adapter", "version", "aggregation",
+                                  "round", "source_clients", "sha256_verified")}
+
+
+def training_composition(adapter_dir: Path) -> Dict:
+    """How a client adapter was trained — on bare base, or D3 on base + a*cluster."""
+    manifest = Path(adapter_dir).parent / "manifest.json"
+    if not manifest.exists():
+        return {"d3": None, "note": "no training manifest beside the adapter"}
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    d3 = m.get("d3")
+    return {"d3": ({"alpha": d3["alpha"], "cluster_adapter": d3["cluster_adapter"]}
+                   if d3 else None),
+            "d3_deviation": m.get("d3_deviation")}
+
+
+def d3_status(results: Dict[str, Dict]) -> str:
+    """One line for the manifest: is this round D3-compliant, and for whom."""
+    d3 = sorted(c for c, r in results.items() if r["training"]["d3"])
+    if results and len(d3) == len(results):
+        return "closed: every client trained on frozen (base + alpha*cluster)"
+    if not d3:
+        return ("open: clients trained on frozen base, not on frozen (base + a*cluster); "
+                "train with edge.train_client --cluster-adapter")
+    return f"partial: D3-trained {d3}; the rest trained on frozen base"
+
+
 def eval_split(model, tokenizer, held_chunks: List[List[int]],
                max_blocks: Optional[int]) -> Dict:
     """Perplexity over a held-out split, on whatever adapter is currently active."""
@@ -111,6 +161,11 @@ def main() -> None:
     ap.add_argument("--only", nargs="+",
                     help="restrict to these clients or clusters (e.g. 'web' or "
                          "'web/client-flask'); used for smoke-testing the pipeline")
+    ap.add_argument("--cluster-adapters", nargs="+", metavar="CLUSTER=DIR",
+                    help="use these cluster adapters (e.g. materialized from the registry "
+                         "by edge.registry_client) instead of aggregating the clients here. "
+                         "Required for a D3 round: the composite must use the SAME cluster "
+                         "layer the clients were trained on top of.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -151,10 +206,27 @@ def main() -> None:
         print(f"  {cid:34s} held-out {held['n_chunks']:4d} blocks "
               f"({held['n_files']} files)")
 
-    print("\naggregating clusters (D2 SVD)...")
     cluster_dirs: Dict[str, Path] = {}
     cluster_stats: Dict[str, Dict] = {}
+    supplied = parse_cluster_adapters(args.cluster_adapters)
+    if supplied:
+        print("\nusing supplied cluster adapters (no local aggregation)...")
+    else:
+        print("\naggregating clusters (D2 SVD, via P2's cluster package)...")
     for cluster, members in sorted(by_cluster.items()):
+        if supplied:
+            if cluster not in supplied:
+                raise SystemExit(f"--cluster-adapters has no adapter for cluster {cluster!r}")
+            cdir = supplied[cluster]
+            _, ccfg = load_adapter(cdir)
+            member_cfgs = [load_adapter(trained[m])[1] for m in members]
+            validate_compatibility([ccfg] + member_cfgs, [f"cluster-{cluster}"] + members,
+                                   contract=CONTRACT_HYPERPARAMS)
+            cluster_dirs[cluster] = cdir
+            cluster_stats[cluster] = {"members": members, "source": str(cdir),
+                                      "provenance": cluster_provenance(cdir)}
+            print(f"  {cluster:12s} <- {cdir}")
+            continue
         adapters = [load_adapter(trained[m]) for m in members]
         validate_compatibility([c for _, c in adapters], members,
                                contract=CONTRACT_HYPERPARAMS)
@@ -281,6 +353,7 @@ def main() -> None:
         improved = personalization_delta < -abs(args.noise_band)
         results[cid] = {
             "cluster": cluster,
+            "training": training_composition(trained[cid]),
             "n_train_files": tokenizer_only_packs[cid]["n_train_files"],
             "n_train_blocks": tokenizer_only_packs[cid]["n_train_blocks"],
             "n_held_out_blocks": held["n_chunks"],
@@ -332,6 +405,8 @@ def main() -> None:
     manifest = {
         "utc": datetime.now(timezone.utc).isoformat(),
         "task": "W4/G2 3-layer composition + W5/G3 full E2E round",
+        "cluster_adapters_source": ("supplied (--cluster-adapters)" if supplied
+                                    else "aggregated here via P2's cluster package"),
         "round": args.round,
         "profile": profile.name,
         "model_id": profile.model_id,
@@ -356,9 +431,7 @@ def main() -> None:
         "versions": {"python": platform.python_version(), "torch": torch.__version__,
                      "transformers": transformers.__version__},
         "known_deviations": {
-            "d3_composition_order": ("clients trained on frozen base, not on frozen "
-                                     "(base + a*cluster) — no cluster adapter existed at "
-                                     "training time; needs a second pass"),
+            "d3_composition_order": d3_status(results),
             "d5_regression_guard": "HumanEval half unavailable on Windows; decisions provisional",
             "d5_noise_band": "placeholder 0.0; P5's measured band outstanding",
             "d1_web_cluster": "on disk = {flask, requests, werkzeug}; D1 says {django, flask, requests}",
