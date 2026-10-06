@@ -35,9 +35,10 @@ Because the pinned config has lora_alpha == r, every scaling is exactly 1.0 and
 the α=0,β=1 case reduces to multiplication by 1.0, which IEEE-754 performs
 exactly. That identity is therefore bitwise, not merely close.
 
-No cluster adapter exists yet
------------------------------
-P2's SVD aggregation does not produce one until W5+, so `make_stub_adapter`
+Stand-in cluster adapters
+-------------------------
+Real cluster adapters now come from P2's cluster service via the registry
+(``edge.registry_client``). `make_stub_adapter` is kept for machinery tests: it
 mints a stand-in (zeros, or seeded random) with a matching config. Zeros is the
 useful one for E3.4: it makes α's contribution provably inert, so any change in
 output has to come from the client term.
@@ -69,6 +70,21 @@ CONTRACT_HYPERPARAMS = {
 # Adapter-config fields that change the MEANING of the stored tensors. Two
 # adapters that disagree on any of these cannot be summed blockwise.
 STRUCTURAL_FIELDS = ("peft_type", "use_rslora", "use_dora", "fan_in_fan_out", "lora_bias")
+
+
+class AdapterCompatibilityError(ValueError):
+    """Adapters that cannot be legally composed, or that break the contract.
+
+    A ``ValueError`` so every existing caller keeps working, but its own type so
+    a caller — the round driver, the D3 trainer, a service boundary — can tell a
+    contract violation apart from any other bad argument and report it as one.
+    ``problems`` holds each violation separately, already phrased for a human,
+    so nothing downstream has to re-parse the message.
+    """
+
+    def __init__(self, problems: Sequence[str]) -> None:
+        self.problems: List[str] = list(problems)
+        super().__init__("incompatible adapters:\n  - " + "\n  - ".join(self.problems))
 
 
 def scaling_of(cfg: Dict) -> float:
@@ -127,7 +143,10 @@ def delta_weights(sd: Dict[str, torch.Tensor], cfg: Dict,
 
 def validate_compatibility(cfgs: Sequence[Dict], names: Sequence[str],
                            contract: Optional[Dict] = CONTRACT_HYPERPARAMS) -> Dict:
-    """Reject adapters that cannot be legally composed. Raises ValueError.
+    """Reject adapters that cannot be legally composed.
+
+    Raises ``AdapterCompatibilityError`` (a ``ValueError``) carrying EVERY
+    violation found, not just the first.
 
     Checked in two directions: adapters against each other (they must describe
     the same base model and the same structural variant of LoRA), and each
@@ -163,7 +182,7 @@ def validate_compatibility(cfgs: Sequence[Dict], names: Sequence[str],
                         f"{name}: {key}={actual!r} violates contract {expected!r}")
 
     if problems:
-        raise ValueError("incompatible adapters:\n  - " + "\n  - ".join(problems))
+        raise AdapterCompatibilityError(problems)
 
     return {"base_model": ref.get("base_model_name_or_path"),
             "target_modules": sorted(ref.get("target_modules") or []),
