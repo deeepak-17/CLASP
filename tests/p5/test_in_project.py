@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from evaluation import completion as canonical
 
 from eval_harness.in_project import (
     CompletionExample,
@@ -110,11 +111,12 @@ class TestCharEditSimilarity:
 
 
 class TestLineExactMatch:
-    def test_trailing_whitespace_ignored(self) -> None:
+    def test_surrounding_whitespace_ignored(self) -> None:
         assert line_exact_match("    return x   ", "    return x")
 
-    def test_leading_whitespace_matters(self) -> None:
-        assert not line_exact_match("return x", "    return x")
+    def test_indentation_is_not_scored(self) -> None:
+        # evaluation.completion compares stripped lines (RepoBench convention).
+        assert line_exact_match("return x", "    return x")
 
     def test_different_content(self) -> None:
         assert not line_exact_match("return x", "return y")
@@ -130,9 +132,13 @@ class TestNoiseBand:
     def test_identical_repeats_is_zero(self) -> None:
         assert noise_band([0.31, 0.31, 0.31]) == 0.0
 
-    def test_known_population_stddev(self) -> None:
-        # values 0.0, 0.0, 0.6 -> mean 0.2, popvar = (0.04+0.04+0.16)/3 = 0.08
-        assert noise_band([0.0, 0.0, 0.6]) == pytest.approx(0.08**0.5)
+    def test_is_the_spread_of_the_repeats(self) -> None:
+        assert noise_band([0.0, 0.0, 0.6]) == pytest.approx(0.6)
+
+    def test_matches_canonical_noise_band(self) -> None:
+        values = [0.512, 0.497, 0.530]
+        expected, _note = canonical.noise_band([{"edit_similarity": v} for v in values])
+        assert noise_band(values) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +148,11 @@ class TestInProjectConfig:
     def test_defaults_are_valid(self) -> None:
         cfg = InProjectConfig()
         assert 0.0 < cfg.held_out_fraction < 1.0
+
+    def test_defaults_match_the_edge_lane(self) -> None:
+        # edge.completion_eval: DEFAULT_MAX_EXAMPLES=60, stride=7, DEFAULT_MAX_NEW_TOKENS=48, greedy.
+        cfg = InProjectConfig()
+        assert (cfg.max_examples_per_client, cfg.stride, cfg.max_new_tokens, cfg.temperature) == (60, 7, 48, 0.0)
 
     def test_rejects_bad_fraction(self) -> None:
         with pytest.raises(EvaluationError):
@@ -153,7 +164,7 @@ class TestInProjectConfig:
         with pytest.raises(EvaluationError):
             InProjectConfig(max_examples_per_client=0)
         with pytest.raises(EvaluationError):
-            InProjectConfig(min_prefix_lines=0)
+            InProjectConfig(stride=0)
         with pytest.raises(EvaluationError):
             InProjectConfig(max_new_tokens=0)
 
@@ -165,61 +176,106 @@ class TestInProjectConfig:
 # ---------------------------------------------------------------------------
 # Example construction
 # ---------------------------------------------------------------------------
+def _record_at(relative_path: str, body: str):
+    base = make_record("alpha", 0, content=body)
+    return replace(base, relative_path=relative_path, file_id=f"alpha:{relative_path}")
+
+
 class TestBuildCompletionExamples:
     def _record(self, body: str):
         return make_record("alpha", 0, content=body)
 
-    def test_skips_blank_comment_and_docstring_targets(self) -> None:
+    def test_skips_blank_comment_and_short_targets(self) -> None:
         body = (
             "import os\n"      # L1
             "import sys\n"     # L2
             "import re\n"      # L3
             "\n"              # L4 blank
             "# a comment\n"   # L5 comment
-            '"""doc"""\n'     # L6 docstring delimiter
-            "value = 1\n"     # L7 <- only scorable target (prefix >= 3 non-blank)
+            ")\n"             # L6 < MIN_TARGET_CHARS
+            "value = 1\n"     # L7 <- only usable target after the 3-line prefix
         )
-        cfg = InProjectConfig(min_prefix_lines=3)
-        examples = build_completion_examples([self._record(body)], config=cfg)
+        examples = build_completion_examples([self._record(body)], config=InProjectConfig(stride=1))
         assert [e.line_number for e in examples] == [7]
         assert examples[0].target == "value = 1"
         assert examples[0].prefix.endswith("\n")
 
     def test_min_prefix_lines_is_respected(self) -> None:
-        body = "a = 1\nb = 2\nc = 3\nd = 4\n"
-        cfg = InProjectConfig(min_prefix_lines=3)
-        examples = build_completion_examples([self._record(body)], config=cfg)
-        assert all(e.line_number >= 4 for e in examples)
+        body = "a_1 = 1\nb_2 = 2\nc_3 = 3\nd_4 = 4\n"
+        examples = build_completion_examples([self._record(body)], config=InProjectConfig(stride=1))
+        assert [e.line_number for e in examples] == [4]
+
+    def test_stride_spreads_the_picks(self) -> None:
+        body = "".join(f"var_{i} = {i}\n" for i in range(40))
+        examples = build_completion_examples([self._record(body)], config=InProjectConfig(stride=7))
+        assert [e.line_number for e in examples] == [4, 11, 18, 25, 32, 39]
 
     def test_cap_is_enforced(self) -> None:
         body = "".join(f"var_{i} = {i}\n" for i in range(50))
-        cfg = InProjectConfig(min_prefix_lines=2, max_examples_per_client=5)
-        examples = build_completion_examples([self._record(body)], config=cfg)
-        assert len(examples) == 5
+        cfg = InProjectConfig(stride=1, max_examples_per_client=5)
+        assert len(build_completion_examples([self._record(body)], config=cfg)) == 5
 
-    def test_is_deterministic_for_a_seed(self) -> None:
+    def test_is_deterministic(self) -> None:
         body = "".join(f"var_{i} = {i}\n" for i in range(40))
-        cfg = InProjectConfig(min_prefix_lines=2, max_examples_per_client=8)
+        cfg = InProjectConfig(stride=2, max_examples_per_client=8)
         first = build_completion_examples([self._record(body)], config=cfg)
         second = build_completion_examples([self._record(body)], config=cfg)
         assert [e.example_id for e in first] == [e.example_id for e in second]
 
-    def test_seed_changes_selection(self) -> None:
-        body = "".join(f"var_{i} = {i}\n" for i in range(40))
-        base = InProjectConfig(min_prefix_lines=2, max_examples_per_client=8)
-        a = build_completion_examples([self._record(body)], config=base)
-        b = build_completion_examples([self._record(body)], config=replace(base, seed=999))
-        assert [e.example_id for e in a] != [e.example_id for e in b]
+    def test_walks_files_in_path_component_order(self) -> None:
+        # "pkg/a.py" sorts after "pkg.py" as a string but before it by path
+        # component — collect_examples sorts Path objects, so we must too.
+        body = "".join(f"var_{i} = {i}\n" for i in range(10))
+        records = [_record_at("pkg.py", body), _record_at("pkg/a.py", body)]
+        examples = build_completion_examples(records, config=InProjectConfig(stride=1))
+        assert examples[0].relative_path == "pkg/a.py"
 
-    def test_output_is_sorted_by_file_then_line(self) -> None:
-        body = "".join(f"var_{i} = {i}\n" for i in range(30))
-        cfg = InProjectConfig(min_prefix_lines=2, max_examples_per_client=10)
-        examples = build_completion_examples([self._record(body)], config=cfg)
-        assert examples == sorted(examples, key=lambda e: (e.file_id, e.line_number))
+    def test_non_python_and_empty_files_are_skipped(self) -> None:
+        body = "".join(f"var_{i} = {i}\n" for i in range(10))
+        records = [_record_at("notes.txt", body), make_record("alpha", 1, content="")]
+        assert build_completion_examples(records, config=InProjectConfig()) == []
 
-    def test_empty_content_is_skipped(self) -> None:
-        rec = make_record("alpha", 1, content="")
-        assert build_completion_examples([rec], config=InProjectConfig()) == []
+
+class TestParityWithCanonicalMetric:
+    """The P5 harness and the edge lane must score the same problems the same way."""
+
+    def _held_out_records(self):
+        files = {
+            "pkg/__init__.py": "".join(f"name_{i} = {i}\n" for i in range(25)),
+            "pkg.py": "import os\n\n\ndef f(x):\n    return x + 1\n\n# done\nresult = f(2)\n",
+            "pkg/sub/mod.py": "".join(f"    value_{i} = compute({i})\n" for i in range(60)),
+            "z_last.py": "a = 1\nb = 2\nc = 3\n",
+        }
+        return [_record_at(path, body) for path, body in files.items()]
+
+    def test_same_examples_as_collect_examples_on_the_materialized_dir(self, tmp_path) -> None:
+        records = self._held_out_records()
+        for record in records:  # what partitions.materialize writes to held_out/
+            target = tmp_path / record.relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(record.content, encoding="utf-8")
+
+        for cap, stride in [(60, 7), (5, 1), (13, 3)]:
+            ours = build_completion_examples(
+                records, config=InProjectConfig(max_examples_per_client=cap, stride=stride)
+            )
+            theirs = canonical.collect_examples(tmp_path, max_examples=cap, stride=stride)
+            assert [(e.relative_path, e.line_no, e.prefix, e.target) for e in ours] == [
+                (e.file, e.line_no, e.prompt, e.target) for e in theirs
+            ]
+            assert canonical.examples_fingerprint(ours) == canonical.examples_fingerprint(theirs)
+
+    def test_same_aggregate_as_canonical_score(self) -> None:
+        examples = build_completion_examples(self._held_out_records(), config=InProjectConfig(stride=2))
+        predictions = {e.example_id: (e.target[:-2] if i % 3 else e.target) for i, e in enumerate(examples)}
+        result = InProjectEvaluator(ScriptedClient(predictions)).evaluate(
+            client_id="client-alpha", cluster_id="alpha", examples=examples, n_held_out_files=4
+        )
+        expected = canonical.score([predictions[e.example_id] for e in examples], examples)
+        assert result.edit_similarity == expected["edit_similarity"]
+        assert result.exact_match == expected["exact_match"]
+        assert result.n_examples == expected["n_examples"]
+        assert result.examples_sha256 == canonical.examples_fingerprint(examples)
 
 
 # ---------------------------------------------------------------------------

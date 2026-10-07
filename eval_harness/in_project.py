@@ -16,10 +16,22 @@ What it measures
 carves off so no client is ever scored on a file it trained on):
 
 * ``exact_match``     — fraction of held-out lines the model reproduces exactly
-  (trailing whitespace ignored, leading indentation kept).
+  (both sides ``strip()``-ed, so indentation is not scored).
 * ``edit_similarity`` — mean character-level normalised edit similarity
-  ``1 - lev(pred, target) / max(len(pred), len(target))`` — the CodeXGLUE
-  code-completion convention. Lies in ``[0, 1]``; 1.0 is a perfect line.
+  ``1 - lev(pred, target) / max(len(pred), len(target))`` on the stripped
+  lines — the RepoBench / CodeXGLUE convention. Lies in ``[0, 1]``.
+
+One definition, not two
+-----------------------
+The metric itself — target filter, example selection, Levenshtein ratio,
+exact match, aggregation, example-set fingerprint and noise band — is
+:mod:`evaluation.completion` (``services/evaluation``), the module the edge
+lane's ``edge.completion_eval`` and the four-seam integration test import.
+This module only adapts it to P5's inputs: it builds the examples from a
+partition shard's held-out *records* instead of a materialized ``held_out/``
+directory, and the selection is arranged so both routes yield the identical
+example set (same ``examples_sha256``) — so a number from this harness and a
+number from the live round are directly comparable.
 
 ``perplexity`` stays :data:`None` here: P5 has no logits. In the integrated
 pipeline P1 hands its held-out perplexity across and it is merged into the
@@ -28,12 +40,13 @@ pipeline P1 hands its held-out perplexity across and it is merged into the
 The noise band
 --------------
 :func:`noise_band` turns *N* repeated baseline evaluations into
-``EvalResult.baseline_noise_band`` — the population standard deviation of the
-held-out edit similarity across the repeats. It is the smallest improvement
-D5 should treat as real rather than run-to-run jitter. With a deterministic
-backend (the mock, or greedy decoding) every repeat is identical and the band
-is 0.0 — correct, and exactly the placeholder the panel notes flag: it only
-becomes a gate once a stochastic backend makes the repeats differ.
+``EvalResult.baseline_noise_band`` — the spread (max − min) of the held-out
+edit similarity across the repeats, exactly as
+:func:`evaluation.completion.noise_band` computes it. It is the smallest
+improvement D5 should treat as real rather than run-to-run jitter. With a
+deterministic backend (the mock, or greedy decoding) every repeat is
+identical and the band is 0.0 — a true statement about decoding, not the
+training-seed band D5 ultimately wants.
 
 Backends
 --------
@@ -45,12 +58,13 @@ must be labelled ``DEMO_TEST`` — see ``scripts/run_in_project_eval.py``.
 
 from __future__ import annotations
 
-import hashlib
-import math
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any, Sequence
 
 from corpus.models import CorpusRecord
+from evaluation import completion as _canonical
+from evaluation.completion import edit_similarity, examples_fingerprint, levenshtein
 from interfaces.contracts import InProjectMetrics, PartitionManifest
 from interfaces.edge_client import EdgeInferenceClient, GenerationRequest
 from partitions.materialize import split_held_out
@@ -60,7 +74,20 @@ from utils.logging_utils import get_logger
 
 _LOG = get_logger(__name__)
 
-_TRIPLE_QUOTES = ('"""', "'''")
+__all__ = [
+    "CompletionExample",
+    "ExampleScore",
+    "InProjectConfig",
+    "InProjectEvalResult",
+    "InProjectEvaluator",
+    "build_completion_examples",
+    "char_edit_similarity",
+    "edit_similarity",
+    "evaluate_client_in_project",
+    "levenshtein",
+    "line_exact_match",
+    "noise_band",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -72,20 +99,18 @@ class InProjectConfig:
 
     Defaults mirror ``configs/materialize_client.yaml`` for the held-out cut
     (``seed``/``held_out_fraction``) so this scores exactly the files P1 was
-    told to hold out, and use short greedy decoding for the completion itself.
+    told to hold out. ``max_examples_per_client``, ``stride`` and
+    ``max_new_tokens`` match ``edge.completion_eval``'s defaults (60 / 7 / 48,
+    greedy) so the two lanes score the same problems the same way.
     """
 
     seed: int = 20260616
     held_out_fraction: float = 0.10
-    #: Upper bound on completion examples drawn per client. Held-out sets are
-    #: small (a handful of files); this caps the busy ones so one large client
-    #: does not dominate the aggregate.
+    #: Upper bound on completion examples drawn per client (edge: ``--max-examples``).
     max_examples_per_client: int = 60
-    #: A candidate line needs at least this many non-blank lines of context
-    #: above it, so the model is completing with real preceding code.
-    min_prefix_lines: int = 3
-    #: Skip pathologically long target lines (generated tables, vendored data).
-    max_target_chars: int = 200
+    #: Take every ``stride``-th usable line of a file (edge: ``--stride``), so
+    #: the picks spread through the file instead of clustering on imports.
+    stride: int = 7
     max_new_tokens: int = 48
     temperature: float = 0.0
 
@@ -94,10 +119,8 @@ class InProjectConfig:
             raise EvaluationError("in_project.held_out_fraction must lie strictly between 0 and 1")
         if self.max_examples_per_client < 1:
             raise EvaluationError("in_project.max_examples_per_client must be >= 1")
-        if self.min_prefix_lines < 1:
-            raise EvaluationError("in_project.min_prefix_lines must be >= 1")
-        if self.max_target_chars < 1:
-            raise EvaluationError("in_project.max_target_chars must be >= 1")
+        if self.stride < 1:
+            raise EvaluationError("in_project.stride must be >= 1")
         if self.max_new_tokens < 1:
             raise EvaluationError("in_project.max_new_tokens must be >= 1")
         if self.temperature < 0.0:
@@ -117,6 +140,17 @@ class CompletionExample:
     line_number: int          # 1-based, the line being predicted
     prefix: str               # every line above it, newline-terminated
     target: str               # the held-out line itself (verbatim)
+
+    # The two attributes ``evaluation.completion.examples_fingerprint`` reads,
+    # so the fingerprint is computed by the canonical function, unchanged.
+    @property
+    def file(self) -> str:
+        return self.relative_path
+
+    @property
+    def line_no(self) -> int:
+        """0-based, as in ``evaluation.completion.CompletionExample``."""
+        return self.line_number - 1
 
 
 @dataclass(frozen=True)
@@ -156,6 +190,9 @@ class InProjectEvalResult:
     seed: int
     perplexity: float | None = None
     generation_errors: int = 0
+    #: ``evaluation.completion.examples_fingerprint`` of the scored set — the
+    #: same field ``edge.completion_eval`` records as ``examples_sha256``.
+    examples_sha256: str = ""
     per_example: tuple[ExampleScore, ...] = field(default_factory=tuple)
 
     def to_metrics(self) -> InProjectMetrics:
@@ -178,139 +215,84 @@ class InProjectEvalResult:
             "generation_errors": self.generation_errors,
             "perplexity": self.perplexity,
             "seed": self.seed,
+            "examples_sha256": self.examples_sha256,
             "examples": [s.to_dict() for s in self.per_example] if include_examples else [],
         }
 
 
 # ---------------------------------------------------------------------------
-# Metrics
+# Metrics — thin names over evaluation.completion (the single implementation)
 # ---------------------------------------------------------------------------
-def levenshtein(a: str, b: str) -> int:
-    """Levenshtein edit distance between two strings (iterative, O(len(a)*len(b)))."""
-    if a == b:
-        return 0
-    if not a:
-        return len(b)
-    if not b:
-        return len(a)
-    previous = list(range(len(b) + 1))
-    for i, ca in enumerate(a, start=1):
-        current = [i]
-        for j, cb in enumerate(b, start=1):
-            current.append(
-                min(
-                    previous[j] + 1,        # deletion
-                    current[j - 1] + 1,     # insertion
-                    previous[j - 1] + (ca != cb),  # substitution
-                )
-            )
-        previous = current
-    return previous[-1]
-
-
 def char_edit_similarity(prediction: str, target: str) -> float:
-    """``1 - lev(prediction, target) / max(len)``, clamped to ``[0, 1]``.
+    """Edit similarity of one predicted line, as the D5 metric scores it.
 
-    Both empty is a perfect match (1.0) — a model correctly predicting an
-    empty completion for an empty target should not be punished.
+    Both sides are ``strip()``-ed and passed to
+    :func:`evaluation.completion.edit_similarity` — the same comparison
+    :func:`evaluation.completion.score` applies.
     """
-    if not prediction and not target:
-        return 1.0
-    denom = max(len(prediction), len(target))
-    return 1.0 - levenshtein(prediction, target) / denom
+    return edit_similarity(prediction.strip(), target.strip())
 
 
 def line_exact_match(prediction: str, target: str) -> bool:
-    """Exact-match a predicted line against the target, ignoring trailing whitespace."""
-    return prediction.rstrip() == target.rstrip()
+    """Exact match on stripped lines, as :func:`evaluation.completion.score` counts it."""
+    return prediction.strip() == target.strip()
 
 
 def noise_band(values: Sequence[float]) -> float:
-    """Population standard deviation of ``values`` — the D5 baseline noise band.
+    """D5 baseline noise band: spread (max − min) of repeated edit similarities.
 
-    Returns 0.0 for fewer than two values: with a single baseline evaluation
-    there is no observable run-to-run variation to band.
+    Delegates to :func:`evaluation.completion.noise_band`. Returns 0.0 for
+    fewer than two values: one evaluation shows no run-to-run variation.
     """
-    n = len(values)
-    if n < 2:
-        return 0.0
-    mean = math.fsum(values) / n
-    variance = math.fsum((v - mean) ** 2 for v in values) / n
-    return math.sqrt(variance)
+    band, _note = _canonical.noise_band([{"edit_similarity": float(v)} for v in values])
+    return float(band)
 
 
 # ---------------------------------------------------------------------------
 # Example construction
 # ---------------------------------------------------------------------------
-def _file_lines(content: str) -> list[str]:
-    lines = content.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()  # a trailing newline is a terminator, not an empty line
-    return lines
-
-
-def _is_scorable_target(line: str, *, max_target_chars: int) -> bool:
-    stripped = line.strip()
-    if not stripped:
-        return False
-    if stripped.startswith("#"):
-        return False
-    if stripped.startswith(_TRIPLE_QUOTES):
-        return False
-    if len(line) > max_target_chars:
-        return False
-    return True
-
-
-def _selection_key(seed: int, file_id: str, line_index: int) -> str:
-    """Deterministic hash order for choosing which lines to score.
-
-    Same ``sha256(seed:key:index)`` construction as
-    :func:`partitions.materialize._holdout_sort_key`, for the same reason:
-    a hash order avoids the artefact of always scoring the first lines of
-    every file.
-    """
-    return hashlib.sha256(f"{seed}:{file_id}:{line_index}".encode("utf-8")).hexdigest()
-
-
 def build_completion_examples(
     records: Sequence[CorpusRecord], *, config: InProjectConfig
 ) -> list[CompletionExample]:
-    """Turn held-out files into a capped, deterministic set of completion tasks.
+    """Next-line problems from held-out records — identical to the directory route.
 
-    Every eligible ``(file, line)`` pair across all ``records`` is pooled, hash
-    -ordered by ``(seed, file_id, line_index)``, and the first
-    ``config.max_examples_per_client`` are kept, then restored to
-    ``(file_id, line_number)`` order. A file with no content, or with no line
-    that clears :func:`_is_scorable_target` given enough preceding context, is
-    skipped.
+    ``edge.completion_eval`` calls :func:`evaluation.completion.collect_examples`
+    on the materialized ``held_out/`` directory, which
+    :func:`partitions.materialize.materialize_client_repo` writes from exactly
+    these records. This walks the records in the order ``collect_examples``
+    walks the files (``.py`` only, sorted path-component-wise like
+    ``sorted(Path.rglob(...))``), with the same per-file quota, the same early
+    stop and :func:`evaluation.completion.extract_examples` doing the
+    selection — so both routes produce the same example set and the same
+    :func:`evaluation.completion.examples_fingerprint`.
     """
-    candidates: list[CompletionExample] = []
-    for record in sorted(records, key=lambda r: r.file_id):
-        if not record.content:
-            continue
-        lines = _file_lines(record.content)
-        for index in range(config.min_prefix_lines, len(lines)):
-            if not _is_scorable_target(lines[index], max_target_chars=config.max_target_chars):
-                continue
-            prefix_lines = lines[:index]
-            if not any(pl.strip() for pl in prefix_lines):
-                continue
-            candidates.append(
+    files = sorted(
+        (r for r in records if r.content and r.relative_path.endswith(".py")),
+        key=lambda r: PurePosixPath(r.relative_path).parts,
+    )
+    if not files:
+        return []
+    max_examples = config.max_examples_per_client
+    per_file = max(1, -(-max_examples // len(files)) * 2)  # collect_examples' quota
+
+    examples: list[CompletionExample] = []
+    for record in files:
+        for ex in _canonical.extract_examples(
+            record.content, record.relative_path, max_per_file=per_file, stride=config.stride
+        ):
+            examples.append(
                 CompletionExample(
-                    example_id=f"{record.file_id}#L{index + 1}",
+                    example_id=f"{record.file_id}#L{ex.line_no + 1}",
                     file_id=record.file_id,
                     relative_path=record.relative_path,
-                    line_number=index + 1,
-                    prefix="\n".join(prefix_lines) + "\n",
-                    target=lines[index],
+                    line_number=ex.line_no + 1,
+                    prefix=ex.prompt,
+                    target=ex.target,
                 )
             )
-
-    candidates.sort(key=lambda ex: _selection_key(config.seed, ex.file_id, ex.line_number))
-    kept = candidates[: config.max_examples_per_client]
-    kept.sort(key=lambda ex: (ex.file_id, ex.line_number))
-    return kept
+        if len(examples) >= max_examples:
+            break
+    return examples[:max_examples]
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +316,7 @@ class InProjectEvaluator:
                     line_number=example.line_number,
                     target=example.target,
                     prediction=prediction,
-                    edit_similarity=char_edit_similarity(prediction.rstrip(), example.target.rstrip()),
+                    edit_similarity=char_edit_similarity(prediction, example.target),
                     exact_match=line_exact_match(prediction, example.target),
                     error=error,
                 )
@@ -357,17 +339,19 @@ class InProjectEvaluator:
                 "(held-out files too short or all comments/blank/docstring lines)"
             )
         scores = self.score_examples(examples)
-        n = len(scores)
+        # The aggregate is computed by the canonical scorer, not re-derived.
+        scored = _canonical.score([s.prediction for s in scores], examples)
         return InProjectEvalResult(
             client_id=client_id,
             cluster_id=cluster_id,
-            edit_similarity=math.fsum(s.edit_similarity for s in scores) / n,
-            exact_match=math.fsum(1.0 for s in scores if s.exact_match) / n,
-            n_examples=n,
+            edit_similarity=float(scored["edit_similarity"]),
+            exact_match=float(scored["exact_match"]),
+            n_examples=int(scored["n_examples"]),
             n_held_out_files=n_held_out_files,
             seed=self._config.seed,
             perplexity=perplexity,
             generation_errors=sum(1 for s in scores if s.error is not None),
+            examples_sha256=examples_fingerprint(examples),
             per_example=tuple(scores),
         )
 
@@ -391,9 +375,9 @@ class InProjectEvaluator:
             return "", f"{type(exc).__name__}: {exc}"
 
         raw = result.completions[0] if result.completions else ""
-        # First line only: clients that ignore stop_sequences (the mock) still
-        # get scored on a single predicted line.
-        return raw.split("\n", 1)[0].rstrip(), None
+        # First line only, cut exactly as edge.completion_eval._first_line does;
+        # clients that ignore stop_sequences (the mock) still get one line.
+        return raw.split("\n", 1)[0], None
 
 
 def evaluate_client_in_project(

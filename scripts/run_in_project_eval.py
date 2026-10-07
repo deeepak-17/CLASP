@@ -194,7 +194,7 @@ def main(args: argparse.Namespace) -> int:
             "seed": config.seed,
             "held_out_fraction": config.held_out_fraction,
             "max_examples_per_client": config.max_examples_per_client,
-            "min_prefix_lines": config.min_prefix_lines,
+            "stride": config.stride,
             "max_new_tokens": config.max_new_tokens,
             "temperature": config.temperature,
             "repeats": args.repeats,
@@ -286,11 +286,13 @@ def _render_report(artefact: dict, per_client: list[dict], schema_failures: list
     report.bullets(
         [
             "**edit_similarity** — mean character-level `1 - lev(pred, target) / max(len)` over held-out "
-            "next-line completions (CodeXGLUE convention). In `[0, 1]`; 1.0 is a perfect line.",
-            "**exact_match** — fraction of held-out lines reproduced exactly (trailing whitespace ignored).",
+            "next-line completions on stripped lines (RepoBench / CodeXGLUE convention), computed by "
+            "`evaluation.completion` — the same module the edge lane scores with. In `[0, 1]`.",
+            "**exact_match** — fraction of held-out lines reproduced exactly (both sides stripped, "
+            "so indentation is not scored).",
             "**perplexity** — `null` here: P5 has no logits. P1 supplies its held-out perplexity at the "
             "integration seam and it is merged into `InProjectMetrics` there.",
-            "**noise band** — population standard deviation of edit_similarity across "
+            "**noise band** — spread (max − min) of edit_similarity across "
             f"{artefact['config']['repeats']} repeated evaluations. D5 promotes only when the in-project gain "
             "exceeds this. 0.0 with a deterministic backend — it becomes a real gate once a stochastic "
             "backend makes the repeats differ.",

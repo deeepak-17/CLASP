@@ -60,5 +60,5 @@ python scripts/validate_partitions.py
 python scripts/validate_partitions.py --config configs/partition_per_developer.yaml
 python scripts/cross_check_client_counts.py
 python scripts/generate_partition_comparison.py
-pytest tests/test_partitions.py tests/test_partitions_per_developer.py -v
+pytest tests/p5/test_partitions.py tests/p5/test_partitions_per_developer.py -v
 ```

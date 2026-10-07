@@ -13,3 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from utils.workspace import ensure_shared_packages  # noqa: E402  (needs the root on sys.path)
+
+ensure_shared_packages(REPO_ROOT)

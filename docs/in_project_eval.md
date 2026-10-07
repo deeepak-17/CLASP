@@ -19,8 +19,8 @@ This module fills two of the three `InProjectMetrics` fields.
 
 | Field | How |
 |---|---|
-| `exact_match` | fraction of held-out lines the model reproduces exactly (trailing whitespace ignored, leading indentation kept) |
-| `edit_similarity` | mean of `1 - levenshtein(pred, target) / max(len(pred), len(target))` over the held-out lines — character-level, the CodeXGLUE code-completion convention. In `[0, 1]`; `1.0` is a perfect line |
+| `exact_match` | fraction of held-out lines the model reproduces exactly — both sides `strip()`-ed, so indentation is **not** scored (stated, not hidden) |
+| `edit_similarity` | mean of `1 - levenshtein(pred, target) / max(len(pred), len(target))` over the stripped held-out lines — character-level, the RepoBench / CodeXGLUE convention. In `[0, 1]`; `1.0` is a perfect line |
 | `perplexity` | **`null` here.** P5 has no logits. In the integrated pipeline P1 hands its held-out perplexity across and it is merged into `InProjectMetrics` at that seam |
 
 ### The held-out set
@@ -29,13 +29,33 @@ This module fills two of the three `InProjectMetrics` fields.
 
 ### Example selection
 
-For each held-out file, every line with ≥ `min_prefix_lines` (default 3) non-blank lines of context above it is a candidate, except blank lines, comment-only lines, docstring delimiters, and lines longer than `max_target_chars` (200). Candidates across all of a client's files are pooled, hash-ordered by `sha256(seed:file_id:line_no)`, and the first `max_examples_per_client` (default 60) are kept — same hash-before-slice trick as the held-out split, so one large file can't dominate and the first lines of every file aren't over-sampled.
+One definition of the metric exists in the repository: `evaluation.completion`
+(`services/evaluation/src/evaluation/completion.py`). The edge lane
+(`edge.completion_eval`), the live round (`scripts/demo_round.py`) and the
+four-seam integration test all score with it, and so does this harness —
+`eval_harness/in_project.py` only adapts the input.
+
+The edge lane calls `collect_examples(held_out_dir)` on the directory
+`partitions.materialize` writes; this harness starts from the same held-out
+*records* and walks them identically:
+
+- `.py` files in path-component order (as `sorted(Path.rglob("*.py"))` orders them);
+- per file, every `stride`-th (default 7) usable line after a 3-line prefix —
+  `evaluation.completion.extract_examples`; a line is usable if it has ≥ 4
+  non-blank characters and is not a comment;
+- the same per-file quota and early stop, capped at `max_examples_per_client`
+  (default 60 — `edge.completion_eval.DEFAULT_MAX_EXAMPLES`).
+
+Both routes therefore yield the same examples and the same
+`examples_sha256` (`evaluation.completion.examples_fingerprint`), which is
+recorded in every result. `tests/p5/test_in_project.py::TestParityWithCanonicalMetric`
+asserts both properties against the real `collect_examples` / `score`.
 
 ## 3. The noise band
 
-`noise_band(values)` = population standard deviation of the held-out `edit_similarity` across **N repeated** baseline evaluations (`--repeats`, default 3). It is `EvalResult.baseline_noise_band`: the smallest in-project gain D5 should treat as signal rather than run-to-run jitter.
+`noise_band(values)` = spread (max − min) of the held-out `edit_similarity` across **N repeated** baseline evaluations — `evaluation.completion.noise_band`, the definition the live round uses — (`--repeats`, default 3). It is `EvalResult.baseline_noise_band`: the smallest in-project gain D5 should treat as signal rather than run-to-run jitter.
 
-With a **deterministic** backend (the mock, or greedy `temperature=0`) every repeat is byte-identical and the band is `0.0` — correct, and exactly the placeholder the panel notes flag. It becomes a real gate once a stochastic backend (`temperature > 0`, or sampling) makes the repeats differ; the mechanism is in place and tested (`tests/test_in_project.py::TestNoiseBand`, and an evaluator test with a varying stub client).
+With a **deterministic** backend (the mock, or greedy `temperature=0`) every repeat is byte-identical and the band is `0.0` — correct, and exactly the placeholder the panel notes flag. It becomes a real gate once a stochastic backend (`temperature > 0`, or sampling) makes the repeats differ; the mechanism is in place and tested (`tests/p5/test_in_project.py::TestNoiseBand`, and an evaluator test with a varying stub client).
 
 ## 4. Running it
 
