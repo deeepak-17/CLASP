@@ -4,6 +4,7 @@ import { NavLink } from "react-router-dom";
 const NAV_ITEMS = [
   { to: "/", label: "Overview", end: true },
   { to: "/in-project", label: "In-Project Metric" },
+  { to: "/rounds", label: "Federated Rounds" },
   { to: "/benchmarks", label: "Benchmarks" },
   { to: "/pass-at-k", label: "Pass@k" },
   { to: "/pipeline", label: "Evaluation Pipeline" },
@@ -15,8 +16,7 @@ interface AppShellProps {
 }
 
 /** Compact sidebar + topbar shell — the "application shell" the Week-5
- * brief asks for, not a marketing layout. Navigation is fixed to the four
- * pages the brief names; nothing else is added. */
+ * brief asks for, not a marketing layout. Navigation lists every page. */
 export function AppShell({ children, topbarRight }: AppShellProps) {
   return (
     <div className="app-shell">

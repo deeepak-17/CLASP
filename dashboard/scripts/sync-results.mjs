@@ -9,7 +9,7 @@
 //
 // Run automatically before `npm run dev` / `npm run build` (see package.json
 // "predev"/"prebuild"); safe to run standalone: `npm run sync-data`.
-import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,4 +45,16 @@ if (existsSync(IN_PROJECT_SOURCE)) {
   console.log(`[sync-data] copied ${IN_PROJECT_SOURCE} -> ${IN_PROJECT_DEST} (${statSync(IN_PROJECT_DEST).size} bytes)`);
 } else {
   console.warn(`[sync-data] ${IN_PROJECT_SOURCE} not found — In-Project page will show an error state.`);
+}
+
+// Federated-round feed (scripts/export_round_feed.py). Optional: the Rounds
+// page shows a "no round exported yet" state when it is absent.
+const ROUNDS_SOURCE = resolve(REPO_ROOT, "eval_harness", "results", "rounds.json");
+const ROUNDS_DEST = resolve(DEST_DIR, "rounds.json");
+if (existsSync(ROUNDS_SOURCE)) {
+  copyFileSync(ROUNDS_SOURCE, ROUNDS_DEST);
+  console.log(`[sync-data] copied ${ROUNDS_SOURCE} -> ${ROUNDS_DEST} (${statSync(ROUNDS_DEST).size} bytes)`);
+} else {
+  if (existsSync(ROUNDS_DEST)) rmSync(ROUNDS_DEST);
+  console.log(`[sync-data] ${ROUNDS_SOURCE} not found — Rounds page will show its empty state.`);
 }

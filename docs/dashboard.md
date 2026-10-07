@@ -109,3 +109,31 @@ npm run sync-data     # re-copy results.json from the repo without a full dev/bu
 - Single, static snapshot of `results.json` per page load — no live/streaming updates, no polling, no websocket. Consistent with the Week-5 brief ("static results.json (placeholder data)"); live updates are out of this week's scope.
 - No historical trend view across multiple runs. `results.json` already supports multiple records (keyed by run_id + benchmark, see `eval_harness/results_store.py::append_results`), but Week 5 wires the *current* snapshot only — a trend chart is future scope, not attempted here.
 - No automated frontend test suite (no Jest/Vitest component tests). Verification for Week 5 was: TypeScript strict-mode compiles clean, the production build succeeds, and the built app was checked in a real browser (see the Week-5 final report for exact steps and results) — reasonable for a Week-5 skeleton, not a substitute for a dashboard test suite if this becomes long-lived.
+
+## Federated Rounds page (`/rounds`)
+
+The dashboard's view of the integrated system. `scripts/demo_round.py` writes
+`round{N}_manifest.json`; `scripts/export_round_feed.py` (`eval_harness/round_feed.py`)
+condenses one or more of them into `eval_harness/results/rounds.json`, which
+`npm run sync-data` copies in (optional — without it the page shows how to produce it).
+
+```bash
+python scripts/export_round_feed.py experiments/w12-integration/results/round1_manifest.json
+cd dashboard && npm run sync-data && npm run dev
+```
+
+Per round and cluster: baseline/candidate registry version and aggregation,
+in-project edit similarity of each, the delta, the HumanEval guard, and the
+registry's D5 decision (provisional when the guard or the metric was not
+measured). Nothing is recomputed; unmeasured values render as N/A.
+
+**Regression alerts.** One alert per reason D5 would refuse a promotion
+(`in_project_not_improved`, `guard_regression`, `in_project_unmeasured`,
+`guard_unavailable`), plus `round_over_round_drop` when a cluster's candidate
+edit similarity falls between rounds. From the D5 reasons the feed predicts the
+action; if the registry decided otherwise a `decision_mismatch` alert is raised,
+so the alert logic and P4's rollback trigger are cross-checked on every export.
+
+Contract between the two sides: `dashboard/src/lib/roundsFeed.ts` (runtime guard)
+mirrors `FEED_VERSION` 1.0.0; `ROUNDS_JSON=<rounds.json> npm test` runs that guard
+against a real exporter output.
