@@ -74,6 +74,19 @@ Pass@k above is only the D5 **guard**. The D5 **primary** metric — completion 
 python scripts/run_in_project_eval.py            # all clients, mock backend, DEMO_TEST
 ```
 
+## 5b. HumanEval guard anchors (D5's second half)
+
+The edge lane generates HumanEval completions on the GPU (`edge.humaneval_baseline` → `eval_out/samples.jsonl` + `manifest.json`) but cannot score them on Windows (evalplus needs the Unix-only `resource` module), so the guard has been unavailable and every D5 decision a provisional ROLLBACK. `eval_harness/guard_anchor.py` / `scripts/score_humaneval_samples.py` score those samples on P5's executor against the published HumanEval tests and write the `anchor.json` that `edge.promote.resolve_guard` reads (`base_pass_at_1`, `subset`):
+
+```bash
+python scripts/score_humaneval_samples.py --samples <eval_out>/samples.jsonl \
+    --generation-manifest <eval_out>/manifest.json --out <eval_out>/anchor.json
+```
+
+- Original HumanEval `check()` tests only — `plus_pass_at_1` is `null`, and the anchor's `scorer` block names the harness. Score the candidate and the baseline with the **same** tool.
+- Measured on the 20 base-model samples committed at `services/edge/eval_out/samples.jsonl` (sha256 `ad912167…`): **base pass@1 = 0.50 (10/20)**. The canonical solutions of the same 20 tasks score 20/20 through the same path (`scripts/sanity_check_scoring.py --benchmark HumanEval --limit 20`), so the misses are the model's.
+- Process-level isolation only (see `eval_harness/execution.py`) — fine for the team's own model's output.
+
 ## 6. `results.json` (`eval_harness/results_store.py`)
 
 Two artefacts, two audiences:
