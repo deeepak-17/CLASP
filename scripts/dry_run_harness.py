@@ -23,13 +23,13 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
-from evaluation.harness import (
+from eval_harness.harness import (
     EvaluationHarness,
     default_dry_run_report_path,
     load_evaluation_config,
     render_dry_run_report,
 )
-from evaluation.models import parse_benchmark_name
+from eval_harness.models import parse_benchmark_name
 from utils.logging_utils import get_logger
 from utils.paths import project_paths
 
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-artifact",
         action="store_true",
-        help="Skip writing the run JSON to evaluation/results/.",
+        help="Skip writing the run JSON to eval_harness/results/.",
     )
     parser.add_argument(
         "--output", type=Path, default=None, help="Report path. Defaults to reports/dry_run_report.md."

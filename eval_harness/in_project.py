@@ -4,7 +4,7 @@ Why this exists
 ---------------
 The D5 two-sided promotion rule the State Registry runs needs a *primary*
 signal — "did this adapter get better at the code it will actually be used
-on?" — not just the HumanEval/MBPP regression guard (:mod:`evaluation.scoring`).
+on?" — not just the HumanEval/MBPP regression guard (:mod:`eval_harness.scoring`).
 Perplexity alone, which is all P1 measures during training, cannot fill
 :class:`~interfaces.contracts.InProjectMetrics` honestly. This module measures
 the other two fields.

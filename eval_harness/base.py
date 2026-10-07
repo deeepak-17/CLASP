@@ -1,10 +1,10 @@
 """Benchmark adapter base class.
 
 An adapter's job is narrow: turn a benchmark's on-disk format into
-:class:`~evaluation.models.EvalTask` objects, build the prompt, and know how
+:class:`~eval_harness.models.EvalTask` objects, build the prompt, and know how
 to stitch a completion back into a runnable program. Everything else —
 generation, retries, artefact writing — belongs to
-:class:`~evaluation.harness.EvaluationHarness`.
+:class:`~eval_harness.harness.EvaluationHarness`.
 
 That split is what lets the Week-3 "wire the runner to the merged model" task
 touch one file instead of two benchmark implementations.
@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from evaluation.models import BenchmarkConfig, EvalTask, task_from_dict
+from eval_harness.models import BenchmarkConfig, EvalTask, task_from_dict
 from interfaces.contracts import BenchmarkName
 from utils.errors import EvaluationError
 from utils.io_utils import read_jsonl

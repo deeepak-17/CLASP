@@ -13,7 +13,7 @@ export function ErrorState({ message }: { message: string }) {
         <div style={{ marginTop: 6 }}>{message}</div>
         <div style={{ marginTop: 6 }}>
           Run <code>npm run sync-data</code> from <code>dashboard/</code> (copies the repository's{" "}
-          <code>evaluation/results/results.json</code> into <code>public/data/</code>), or produce it first
+          <code>eval_harness/results/results.json</code> into <code>public/data/</code>), or produce it first
           with <code>python scripts/run_baseline_eval.py</code> from the repository root.
         </div>
       </div>

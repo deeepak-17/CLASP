@@ -10,7 +10,7 @@ treat as signal rather than run-to-run jitter.
 
 What it writes
 --------------
-* ``evaluation/results/in_project/<run_id>.json`` — per-client metrics, the
+* ``eval_harness/results/in_project/<run_id>.json`` — per-client metrics, the
   noise band, and a schema-valid ``EvalResult`` per client (the shape P4's
   promotion rule reads).
 * ``reports/in_project_eval_report.md``.
@@ -41,13 +41,13 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
-from evaluation.in_project import (
+from eval_harness.in_project import (
     InProjectConfig,
     evaluate_client_in_project,
     noise_band,
 )
-from evaluation.registry import build_inference_client
-from evaluation.models import BackendConfig, EvaluationConfig
+from eval_harness.registry import build_inference_client
+from eval_harness.models import BackendConfig, EvaluationConfig
 from interfaces.contracts import AdapterKind, AdapterRef, BenchmarkName, EvalResult
 from interfaces.edge_client import MockEdgeInferenceClient
 from interfaces.validation import jsonschema_available, validate_document
@@ -102,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None, help="Max completion examples per client. Overrides the default cap.")
     parser.add_argument("--seed", type=int, default=None, help="Held-out split + example-selection seed. Overrides the default.")
     parser.add_argument("--backend", choices=["mock", "edge"], default="mock", help="Inference backend.")
-    parser.add_argument("--output", type=Path, default=None, help="Artefact path. Defaults to evaluation/results/in_project/<run_id>.json.")
+    parser.add_argument("--output", type=Path, default=None, help="Artefact path. Defaults to eval_harness/results/in_project/<run_id>.json.")
     return parser
 
 

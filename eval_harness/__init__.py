@@ -2,7 +2,7 @@
 
 Layout::
 
-    evaluation/
+    eval_harness/
       models.py        normalised task/outcome types and the config schema
       base.py          BenchmarkAdapter base class
       registry.py      adapter registry + inference-backend factory
@@ -14,30 +14,30 @@ Layout::
 
 Scope: Weeks 1-2 build, dry-run and validate the harness structure. Pass@k
 scoring and wiring to P1's merged model are Week-3 deliverables and are marked
-as seams in :mod:`evaluation.harness`.
+as seams in :mod:`eval_harness.harness`.
 """
 
-from evaluation.base import BenchmarkAdapter
-from evaluation.dependencies import (
+from eval_harness.base import BenchmarkAdapter
+from eval_harness.dependencies import (
     DependencyCheckResult,
     check_dependencies,
     render_dependency_report,
 )
-from evaluation.harness import (
+from eval_harness.harness import (
     EvaluationHarness,
     HarnessRun,
     load_evaluation_config,
     render_dry_run_report,
 )
-from evaluation.in_project import (
+from eval_harness.in_project import (
     InProjectConfig,
     InProjectEvalResult,
     InProjectEvaluator,
     evaluate_client_in_project,
     noise_band,
 )
-from evaluation.models import BenchmarkRunSummary, EvalTask, EvaluationConfig, TaskOutcome
-from evaluation.registry import build_adapter, build_adapters, build_inference_client
+from eval_harness.models import BenchmarkRunSummary, EvalTask, EvaluationConfig, TaskOutcome
+from eval_harness.registry import build_adapter, build_adapters, build_inference_client
 
 __version__ = "0.1.0"
 

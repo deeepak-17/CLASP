@@ -8,24 +8,24 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.base import BenchmarkAdapter
-from evaluation.dependencies import (
+from eval_harness.base import BenchmarkAdapter
+from eval_harness.dependencies import (
     DEPENDENCIES,
     DependencySpec,
     check_dependencies,
     check_dependency,
     render_dependency_report,
 )
-from evaluation.execution import execute_program
-from evaluation.harness import (
+from eval_harness.execution import execute_program
+from eval_harness.harness import (
     EvaluationHarness,
     compute_pass_at_k,
     load_evaluation_config,
     render_dry_run_report,
 )
-from evaluation.humaneval.adapter import HumanEvalAdapter
-from evaluation.mbpp.adapter import MbppAdapter
-from evaluation.models import (
+from eval_harness.humaneval.adapter import HumanEvalAdapter
+from eval_harness.mbpp.adapter import MbppAdapter
+from eval_harness.models import (
     BenchmarkConfig,
     EvalTask,
     EvaluationConfig,
@@ -34,15 +34,15 @@ from evaluation.models import (
     TaskOutcome,
     parse_benchmark_name,
 )
-from evaluation.registry import build_adapter, build_adapters, build_inference_client
-from evaluation.results_store import (
+from eval_harness.registry import build_adapter, build_adapters, build_inference_client
+from eval_harness.results_store import (
     GenerationSnapshot,
     ResultRecord,
     ResultsStoreError,
     append_results,
     load_results_index,
 )
-from evaluation.scoring import ScoringError, aggregate_pass_at_k, pass_at_k, task_pass_at_k
+from eval_harness.scoring import ScoringError, aggregate_pass_at_k, pass_at_k, task_pass_at_k
 from interfaces.contracts import AdapterKind, AdapterRef, BenchmarkName, EvalResult
 from interfaces.edge_client import MockEdgeInferenceClient
 from utils.errors import ConfigError, EvaluationError
@@ -360,7 +360,7 @@ class TestWeekThreeSeams:
     """The Week-1/2 scaffold deliberately left `compute_pass_at_k` raising
     `NotImplementedError` as a placeholder for the Week-3 deliverable ("Implement
     Pass@k scoring function"). Week 3 replaces the placeholder with the real
-    thing (see evaluation.scoring); these tests replace the old
+    thing (see eval_harness.scoring); these tests replace the old
     "is explicitly deferred" assertion with checks that it now works.
     """
 
@@ -712,7 +712,7 @@ class TestHarnessScoring:
 class TestRealBenchmarkData:
     """Exercised only when `scripts/fetch_benchmark_data.py` has already been
     run in this checkout (network-dependent, so it is not a hard requirement
-    of the offline-first test suite — see evaluation/base.py's fallback).
+    of the offline-first test suite — see eval_harness/base.py's fallback).
     """
 
     def _tasks_path(self, name: str) -> Path:

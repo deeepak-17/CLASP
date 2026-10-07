@@ -1,6 +1,6 @@
 // Data loader — Week 5 Wednesday: "Wire skeleton to read static results.json".
 //
-//   evaluation/results/results.json  (written by evaluation/results_store.py)
+//   eval_harness/results/results.json  (written by eval_harness/results_store.py)
 //         |  scripts/sync-results.mjs (plain file copy, run before dev/build)
 //         v
 //   dashboard/public/data/results.json
@@ -21,7 +21,7 @@ const DATA_URL = `${import.meta.env.BASE_URL}data/results.json`;
 
 /** Narrow, structural runtime check — enough to catch "wrong shape" without
  * re-implementing full JSON Schema validation client-side (that already
- * happens on the Python side: evaluation/results_store.py::append_results
+ * happens on the Python side: eval_harness/results_store.py::append_results
  * validates every record against interfaces/schemas/eval_result.schema.json
  * before it is ever written). This is a last line of defence against a
  * hand-edited or truncated file reaching the browser. */

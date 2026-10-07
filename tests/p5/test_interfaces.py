@@ -265,12 +265,12 @@ class TestTransformersEdgeInferenceClient:
         """Week-3 Mon/Tue: once P1 registers a factory, backend.kind='edge' stops
         being rejected outright — the seam is live, even before real weights exist.
 
-        Registration mutates module-level state in evaluation.registry, so the
+        Registration mutates module-level state in eval_harness.registry, so the
         factory is saved and restored around the test to avoid leaking into
         other tests regardless of collection order.
         """
-        import evaluation.registry as registry_module
-        from evaluation.registry import build_inference_client
+        import eval_harness.registry as registry_module
+        from eval_harness.registry import build_inference_client
         from interfaces.edge_transformers_adapter import missing_dependencies
 
         previous_factory = registry_module._EDGE_CLIENT_FACTORY

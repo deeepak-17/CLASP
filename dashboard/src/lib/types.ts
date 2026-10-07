@@ -1,9 +1,9 @@
 // Mirrors the Python data model exactly. Keep this file in sync with:
 //   interfaces/contracts.py        (AdapterRef, EvalResult)
-//   evaluation/results_store.py    (GenerationSnapshot, ResultRecord, ResultsIndex)
+//   eval_harness/results_store.py    (GenerationSnapshot, ResultRecord, ResultsIndex)
 //
 // No field here is invented — every property matches a field the Python
-// side actually serialises to evaluation/results/results.json.
+// side actually serialises to eval_harness/results/results.json.
 
 export interface AdapterRef {
   name: string;
@@ -33,7 +33,7 @@ export interface GenerationSnapshot {
   stop_sequences: string[];
 }
 
-/** "REAL" | "DEMO_TEST" — see evaluation/results_store.py::Provenance. */
+/** "REAL" | "DEMO_TEST" — see eval_harness/results_store.py::Provenance. */
 export type Provenance = "REAL" | "DEMO_TEST";
 
 export interface RunMetadata {

@@ -1,6 +1,6 @@
 # CLASP-P5 · Evaluation Dashboard
 
-Week 5 deliverable: a React + Recharts dashboard, wired to the static `evaluation/results/results.json` Weeks 3/4 already produce. Lives at `dashboard/` (a new, self-contained frontend — none existed in this repository before Week 5; nothing here touches the Python pipeline's logic).
+Week 5 deliverable: a React + Recharts dashboard, wired to the static `eval_harness/results/results.json` Weeks 3/4 already produce. Lives at `dashboard/` (a new, self-contained frontend — none existed in this repository before Week 5; nothing here touches the Python pipeline's logic).
 
 ## 1. Purpose
 
@@ -20,7 +20,7 @@ Four pages, a fixed sidebar, matching the Week-5 brief exactly (no extra pages a
 ## 3. Data flow
 
 ```
-evaluation/results/results.json         (Python — evaluation/results_store.py)
+eval_harness/results/results.json         (Python — eval_harness/results_store.py)
         |
         |  scripts/sync-results.mjs      (plain file copy, no transform)
         v
@@ -38,14 +38,14 @@ No backend, no API route, no database. `results.json` is fetched as a static fil
 
 ## 4. results.json usage
 
-`dashboard/src/lib/types.ts` mirrors the Python schema field-for-field (`interfaces/contracts.py::EvalResult`, `evaluation/results_store.py::ResultRecord`/`ResultsIndex`) — nothing is renamed or reshaped between Python and TypeScript. `dashboard/src/lib/loadResults.ts`:
+`dashboard/src/lib/types.ts` mirrors the Python schema field-for-field (`interfaces/contracts.py::EvalResult`, `eval_harness/results_store.py::ResultRecord`/`ResultsIndex`) — nothing is renamed or reshaped between Python and TypeScript. `dashboard/src/lib/loadResults.ts`:
 
 - fetches `/data/results.json`;
 - runtime-validates the parsed JSON against the expected shape (`isResultsIndex` and friends) — a hand-edited or truncated file produces a typed error state, not a crash;
 - exposes `formatPercent`/`formatOrNA` helpers that render **`N/A`** for any missing field, never a fabricated number;
 - exposes `isAllReal`, used to decide whether the DEMO/PLACEHOLDER banner shows.
 
-`npm run sync-data` (also run automatically before `dev`/`build` via `predev`/`prebuild`) copies the repository's real `evaluation/results/results.json` into `dashboard/public/data/`. Python remains the single source of truth; the dashboard never computes or edits a result.
+`npm run sync-data` (also run automatically before `dev`/`build` via `predev`/`prebuild`) copies the repository's real `eval_harness/results/results.json` into `dashboard/public/data/`. Python remains the single source of truth; the dashboard never computes or edits a result.
 
 ## 5. React structure
 
@@ -80,7 +80,7 @@ One chart: a grouped `BarChart` on the Pass@k page (`PassAtKChart.tsx`), x-axis 
 
 ## 7. REAL vs PLACEHOLDER
 
-Every `ResultRecord` in `results.json` carries `run_metadata.provenance`: `"REAL"` or `"DEMO_TEST"` (see `evaluation/results_store.py`). The dashboard:
+Every `ResultRecord` in `results.json` carries `run_metadata.provenance`: `"REAL"` or `"DEMO_TEST"` (see `eval_harness/results_store.py`). The dashboard:
 
 - shows a `REAL EVALUATION` or `DEMO / PLACEHOLDER DATA` badge on every result, on Overview, Benchmarks and Pass@k;
 - shows a page-level banner on Overview whenever **any** result is not REAL;
@@ -107,5 +107,5 @@ npm run sync-data     # re-copy results.json from the repo without a full dev/bu
 
 - Every result currently available is `DEMO_TEST` — the dashboard has not been visually exercised against a `REAL` record because none exists yet in this repository. The REAL-path styling (`badge-real`, the absence of the demo banner) is implemented and covered by the same components, but its first real-world exercise is P1's real merged-model run.
 - Single, static snapshot of `results.json` per page load — no live/streaming updates, no polling, no websocket. Consistent with the Week-5 brief ("static results.json (placeholder data)"); live updates are out of this week's scope.
-- No historical trend view across multiple runs. `results.json` already supports multiple records (keyed by run_id + benchmark, see `evaluation/results_store.py::append_results`), but Week 5 wires the *current* snapshot only — a trend chart is future scope, not attempted here.
+- No historical trend view across multiple runs. `results.json` already supports multiple records (keyed by run_id + benchmark, see `eval_harness/results_store.py::append_results`), but Week 5 wires the *current* snapshot only — a trend chart is future scope, not attempted here.
 - No automated frontend test suite (no Jest/Vitest component tests). Verification for Week 5 was: TypeScript strict-mode compiles clean, the production build succeeds, and the built app was checked in a real browser (see the Week-5 final report for exact steps and results) — reasonable for a Week-5 skeleton, not a substitute for a dashboard test suite if this becomes long-lived.

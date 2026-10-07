@@ -74,7 +74,7 @@ class ProjectPaths:
     # --- evaluation ------------------------------------------------------
     @property
     def evaluation(self) -> Path:
-        return self.root / "evaluation"
+        return self.root / "eval_harness"
 
     @property
     def eval_results(self) -> Path:

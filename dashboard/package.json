@@ -2,7 +2,7 @@
   "name": "clasp-p5-dashboard",
   "private": true,
   "version": "0.1.0",
-  "description": "CLASP Evaluation Dashboard — P5 (Eval & Data). Week-5 React + Recharts skeleton wired to the static evaluation/results/results.json.",
+  "description": "CLASP Evaluation Dashboard — P5 (Eval & Data). Week-5 React + Recharts skeleton wired to the static eval_harness/results/results.json.",
   "type": "module",
   "scripts": {
     "sync-data": "node scripts/sync-results.mjs",

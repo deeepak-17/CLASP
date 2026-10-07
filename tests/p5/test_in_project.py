@@ -1,4 +1,4 @@
-"""Tests for the in-project completion metric (evaluation/in_project.py) and
+"""Tests for the in-project completion metric (eval_harness/in_project.py) and
 the InProjectMetrics / EvalResult contract additions."""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from evaluation.in_project import (
+from eval_harness.in_project import (
     CompletionExample,
     InProjectConfig,
     InProjectEvaluator,
@@ -31,7 +31,7 @@ from partitions.partitioner import load_partition_manifest
 from utils.errors import ContractViolationError, EvaluationError
 from utils.paths import project_paths
 
-from tests.conftest import make_record
+from tests.p5.conftest import make_record
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 
 Downloads the canonical, published task sets from their upstream sources,
 normalises each record into this repository's ``EvalTask`` on-disk schema
-(the same shape ``evaluation/{humaneval,mbpp}/sample_tasks.jsonl`` already
+(the same shape ``eval_harness/{humaneval,mbpp}/sample_tasks.jsonl`` already
 use), and writes them alongside a provenance manifest recording exactly
 where the bytes came from and their SHA-256, so a reviewer can verify this is
 the real benchmark and not a hand-edited stand-in.
@@ -30,7 +30,7 @@ MBPP (Austin et al. 2021)
 Offline-first is preserved
 ---------------------------
 Nothing else in this repository requires this script to have been run:
-``evaluation.base.BenchmarkAdapter._resolve_tasks_path`` already falls back
+``eval_harness.base.BenchmarkAdapter._resolve_tasks_path`` already falls back
 to the bundled ``sample_tasks.jsonl`` (with a loud log warning) whenever the
 configured ``tasks_path`` is missing. A fresh clone with no network access
 runs every test and every other script exactly as it did in Week 1/2.
@@ -110,7 +110,7 @@ def _download(url: str) -> bytes:
         raise FetchError(
             f"Could not download {url}: {exc}. Benchmark data fetching requires network access; "
             f"the harness falls back to the bundled sample fixture (5 tasks) if this file is never "
-            f"written — see evaluation/base.py's BenchmarkAdapter._resolve_tasks_path."
+            f"written — see eval_harness/base.py's BenchmarkAdapter._resolve_tasks_path."
         ) from exc
 
 

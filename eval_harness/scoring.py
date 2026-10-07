@@ -35,7 +35,7 @@ marginalises over every possible k-subset of the n samples actually drawn,
 rather than over a single fresh draw of k.
 
 This module implements only the estimator and its aggregation; running the
-generated code to decide pass/fail is :mod:`evaluation.execution`.
+generated code to decide pass/fail is :mod:`eval_harness.execution`.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ import math
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from evaluation.models import TaskOutcome
+from eval_harness.models import TaskOutcome
 from utils.errors import EvaluationError
 from utils.logging_utils import get_logger
 
@@ -124,8 +124,8 @@ def task_pass_at_k(outcome: TaskOutcome, ks: Sequence[int]) -> TaskPassAtK:
     """Compute pass@k for every ``k`` in ``ks`` for one scored task.
 
     Args:
-        outcome: A :class:`~evaluation.models.TaskOutcome` whose ``passed``
-            field has been populated by :mod:`evaluation.execution` (a list
+        outcome: A :class:`~eval_harness.models.TaskOutcome` whose ``passed``
+            field has been populated by :mod:`eval_harness.execution` (a list
             of one bool per completion — *not* ``None``).
         ks: The k values to compute (e.g. ``[1, 10]`` from
             ``configs/evaluation.yaml``'s ``scoring.pass_at_k``).
@@ -138,7 +138,7 @@ def task_pass_at_k(outcome: TaskOutcome, ks: Sequence[int]) -> TaskPassAtK:
     if outcome.passed is None:
         raise ScoringError(
             f"Task {outcome.task_id} has not been executed (passed=None); "
-            f"run evaluation.execution before scoring"
+            f"run eval_harness.execution before scoring"
         )
     n = len(outcome.passed)
     c = sum(1 for p in outcome.passed if p)

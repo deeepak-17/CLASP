@@ -5,9 +5,9 @@ interface Step {
 }
 
 // Terminology and module references match the repository exactly — nothing
-// here is invented. Cross-check: evaluation/harness.py, evaluation/base.py,
+// here is invented. Cross-check: eval_harness/harness.py, eval_harness/base.py,
 // interfaces/edge_client.py, interfaces/edge_transformers_adapter.py,
-// evaluation/execution.py, evaluation/scoring.py, evaluation/results_store.py.
+// eval_harness/execution.py, eval_harness/scoring.py, eval_harness/results_store.py.
 const STEPS: Step[] = [
   {
     title: "Dataset",
@@ -17,7 +17,7 @@ const STEPS: Step[] = [
   {
     title: "Prompt",
     desc: "Each task's function signature/docstring (HumanEval) or description (MBPP) becomes the model prompt",
-    ref: "evaluation/{humaneval,mbpp}/adapter.py",
+    ref: "eval_harness/{humaneval,mbpp}/adapter.py",
   },
   {
     title: "Merged Model",
@@ -27,27 +27,27 @@ const STEPS: Step[] = [
   {
     title: "Generated Candidates",
     desc: "num_samples_per_task completions per task, truncated at stop sequences",
-    ref: "evaluation/harness.py",
+    ref: "eval_harness/harness.py",
   },
   {
     title: "Code Execution",
     desc: "Each candidate is assembled with the task's tests and run in a subprocess sandbox",
-    ref: "evaluation/execution.py",
+    ref: "eval_harness/execution.py",
   },
   {
     title: "Pass / Fail",
     desc: "Exit code 0 = pass; recorded per completion, tri-state (not-scored vs failed are distinct)",
-    ref: "evaluation/models.py (TaskOutcome)",
+    ref: "eval_harness/models.py (TaskOutcome)",
   },
   {
     title: "Pass@k",
     desc: "Unbiased estimator over (n, c, k) per task, aggregated per benchmark",
-    ref: "evaluation/scoring.py",
+    ref: "eval_harness/scoring.py",
   },
   {
     title: "results.json",
     desc: "Schema-valid EvalResult + run metadata (model, dataset, seed, REAL/DEMO provenance)",
-    ref: "evaluation/results_store.py",
+    ref: "eval_harness/results_store.py",
   },
   {
     title: "Dashboard",

@@ -15,9 +15,9 @@ Why this is a separate module from :mod:`interfaces.edge_client`
 ``interfaces/edge_client.py`` has zero third-party dependencies by design
 (see its module docstring) so every Week-1/2 test runs on a laptop with no
 GPU. ``torch``/``transformers``/``peft`` are heavy, optional, and declared in
-:mod:`evaluation.dependencies` as *not required until Week 3*. Importing them
+:mod:`eval_harness.dependencies` as *not required until Week 3*. Importing them
 unconditionally at module load time would make this file — and therefore
-anything that imports :mod:`evaluation.registry` — fail on exactly the
+anything that imports :mod:`eval_harness.registry` — fail on exactly the
 machines the Week-1 dry run promises to run on. So the imports are deferred
 into ``__init__``, and constructing this class without the dependencies
 installed raises a clear, actionable error instead of an opaque
@@ -54,7 +54,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
 
 _LOG = get_logger(__name__)
 
-#: Packages this adapter needs, matching evaluation.dependencies' declarations.
+#: Packages this adapter needs, matching eval_harness.dependencies' declarations.
 _REQUIRED_PACKAGES = ("torch", "transformers", "peft")
 
 
@@ -288,11 +288,11 @@ def register_transformers_edge_client(
 ) -> None:
     """Register :class:`TransformersEdgeInferenceClient` as the ``edge`` backend.
 
-    Calls :func:`evaluation.registry.register_edge_client_factory` with a
+    Calls :func:`eval_harness.registry.register_edge_client_factory` with a
     closure over the given model/adapter configuration, so that flipping
     ``configs/evaluation.yaml``'s ``backend.kind`` to ``"edge"`` is
     sufficient to switch the whole harness — HumanEval and MBPP both go
-    through :class:`~evaluation.registry.build_inference_client`, so wiring
+    through :class:`~eval_harness.registry.build_inference_client`, so wiring
     happens exactly once here rather than per-benchmark.
 
     This is the concrete answer to Week-3 Monday/Tuesday ("wire the
@@ -300,7 +300,7 @@ def register_transformers_edge_client(
     adapters are available; see the module docstring for why it is not
     exercised end-to-end in this repository today.
     """
-    from evaluation.registry import register_edge_client_factory
+    from eval_harness.registry import register_edge_client_factory
 
     def _factory(_backend_config) -> TransformersEdgeInferenceClient:
         return TransformersEdgeInferenceClient(model_id, adapters=adapters, load_in_4bit=load_in_4bit)

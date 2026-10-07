@@ -19,7 +19,7 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
-from evaluation.dependencies import check_dependencies, render_dependency_report
+from eval_harness.dependencies import check_dependencies, render_dependency_report
 from utils.logging_utils import get_logger
 from utils.paths import project_paths
 

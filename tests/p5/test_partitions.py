@@ -30,7 +30,7 @@ from partitions.validation import (
     imbalance_ratio,
     render_validation_report,
 )
-from tests.conftest import make_record
+from tests.p5.conftest import make_record
 from utils.errors import ConfigError, PartitionError
 
 

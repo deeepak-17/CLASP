@@ -19,7 +19,7 @@ export function PassAtK() {
         <p className="subtitle">
           Pass@k = 1 − C(n−c, k) / C(n, k) — the unbiased estimator (Chen et al., 2021) of the probability
           that at least one of k sampled completions passes, given n generated samples of which c passed.
-          See <code>evaluation/scoring.py</code>.
+          See <code>eval_harness/scoring.py</code>.
         </p>
         <div className="note">
           This is the <strong>regression guard</strong> only. Bars at 0.0 are the offline mock generator,

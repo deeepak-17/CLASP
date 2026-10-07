@@ -132,7 +132,7 @@ class RunConfig:
     limit: int | None = 5
     num_samples_per_task: int = 1
     continue_on_task_error: bool = True
-    results_dir: Path = Path("evaluation/results")
+    results_dir: Path = Path("eval_harness/results")
 
     VALID_MODES = ("dry_run", "full")
 

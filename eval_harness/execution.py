@@ -21,7 +21,7 @@ and it stops the executed code from writing outside its temp directory by
 convention, but it does **not** stop a deliberately malicious payload from
 reading the filesystem, opening a socket, or otherwise using any syscall the
 harness process itself is permitted to make. The Week-2 architecture notes
-this in :mod:`evaluation.harness`: "executing model-generated code
+this in :mod:`eval_harness.harness`: "executing model-generated code
 additionally needs a sandbox policy P3 has to sign off on." That sign-off
 has not happened as of Week 3 — P3's mTLS/DP-SGD workstream is scoped to the
 training path, not eval execution. Running this against completions from a

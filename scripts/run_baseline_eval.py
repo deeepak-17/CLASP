@@ -17,7 +17,7 @@ proves the scoring path is correct end to end and gives a reproducible
 reference point to diff future *real* backend runs against.
 
 Whether a real model is available is checked explicitly (see
-``evaluation.dependencies``); when it is not — as in this environment, no
+``eval_harness.dependencies``); when it is not — as in this environment, no
 GPU, no downloaded DeepSeek-Coder-6.7B weights, no P1 adapter — this script
 refuses to silently substitute a mock and call it a measurement. Every
 artefact it writes is labelled ``DEMO_TEST`` and says why.
@@ -39,8 +39,8 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
-from evaluation.harness import EvaluationHarness, load_evaluation_config
-from evaluation.results_store import GenerationSnapshot, ResultRecord, append_results, default_results_path
+from eval_harness.harness import EvaluationHarness, load_evaluation_config
+from eval_harness.results_store import GenerationSnapshot, ResultRecord, append_results, default_results_path
 from interfaces.contracts import AdapterKind, AdapterRef
 from interfaces.edge_client import MockEdgeInferenceClient
 from utils.io_utils import read_json
@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-samples", type=int, default=None, help="Samples per task. Overrides run.num_samples_per_task.")
     parser.add_argument("--k", type=int, nargs="+", default=None, help="k values for Pass@k. Overrides scoring.pass_at_k.")
     parser.add_argument(
-        "--output", type=Path, default=None, help="results.json path. Defaults to evaluation/results/results.json."
+        "--output", type=Path, default=None, help="results.json path. Defaults to eval_harness/results/results.json."
     )
     return parser
 

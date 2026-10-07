@@ -1,7 +1,7 @@
 """Root conftest — makes the repository importable without installation.
 
 CLASP-P5 uses a flat top-level package layout (``utils/``, ``interfaces/``,
-``corpus/``, ``partitions/``, ``evaluation/``) as specified by the module
+``corpus/``, ``partitions/``, ``eval_harness/``) as specified by the module
 plan. Those names are deliberately *not* installed into ``site-packages``:
 ``utils`` and ``interfaces`` are common enough that installing them globally
 would risk shadowing another package in a teammate's environment.

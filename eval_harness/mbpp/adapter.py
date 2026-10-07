@@ -14,8 +14,8 @@ description, the first assert as a worked specification example, and a stub
 
 from __future__ import annotations
 
-from evaluation.base import BenchmarkAdapter
-from evaluation.models import EvalTask
+from eval_harness.base import BenchmarkAdapter
+from eval_harness.models import EvalTask
 from interfaces.contracts import BenchmarkName
 
 

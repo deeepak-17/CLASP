@@ -36,11 +36,11 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
-from evaluation.execution import execute_program
-from evaluation.harness import load_evaluation_config
-from evaluation.models import EvalTask, TaskOutcome, parse_benchmark_name
-from evaluation.registry import build_adapter
-from evaluation.scoring import aggregate_pass_at_k
+from eval_harness.execution import execute_program
+from eval_harness.harness import load_evaluation_config
+from eval_harness.models import EvalTask, TaskOutcome, parse_benchmark_name
+from eval_harness.registry import build_adapter
+from eval_harness.scoring import aggregate_pass_at_k
 from interfaces.contracts import BenchmarkName
 from utils.logging_utils import get_logger
 from utils.paths import project_paths

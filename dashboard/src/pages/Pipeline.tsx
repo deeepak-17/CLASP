@@ -8,7 +8,7 @@ export function Pipeline() {
         <h1>How a Pass@k number is produced</h1>
         <p className="subtitle">
           Each stage below is a real module in this repository, not a conceptual simplification — hover
-          terms map 1:1 onto <code>evaluation/</code> and <code>interfaces/</code>.
+          terms map 1:1 onto <code>eval_harness/</code> and <code>interfaces/</code>.
         </p>
       </div>
 
@@ -30,12 +30,12 @@ export function Pipeline() {
           <p style={{ fontSize: 13 }}>
             <strong>Code Execution</strong> is a real subprocess run of the assembled program (prompt +
             completion + the task's own tests), not a static check — see{" "}
-            <code>evaluation/execution.py</code>.
+            <code>eval_harness/execution.py</code>.
           </p>
           <p style={{ fontSize: 13 }}>
             <strong>results.json</strong> keeps two files apart: one raw, per-run artefact holding every
             completion, and this dashboard-facing index holding scored summaries plus REAL/DEMO provenance
-            — see <code>evaluation/results_store.py</code>.
+            — see <code>eval_harness/results_store.py</code>.
           </p>
         </div>
       </div>

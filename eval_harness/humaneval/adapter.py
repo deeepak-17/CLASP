@@ -19,8 +19,8 @@ Fetching the real dataset is a Week-3 concern
 
 from __future__ import annotations
 
-from evaluation.base import BenchmarkAdapter
-from evaluation.models import EvalTask
+from eval_harness.base import BenchmarkAdapter
+from eval_harness.models import EvalTask
 from interfaces.contracts import BenchmarkName
 
 

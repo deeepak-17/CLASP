@@ -1,6 +1,6 @@
 # CLASP-P5 · In-Project Completion Metric ("in-project eval v1")
 
-Reference for `evaluation/in_project.py` and `scripts/run_in_project_eval.py`.
+Reference for `eval_harness/in_project.py` and `scripts/run_in_project_eval.py`.
 
 ## 1. Why this exists
 
@@ -9,7 +9,7 @@ The D5 promotion rule the State Registry runs is **two-sided**:
 > promote iff the *in-project* metric improves beyond `baseline_noise_band`
 > **and** the HumanEval pass@1 guard has not dropped more than 2 points; else roll back.
 
-HumanEval/MBPP pass@k (`evaluation/scoring.py`) is only the **guard** — a regression tripwire. It does not answer "did this adapter get better at *the code this client actually writes*?" That is the **primary** signal, and until now nothing in P5 measured it: `contracts.InProjectMetrics` defines the fields, P1 measures only perplexity, so `EvalResult.in_project` could not be filled honestly and seam C2 was theatre.
+HumanEval/MBPP pass@k (`eval_harness/scoring.py`) is only the **guard** — a regression tripwire. It does not answer "did this adapter get better at *the code this client actually writes*?" That is the **primary** signal, and until now nothing in P5 measured it: `contracts.InProjectMetrics` defines the fields, P1 measures only perplexity, so `EvalResult.in_project` could not be filled honestly and seam C2 was theatre.
 
 This module fills two of the three `InProjectMetrics` fields.
 
@@ -48,7 +48,7 @@ python scripts/run_in_project_eval.py --backend edge        # P1's client, once 
 
 Writes:
 
-- `evaluation/results/in_project/<run_id>.json` — per-client metrics, the noise band, and a **schema-valid `EvalResult` per client** (validated against `interfaces/schemas/eval_result.schema.json`, proving the shape P4's rule reads).
+- `eval_harness/results/in_project/<run_id>.json` — per-client metrics, the noise band, and a **schema-valid `EvalResult` per client** (validated against `interfaces/schemas/eval_result.schema.json`, proving the shape P4's rule reads).
 - `reports/in_project_eval_report.md`.
 
 ## 5. REAL vs DEMO/TEST

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import Callable, Final
 
-from evaluation.base import BenchmarkAdapter
-from evaluation.humaneval.adapter import HumanEvalAdapter
-from evaluation.mbpp.adapter import MbppAdapter
-from evaluation.models import BackendConfig, EvaluationConfig
+from eval_harness.base import BenchmarkAdapter
+from eval_harness.humaneval.adapter import HumanEvalAdapter
+from eval_harness.mbpp.adapter import MbppAdapter
+from eval_harness.models import BackendConfig, EvaluationConfig
 from interfaces.contracts import BenchmarkName
 from interfaces.edge_client import EdgeInferenceClient, MockEdgeInferenceClient
 from utils.errors import EvaluationError
@@ -83,7 +83,7 @@ def build_inference_client(config: EvaluationConfig) -> EdgeInferenceClient:
         if _EDGE_CLIENT_FACTORY is None:
             raise EvaluationError(
                 "backend.kind='edge' requires P1's Edge Layer, which is not integrated until "
-                "Week 3. Register a factory via evaluation.registry.register_edge_client_factory, "
+                "Week 3. Register a factory via eval_harness.registry.register_edge_client_factory, "
                 "or set backend.kind='mock' in configs/evaluation.yaml."
             )
         return _EDGE_CLIENT_FACTORY(backend)

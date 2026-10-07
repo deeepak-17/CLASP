@@ -22,7 +22,7 @@ evaluation:
     limit: 5
     num_samples_per_task: 1
     continue_on_task_error: true
-    results_dir: "evaluation/results"
+    results_dir: "eval_harness/results"
 
   generation:
     max_new_tokens: 384
@@ -56,16 +56,16 @@ evaluation:
       # openai/human-eval (MIT). Not committed (network artefact, like
       # datasets/raw/); a fresh clone without network falls back to the
       # bundled 5-task fixture automatically.
-      tasks_path: "evaluation/humaneval/tasks.jsonl"
-      sample_tasks_path: "evaluation/humaneval/sample_tasks.jsonl"
+      tasks_path: "eval_harness/humaneval/tasks.jsonl"
+      sample_tasks_path: "eval_harness/humaneval/sample_tasks.jsonl"
 
     mbpp:
       enabled: true
       # Week 3: real MBPP test split (task_id 11-510, Austin et al. 2021
       # convention), fetched the same way. See
-      # evaluation/mbpp/tasks_manifest.json for exact provenance/skip counts.
-      tasks_path: "evaluation/mbpp/tasks.jsonl"
-      sample_tasks_path: "evaluation/mbpp/sample_tasks.jsonl"
+      # eval_harness/mbpp/tasks_manifest.json for exact provenance/skip counts.
+      tasks_path: "eval_harness/mbpp/tasks.jsonl"
+      sample_tasks_path: "eval_harness/mbpp/sample_tasks.jsonl"
       # MBPP prompts embed the first assert as a specification example.
       include_test_example_in_prompt: true
 
@@ -74,8 +74,8 @@ evaluation:
     # k values for the unbiased Pass@k estimator (Chen et al., 2021).
     pass_at_k: [1, 10]
     # Executes every assembled program in a subprocess sandbox
-    # (evaluation.execution) to determine pass/fail. Process-level isolation
-    # only — see evaluation/execution.py's module docstring for exactly what
+    # (eval_harness.execution) to determine pass/fail. Process-level isolation
+    # only — see eval_harness/execution.py's module docstring for exactly what
     # that does and does not guarantee, and why P3 sign-off on a stronger
     # sandbox (container/gVisor) is still recommended before running this
     # against untrusted input beyond this repository's own mock/reference

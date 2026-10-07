@@ -20,7 +20,7 @@ from corpus.models import (
     SourceConfig,
     SyntheticConfig,
 )
-from evaluation.models import (
+from eval_harness.models import (
     BackendConfig,
     BenchmarkConfig,
     EvaluationConfig,

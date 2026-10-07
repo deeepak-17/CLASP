@@ -1,7 +1,7 @@
 // Loader for the in-project completion metric artifact — the D5 primary
 // signal (edit similarity / exact match on held-out client code), plus the
 // aggregation ablation. Same pattern as loadResults.ts: fetch a static file
-// copied from evaluation/results/in_project_metric.json by sync-results.mjs,
+// copied from eval_harness/results/in_project_metric.json by sync-results.mjs,
 // runtime-validate its shape, expose a typed state to the page.
 import { useEffect, useState } from "react";
 

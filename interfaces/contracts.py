@@ -168,7 +168,7 @@ class InProjectMetrics:
     """D5 primary metric — completion quality on a client's held-out files.
 
     Mirrors the frozen ``contracts.InProjectMetrics`` (P4's package). Produced
-    by :mod:`evaluation.in_project`: ``edit_similarity`` and ``exact_match``
+    by :mod:`eval_harness.in_project`: ``edit_similarity`` and ``exact_match``
     come from next-line completion over each client's held-out ``.py`` files;
     ``perplexity`` is P1's held-out number when the integrated pipeline
     supplies it, or ``None`` when P5 runs standalone against the mock backend
