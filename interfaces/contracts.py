@@ -20,9 +20,11 @@ Contract                Producer   Consumer    Week-1/2 relevance
 ``PartitionManifest``   P5         P1, P2, P4  Week-2 Thursday deliverable.
 ======================  =========  ==========  =====================================
 
-Migration path: when P4 freezes ``/contracts``, replace the bodies below with
-re-exports from that package. :mod:`interfaces.validation` and
-``scripts/check_contract_compliance.py`` exist to prove the two agree.
+P4 has since frozen ``contracts`` at v1.0.0. These classes stay as P5's
+internal record types (the results store and the dashboard read them); every
+value that crosses into the registry goes through
+:mod:`interfaces.registry_wire`, which writes and reads the frozen v1.0 wire
+shape and is tested against the real registry app.
 
 These are intentionally plain ``dataclasses`` with no third-party dependency,
 matching the style of the upstream contracts package.

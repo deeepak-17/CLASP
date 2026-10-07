@@ -21,6 +21,7 @@ Module                     Owner  P5 relationship
 :mod:`.cluster_client`     P2     P5 hands it the partition plan (Week 2).
 :mod:`.security_client`    P3     P5 reads epsilon to annotate results (Week 7+).
 :mod:`.registry_client`    P4     P5 reads snapshots to know what to evaluate.
+:mod:`.registry_wire`      P4     contracts v1.0 JSON both ways + real-API reader.
 =========================  =====  ==============================================
 """
 
@@ -48,6 +49,7 @@ from interfaces.registry_client import (
     RegistryReadClient,
     SnapshotNotFoundError,
 )
+from interfaces.registry_wire import HttpRegistryReadClient
 from interfaces.security_client import NullPrivacyAccountant, PrivacyAccountant, PrivacyBudget
 
 __all__ = [
@@ -60,6 +62,7 @@ __all__ = [
     "EvalResult",
     "GenerationRequest",
     "GenerationResult",
+    "HttpRegistryReadClient",
     "InProjectMetrics",
     "MockClusterClient",
     "MockEdgeInferenceClient",
