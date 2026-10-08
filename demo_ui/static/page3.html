@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>CLASP Demo — Compose, Evaluate, Promote</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1>CLASP <span>Panel Demo</span> — Page 3 of 3</h1>
+  <nav class="pages">
+    <a href="/static/page1.html">1 · Edge Training</a>
+    <a href="/static/page2.html">2 · Cluster + Registry</a>
+    <a href="/static/page3.html" class="active">3 · Compose + Promote</a>
+  </nav>
+  <div class="healthbar" id="healthbar"></div>
+</header>
+
+<main>
+  <div class="pipeline">
+    <div class="pipe-step done">Edge Clients</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step done">Cluster Aggregation</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step done">Registry Versioning</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step current">Edge Fetch + Composition</div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step current">Evaluation / Promotion</div>
+  </div>
+
+  <div class="section-title">Composite merge + TTFT — real GPU run <span class="badge synthetic">RECORDED, NOT LIVE</span></div>
+  <p class="hint">
+    Source: <code>services/edge/artifacts/round1_out/round_manifest.json</code> — a real
+    <code>base ⊕ α·cluster ⊕ β·client</code> composite built and measured on an RTX 2050
+    (PR #9). Not re-run live here: composing and evaluating needs the real base model
+    + GPU, unavailable on the demo laptop.
+  </p>
+  <div class="grid" id="round-cards"></div>
+
+  <div class="section-title">Per-client alpha sweep (personalization delta)</div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Client</th><th>Best α</th><th>Base ppl</th><th>Client-only ppl</th><th>Composite ppl</th><th>Δ ppl</th><th>Provisional decision</th></tr></thead>
+      <tbody id="sweep-body"><tr><td colspan="7">loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="section-title">Promote / Rollback — real Registry decision (seam C2, live)</div>
+  <p class="hint">
+    Perplexity numbers below are the real measured values from the run above.
+    <code>edit_similarity</code>/<code>exact_match</code> are placeholders (P5's
+    in-project metric, B5, is not implemented yet) — the D5 rule itself, and the
+    PROMOTE/ROLLBACK it returns, is 100% real and runs live against the Registry.
+  </p>
+  <div class="actions">
+    <button class="primary" onclick="promote('web')">Run D5 promotion rule — web</button>
+    <button class="primary" onclick="promote('scientific')">Run D5 promotion rule — scientific</button>
+    <button class="secondary" onclick="demonstrateRollback('web')">Demonstrate ROLLBACK — web (synthetic regression)</button>
+  </div>
+  <div class="note">
+    Every real measured client in this run improved — there is no genuine regression to
+    show the guard rejecting. "Demonstrate ROLLBACK" saves one more real version (same
+    real bytes) and evaluates it against an intentionally regressed candidate, so the
+    panel sees the D5 rule actually <b>block</b> a promotion, not only approve good ones.
+  </div>
+  <div class="log" id="log">ready. (Page 2's "Publish to Registry" must have run first, for each cluster you promote.)</div>
+
+  <div class="section-title">Promotion audit trail <span class="badge live">LIVE :8004</span></div>
+  <div class="grid">
+    <div class="card"><h3>web</h3><table id="trail-web"><tbody><tr><td>—</td></tr></tbody></table></div>
+    <div class="card"><h3>scientific</h3><table id="trail-scientific"><tbody><tr><td>—</td></tr></tbody></table></div>
+  </div>
+
+  <div class="section-title">Known limitations — stated up front, not discovered by the panel</div>
+  <div class="card">
+    <ul class="limits" id="limits"></ul>
+  </div>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+let roundData = null;
+
+async function loadRound() {
+  const { ok, body } = await apiGet("/api/edge/round-summary");
+  if (!ok) { document.getElementById("round-cards").innerHTML = "<p class='hint'>round summary not found</p>"; return; }
+  roundData = body;
+
+  const cards = document.getElementById("round-cards");
+  cards.innerHTML = `
+    <div class="card"><h3>Round</h3><div class="big">${body.round}</div><div class="sub">${body.profile} profile, ${body.model_id}</div></div>
+    <div class="card"><h3>Aggregate wall time</h3><div class="big">${fmt(body.timings.aggregate_seconds,1)}s</div></div>
+    <div class="card"><h3>Round wall time (excl. training)</h3><div class="big">${fmt(body.timings.total_minutes,2)} min</div><div class="sub">NFR budget: ≤ ${body.timings.nfr_round_minutes} min</div></div>
+    <div class="card"><h3>Hardware</h3><div class="big" style="font-size:16px">${body.hardware.device}</div><div class="sub">peak VRAM ${fmt(body.hardware.peak_vram_gb)} GB</div></div>
+  `;
+
+  const rows = Object.entries(body.clients).map(([cid, r]) => `
+    <tr>
+      <td>${cid}</td>
+      <td>${r.best_alpha}</td>
+      <td>${fmt(r.full_split.base_ppl)}</td>
+      <td>${r.full_split.client_only_ppl != null ? fmt(r.full_split.client_only_ppl) : "—"}</td>
+      <td>${fmt(r.full_split.composite_ppl)}</td>
+      <td style="color:${r.personalization_delta_ppl < 0 ? 'var(--good)' : 'var(--bad)'}">${r.personalization_delta_ppl > 0 ? '+' : ''}${fmt(r.personalization_delta_ppl)}</td>
+      <td><span class="badge ${r.promotion.decision === 'PROVISIONAL_PROMOTE' ? 'promote' : 'rollback'}">${r.promotion.decision}</span></td>
+    </tr>
+  `).join("");
+  document.getElementById("sweep-body").innerHTML = rows;
+
+  const dev = body.known_deviations || {};
+  document.getElementById("limits").innerHTML = `
+    <li><b>D3 composition order not closed</b> — ${dev.d3_composition_order ?? "clients trained on frozen base, not frozen base+cluster"}</li>
+    <li><b>D5 regression guard unavailable</b> — ${dev.d5_regression_guard ?? "HumanEval guard cannot run on this OS"}; every decision above is <b>provisional</b></li>
+    <li><b>Noise band is a placeholder</b> — ${dev.d5_noise_band ?? "0.0, P5's measured band (B5) does not exist yet"}</li>
+    <li><b>In-project metric (edit similarity / exact match) not implemented</b> — perplexity is the only real measured signal today (B5, Integration Sprint)</li>
+    <li><b>Web cluster composition differs from D1</b> — ${dev.d1_web_cluster ?? "on-disk set differs from the locked decision"}</li>
+    <li><b>DP + mTLS are library-level only</b> — nothing on the live channel used in this demo is differentially private or mutually authenticated (D7 lands W10)</li>
+    <li><b>Dynamic re-clustering not implemented</b> — clusters (web / scientific) are the static, hand-assigned project clusters</li>
+  `;
+}
+
+async function promote(name) {
+  const logEl = document.getElementById("log");
+  log(logEl, `POST /api/demo/promote/${name} …`);
+  const { ok, body } = await apiPost(`/api/demo/promote/${name}`);
+  if (!ok || body.status_code >= 400) { log(logEl, `FAILED: ${JSON.stringify(body)}`); return; }
+  const d = body.body;
+  log(logEl, `  decision: ${d.action.toUpperCase()} — ${d.reason}`);
+  log(logEl, `  active_version_after: v${d.active_version_after}`);
+  loadTrail(name);
+}
+
+async function demonstrateRollback(name) {
+  const logEl = document.getElementById("log");
+  log(logEl, `POST /api/demo/demonstrate-rollback/${name} …`);
+  const { ok, body } = await apiPost(`/api/demo/demonstrate-rollback/${name}`);
+  if (!ok || body.status_code >= 400) { log(logEl, `FAILED: ${JSON.stringify(body)}`); return; }
+  const d = body.body;
+  log(logEl, `  decision: ${d.action.toUpperCase()} — ${d.reason}`);
+  log(logEl, `  active_version_after: v${d.active_version_after} (rolled back)`);
+  loadTrail(name);
+}
+
+async function loadTrail(name) {
+  const { ok, body } = await apiGet(`/api/registry/adapters/${name}/promotions`);
+  const el = document.getElementById(`trail-${name}`);
+  if (!ok || !body.decisions || body.decisions.length === 0) {
+    el.innerHTML = `<tbody><tr><td>no decisions yet</td></tr></tbody>`;
+    return;
+  }
+  el.innerHTML = `<tbody>${body.decisions.map(d => `
+    <tr><td><span class="badge ${d.action}">${d.action}</span></td>
+        <td>v${d.adapter.version} → active v${d.active_version_after}</td></tr>
+    <tr><td colspan="2" class="hint" style="margin:0;padding-bottom:8px">${d.reason}</td></tr>
+  `).join("")}</tbody>`;
+}
+
+loadRound();
+loadTrail("web");
+loadTrail("scientific");
+</script>
+</body>
+</html>

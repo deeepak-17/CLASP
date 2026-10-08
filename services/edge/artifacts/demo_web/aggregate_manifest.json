@@ -1,0 +1,40 @@
+{
+  "utc": "2026-08-21T06:18:49.714930+00:00",
+  "task": "W4/G2 cluster aggregation (D2, local stand-in for P2's service)",
+  "cluster_id": "web",
+  "clients": [
+    "client-flask",
+    "client-requests",
+    "client-werkzeug"
+  ],
+  "client_paths": [
+    "artifacts/round1/client-flask/adapter",
+    "artifacts/round1/client-requests/adapter",
+    "artifacts/round1/client-werkzeug/adapter"
+  ],
+  "sample_weights": [
+    80.0,
+    52.0,
+    170.0
+  ],
+  "n_modules": 96,
+  "reconstruction_error_mean": 0.171858,
+  "reconstruction_error_max": 0.227823,
+  "reconstruction_error_min": 0.075538,
+  "rank": 16,
+  "svd_niter": 8,
+  "weights_normalized": [
+    0.264901,
+    0.172185,
+    0.562914
+  ],
+  "vs_exact_average": {
+    "max_rel_err": 0.227823,
+    "mean_rel_err": 0.171858
+  },
+  "naive_baseline_vs_exact_average": {
+    "max_rel_err": 1.565185,
+    "mean_rel_err": 1.399403
+  },
+  "owner_note": "D2 assigns this to P2 (W5+). Local implementation so the edge lane can close G2 with real cluster adapters."
+}

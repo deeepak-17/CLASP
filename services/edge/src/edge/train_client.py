@@ -72,6 +72,11 @@ DEFAULT_SEED = 0
 DIVERGENCE_FACTOR = 3.0         # loss > 3x the opening loss means it is running away
 MAX_LOSS_SANITY = 20.0          # a code LM at seq 1024 should never sit up here
 
+# A rising train loss is only disqualifying if it rises FAST. Healthy sub-epoch
+# runs sit around +2e-4 (measured on client-numpy at lr 1e-3, a run whose
+# held-out perplexity improved), so the tolerance sits an order of magnitude above.
+SLOPE_DIVERGENCE_TOL = 2e-3
+
 
 def set_determinism(seed: int) -> None:
     """Pin every RNG that could perturb the run, so a loss curve is repeatable.
@@ -416,7 +421,37 @@ def main() -> None:
     ppl_delta = (round(final_eval["perplexity"] - base_eval["perplexity"], 3)
                  if base_eval and final_eval else None)
     memorized = ppl_delta is not None and ppl_delta > 0
-    stable = bool(loss_decreased and not memorized)
+
+    # Gradient clipping saturating is the mechanistic tell that an LR is too hot,
+    # and it fires BEFORE the loss curve shows anything. Observed directly: at
+    # lr=5e-3 on client-flask the training loss still fell with a negative slope
+    # (so loss_decreased was True) and held-out perplexity moved -0.006, i.e.
+    # nothing — while max grad norm hit 2.03 against a clip of 1.0. Judging that
+    # run on its loss curve alone would have passed a config that learned
+    # nothing generalizable. In the healthy band the same metric sits near 0.3.
+    clip_saturated = result["max_grad_norm"] > 2.0 * args.grad_clip
+
+    # Train loss is not the right learning signal at the budgets D8 allows, and
+    # two measured runs show why:
+    #
+    #   client-numpy  0.23 epochs: slope +0.00022 (rising) while held-out
+    #                 perplexity improved 0.084. Every step saw a fresh block,
+    #                 so "train loss" was out-of-sample loss tracking block
+    #                 difficulty, not fitting.
+    #   client-requests 1.135 epochs: slope -0.000196 (falling) but the endpoint
+    #                 window means rose, because 89% of blocks are still seen
+    #                 exactly once at 1.1 epochs. Held-out perplexity improved
+    #                 0.194 — unambiguously a good run.
+    #
+    # So an epoch threshold is the wrong discriminator; at every budget we can
+    # afford, train loss is dominated by which blocks landed where. D5 already
+    # designates the correct primary metric: in-project held-out perplexity on
+    # the client's own held-out files. Use it as the learning signal, and demote
+    # the train-loss slope to what it is genuinely good for — catching runs that
+    # are actively blowing up rather than merely noisy.
+    diverging = (result["loss_slope"] or 0.0) > SLOPE_DIVERGENCE_TOL
+    improved = ppl_delta is not None and ppl_delta < 0
+    stable = bool(improved and not clip_saturated and not diverging)
 
     if not args.no_save:
         model.save_pretrained(save_directory=str(out_dir / "adapter"))
@@ -458,6 +493,11 @@ def main() -> None:
             "final_held_out": final_eval,
             "held_out_ppl_delta": ppl_delta,
             "loss_decreased": loss_decreased,
+            "clip_saturated": clip_saturated,
+            "grad_clip_threshold": args.grad_clip,
+            "diverging": diverging,
+            "improved_held_out": improved,
+            "learned_signal": "held_out_ppl (D5 primary metric)",
             "stable": stable,
         },
         "hardware": {
@@ -484,7 +524,8 @@ def main() -> None:
     print(f"loss window mean  : {result['first_window']:.4f} -> {result['last_window']:.4f} "
           f"(first/last {result['window_steps']} steps)")
     print(f"loss slope        : {result['loss_slope']:+.6f} / step")
-    print(f"max grad norm     : {result['max_grad_norm']:.3f}")
+    print(f"max grad norm     : {result['max_grad_norm']:.3f} "
+          f"(clip {args.grad_clip}){'  <-- SATURATED, lr too hot' if clip_saturated else ''}")
     print(f"loss decreased    : {loss_decreased}")
     if base_eval and final_eval:
         print(f"held-out ppl      : {base_eval['perplexity']:.2f} -> "

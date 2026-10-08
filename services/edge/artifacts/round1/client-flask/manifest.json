@@ -1,0 +1,134 @@
+{
+  "utc": "2026-08-14T07:40:51.353619+00:00",
+  "task": "E3.1/E3.2 client LoRA on real partition",
+  "client_id": "web/client-flask",
+  "client_dir": "C:\\Users\\admin\\Desktop\\git\\CLASP\\datasets\\materialized\\web\\client-flask",
+  "profile": "dev",
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "quantization": {
+    "load_in_4bit": true,
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_use_double_quant": true
+  },
+  "lora": {
+    "r": 16,
+    "lora_alpha": 16,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "lora_dropout": 0.0
+  },
+  "data": {
+    "seq_len": 1024,
+    "train": {
+      "n_files": 21,
+      "n_tokens": 82788,
+      "n_chunks": 80,
+      "file_order": [
+        "src/flask/__init__.py",
+        "src/flask/app.py",
+        "src/flask/blueprints.py",
+        "src/flask/cli.py",
+        "src/flask/ctx.py",
+        "src/flask/debughelpers.py",
+        "src/flask/globals.py",
+        "src/flask/helpers.py",
+        "src/flask/json/__init__.py",
+        "src/flask/json/provider.py",
+        "src/flask/json/tag.py",
+        "src/flask/logging.py",
+        "src/flask/sansio/app.py",
+        "src/flask/sansio/scaffold.py",
+        "src/flask/sessions.py",
+        "src/flask/signals.py",
+        "src/flask/templating.py",
+        "src/flask/testing.py",
+        "src/flask/typing.py",
+        "src/flask/views.py",
+        "src/flask/wrappers.py"
+      ],
+      "order_sha256": "ae3ecf47d479e1edab44aaf7c716687155da7e8e270147e4d9ce10728aa287f1",
+      "dropped_tail_tokens": 868
+    },
+    "held_out": {
+      "n_files": 2,
+      "n_tokens": 10560,
+      "n_chunks": 11,
+      "file_order": [
+        "src/flask/config.py",
+        "src/flask/sansio/blueprints.py"
+      ],
+      "order_sha256": "58410137e9ffa83a70e539ccaead965763806995a42d61dfae1ec6643646549e",
+      "dropped_tail_tokens": 0
+    }
+  },
+  "optimization": {
+    "lr": 0.001,
+    "scheduler": "cosine_with_warmup",
+    "warmup_ratio": 0.03,
+    "grad_clip": 1.0,
+    "micro_batch": 1,
+    "grad_accum": 1,
+    "chunk_budget": 73,
+    "epochs": 0.912,
+    "budget_plan": "budget_plan.json"
+  },
+  "seed": 0,
+  "results": {
+    "history": [
+      {
+        "step": 50,
+        "loss": 1.0049,
+        "lr": 0.0002373373798928507,
+        "grad_norm": 0.2235
+      },
+      {
+        "step": 73,
+        "loss": 0.9424,
+        "lr": 0.0,
+        "grad_norm": 0.2146
+      }
+    ],
+    "first_window": 1.1043,
+    "last_window": 0.8811,
+    "window_steps": 15,
+    "loss_slope": -0.002494,
+    "loss_decreased": true,
+    "n_steps_recorded": 73,
+    "optimizer_steps": 73,
+    "max_grad_norm": 0.2721,
+    "micro_batches": 73,
+    "n_trainable_params": 6291456,
+    "wall_seconds": 180.3,
+    "base_held_out": {
+      "loss": 0.8968,
+      "perplexity": 2.452,
+      "n_tokens": 10549
+    },
+    "final_held_out": {
+      "loss": 0.8189,
+      "perplexity": 2.268,
+      "n_tokens": 10549
+    },
+    "held_out_ppl_delta": -0.184,
+    "clip_saturated": false,
+    "grad_clip_threshold": 1.0,
+    "sub_epoch": true,
+    "learned_signal": "held_out_ppl",
+    "stable": true
+  },
+  "hardware": {
+    "peak_vram_gb": 1.747,
+    "device": "NVIDIA GeForce RTX 2050"
+  },
+  "versions": {
+    "python": "3.10.11",
+    "torch": "2.13.0+cu126",
+    "transformers": "5.14.1"
+  },
+  "d3_deviation": "trained on frozen base only; no cluster adapter exists yet (P2 W5+)"
+}

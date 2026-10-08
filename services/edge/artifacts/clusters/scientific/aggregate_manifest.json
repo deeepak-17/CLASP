@@ -1,0 +1,40 @@
+{
+  "utc": "2026-08-14T08:53:25.852425+00:00",
+  "task": "W4/G2 cluster aggregation (D2, local stand-in for P2's service)",
+  "cluster_id": "scientific",
+  "clients": [
+    "client-numpy",
+    "client-pandas",
+    "client-scikit-learn"
+  ],
+  "client_paths": [
+    "artifacts/round1/client-numpy/adapter",
+    "artifacts/round1/client-pandas/adapter",
+    "artifacts/round1/client-scikit-learn/adapter"
+  ],
+  "sample_weights": [
+    1286.0,
+    1687.0,
+    1696.0
+  ],
+  "n_modules": 96,
+  "reconstruction_error_mean": 0.278791,
+  "reconstruction_error_max": 0.412172,
+  "reconstruction_error_min": 0.097371,
+  "rank": 16,
+  "svd_niter": 8,
+  "weights_normalized": [
+    0.275434,
+    0.361319,
+    0.363247
+  ],
+  "vs_exact_average": {
+    "max_rel_err": 0.412172,
+    "mean_rel_err": 0.278791
+  },
+  "naive_baseline_vs_exact_average": {
+    "max_rel_err": 1.667809,
+    "mean_rel_err": 1.448507
+  },
+  "owner_note": "D2 assigns this to P2 (W5+). Local implementation so the edge lane can close G2 with real cluster adapters."
+}
