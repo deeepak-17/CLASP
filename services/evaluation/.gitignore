@@ -1,0 +1,8 @@
+# The repo-root .gitignore ignores every `datasets/` directory. P5's partition
+# manifests and corpus metadata are the D1 definition and are committed, so
+# re-include this module's datasets/ and ignore only the heavy, regenerable
+# material inside it.
+!datasets/
+datasets/raw/
+datasets/materialized/
+datasets/processed/
