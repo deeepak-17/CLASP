@@ -1,7 +1,7 @@
 # Personalization results
 
 _Held-out perplexity on each client's own never-trained-on files (lower is better)_  
-**Generated:** 2026-10-08T07:28:00Z
+**Generated:** 2026-10-08T07:39:52Z
 
 Each row compares three models on one client's held-out files: the frozen base, the client-only adapter, and the three-layer composite base + α·cluster + β·client (D6). The personalization delta is composite − base; the cluster contribution is composite − client-only at the reference α (negative means the cluster layer helps). Every number is read from the edge round manifest named under Sources.
 

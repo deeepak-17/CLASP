@@ -1,7 +1,7 @@
 # Evaluation results tables
 
 _Every number quoted in the evaluation section_  
-**Generated:** 2026-10-08T07:37:39Z
+**Generated:** 2026-10-08T07:39:53Z
 
 ## Personalization — round 1 — clients trained on the bare base
 

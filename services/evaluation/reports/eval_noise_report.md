@@ -1,7 +1,7 @@
 # Evaluation noise and guard thresholds
 
 _How large a change must be before D5 can tell it from noise_  
-**Generated:** 2026-10-08T07:28:36Z
+**Generated:** 2026-10-08T07:39:53Z
 
 ## HumanEval guard
 

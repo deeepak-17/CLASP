@@ -1,6 +1,6 @@
 {
   "feed_version": "1.0.0",
-  "generated_at": "2026-10-08T07:28:00Z",
+  "generated_at": "2026-10-08T07:39:52Z",
   "metric": "held-out perplexity on each client's own never-trained-on files (lower is better)",
   "sources": [
     "results/edge_rounds/round1_manifest.json",
