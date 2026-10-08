@@ -5,7 +5,10 @@ description = "CLASP Edge Layer — PEFT training, 4-bit inference, dynamic merg
 requires-python = ">=3.10"
 dependencies = [
     "clasp-contracts",
-     "peft", "transformers", "torch", "opacus",
+     "peft",
+    "transformers",
+    "torch",
+    "opacus",
 ]
 
 [build-system]

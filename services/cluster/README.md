@@ -2,8 +2,8 @@
 
 **Owner:** Prasanth (P2)
 
-Depends on the shared `contracts` package; keep cross-module interaction
-interface-driven.
+Skeleton module. See the team's internal conventions notes (local). Depends on
+the shared `contracts` package; keep cross-module interaction interface-driven.
 
 ```bash
 pip install -e contracts -e "services/cluster[test]"

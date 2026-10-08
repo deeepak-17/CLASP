@@ -1,0 +1,32 @@
+{
+  "task": "E3.3 composite merge (D6)",
+  "alpha": 0.5,
+  "beta": 1.0,
+  "cluster_source": "stub:random",
+  "client_source": "C:/Users/admin/AppData/Local/Temp/claude/C--Users-admin-Desktop-Edu-Final-year-project-CLASP-Team-Bundle/be1a727c-fbc8-4351-8db4-805fbf1e7d5d/scratchpad/train_out/client-requests/adapter",
+  "composite_rank": 32,
+  "composite_scaling": 1.0,
+  "n_modules": 96,
+  "merge_self_check": {
+    "max_abs_err": 2.9802322387695312e-08,
+    "max_rel_err": 4.078368709613317e-07
+  },
+  "compatibility": {
+    "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+    "target_modules": [
+      "k_proj",
+      "o_proj",
+      "q_proj",
+      "v_proj"
+    ],
+    "ranks": {
+      "cluster": 16,
+      "client": 16
+    },
+    "scalings": {
+      "cluster": 1.0,
+      "client": 1.0
+    }
+  },
+  "d3_deviation": "cluster is a stand-in; P2's SVD aggregation produces no real cluster adapter until W5+"
+}

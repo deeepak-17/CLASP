@@ -1,0 +1,85 @@
+{
+  "utc": "2026-08-14T04:59:51.283137+00:00",
+  "task": "E3.2 lr/steps sweep for stable convergence",
+  "grid": {
+    "clients": [
+      "web/client-flask"
+    ],
+    "lrs": [
+      0.002,
+      0.005,
+      0.01
+    ],
+    "grad_accums": [
+      1
+    ],
+    "micro_batch": 1,
+    "repeat": 1
+  },
+  "seed": 0,
+  "budget_plan": "budget_plan.json",
+  "rows": [
+    {
+      "client": "web/client-flask",
+      "lr": 0.002,
+      "grad_accum": 1,
+      "rep": 1,
+      "tag": "client-flask__lr0.002__ga1__r1",
+      "wall_seconds": 241.9,
+      "ok": true,
+      "first_window": 1.1057,
+      "last_window": 0.871,
+      "loss_slope": -0.002739,
+      "loss_decreased": true,
+      "base_ppl": 2.452,
+      "final_ppl": 2.258,
+      "ppl_delta": -0.194,
+      "stable": true,
+      "optimizer_steps": 73,
+      "chunk_budget": 73,
+      "epochs": 0.912,
+      "peak_vram_gb": 1.747,
+      "max_grad_norm": 0.3998
+    },
+    {
+      "client": "web/client-flask",
+      "lr": 0.005,
+      "grad_accum": 1,
+      "rep": 1,
+      "tag": "client-flask__lr0.005__ga1__r1",
+      "wall_seconds": 294.7,
+      "ok": true,
+      "first_window": 1.1655,
+      "last_window": 0.9258,
+      "loss_slope": -0.002932,
+      "loss_decreased": true,
+      "base_ppl": 2.452,
+      "final_ppl": 2.446,
+      "ppl_delta": -0.006,
+      "stable": true,
+      "optimizer_steps": 73,
+      "chunk_budget": 73,
+      "epochs": 0.912,
+      "peak_vram_gb": 1.747,
+      "max_grad_norm": 2.027
+    },
+    {
+      "client": "web/client-flask",
+      "lr": 0.01,
+      "grad_accum": 1,
+      "rep": 1,
+      "tag": "client-flask__lr0.01__ga1__r1",
+      "wall_seconds": 69.7,
+      "ok": false,
+      "error": "RuntimeError: loss diverged: 36.7072 vs opening-window mean nan at micro-batch 14. Lower the LR."
+    }
+  ],
+  "repeatability": [],
+  "recommended": {
+    "lr": 0.002,
+    "grad_accum": 1,
+    "micro_batch": 1,
+    "seed": 0
+  },
+  "total_wall_seconds": 606.4
+}

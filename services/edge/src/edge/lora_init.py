@@ -1,6 +1,4 @@
-from peft.tuners.lora.corda import target_modules
-
-from model_loader import load_model
+from edge.model_loader import load_model
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
 
 def attach_lora(model, r: int=8, lora_alpha: int=16, target_modules=('q_proj', 'v_proj'), dropout=0.0):
@@ -15,10 +13,15 @@ def attach_lora(model, r: int=8, lora_alpha: int=16, target_modules=('q_proj', '
     :return: A PEFT-wrapped model ready for training.
     """
     # 1. Freezing: freezes the model parameters, upcasts to 16-bit or 32-bit in sensitive layers
-    model = prepare_model_for_kbit_training(model)
+    # use_reentrant=False: the reentrant autograd path for gradient checkpointing
+    # is deprecated and a future torch makes the unset default an error. It also
+    # interacts badly with frozen inputs, which is exactly our case.
+    model = prepare_model_for_kbit_training(
+        model, gradient_checkpointing_kwargs={"use_reentrant": False}
+    )
 
     # 2. Configuration: Configuring LoRA hyper-parameters
-    # W = W_base + (alpha / r) * (A * B)
+    # W = W_base + (lora_alpha / r) * (A * B)
     config = LoraConfig(
         r=r,
         lora_alpha=lora_alpha,
@@ -34,7 +37,7 @@ def attach_lora(model, r: int=8, lora_alpha: int=16, target_modules=('q_proj', '
     print("lora_A dtype:", layer.lora_A["default"].weight.dtype)
     print("lora_B dtype:", layer.lora_B["default"].weight.dtype)
     print("base weight dtype:", layer.base_layer.weight.dtype)  # should be uint8/int8-packed 4bit storage
-    model.print_trainable_parameters()
+    model.print_trainable_parameters() # trainable%: 0.1% to 1.0%
     return model
 
 if __name__ == "__main__":
