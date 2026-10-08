@@ -33,11 +33,11 @@ import math
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from edge.config import PROFILES
+from edge.config import PROFILES, REPO_ROOT
 from transformers import AutoTokenizer
 
 # Root of P5's materialized partitions (D1). Overridable on the CLI.
-DEFAULT_CORPUS_ROOT = Path("C:/Users/admin/Desktop/git/CLASP/datasets/materialized")
+DEFAULT_CORPUS_ROOT = REPO_ROOT / "datasets" / "materialized"
 
 DEFAULT_SEQ_LEN = 1024          # D8 cap
 DEFAULT_TOTAL_CHUNKS = 1200     # 6 clients x 200 blocks, i.e. D8's total spend

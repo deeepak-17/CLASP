@@ -2,7 +2,7 @@
   "utc": "2026-10-06T06:40:09.871000+00:00",
   "task": "E3.1/E3.2 client LoRA on real partition",
   "client_id": "web/client-requests",
-  "client_dir": "C:\\Users\\admin\\Desktop\\Edu\\Final year project\\CLASP_Team_Bundle\\CLASP\\datasets\\materialized\\web\\client-requests",
+  "client_dir": "datasets/materialized/web/client-requests",
   "profile": "dev",
   "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
   "quantization": {

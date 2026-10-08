@@ -2,7 +2,7 @@
   "utc": "2026-08-14T08:01:13.277454+00:00",
   "task": "E3.1/E3.2 client LoRA on real partition",
   "client_id": "scientific/client-numpy",
-  "client_dir": "C:\\Users\\admin\\Desktop\\git\\CLASP\\datasets\\materialized\\scientific\\client-numpy",
+  "client_dir": "datasets/materialized/scientific/client-numpy",
   "profile": "dev",
   "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
   "quantization": {

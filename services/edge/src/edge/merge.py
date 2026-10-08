@@ -56,6 +56,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import torch
 from safetensors.torch import load_file, save_file
 
+from edge.config import portable_path
+
 # Hyperparameters the contracts pin for Phase II. A rank or target-module
 # mismatch between two adapters produces a silently wrong composite rather than
 # an error, which is the failure mode P1's scope calls out by name — so the
@@ -392,7 +394,8 @@ def main() -> None:
     meta = {
         "task": "E3.3 composite merge (D6)",
         "alpha": args.alpha, "beta": args.beta,
-        "cluster_source": args.cluster, "client_source": args.client,
+        "cluster_source": portable_path(args.cluster),
+        "client_source": portable_path(args.client),
         "composite_rank": cfg["r"], "composite_scaling": scaling_of(cfg),
         "n_modules": len(module_prefixes(sd)),
         "merge_self_check": err,

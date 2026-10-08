@@ -71,6 +71,7 @@ from edge.chunking import (
     pack_client,
     split_summary,
 )
+from edge.config import portable_path
 from edge.lora_init import attach_lora
 from edge.merge import CONTRACT_HYPERPARAMS, validate_compatibility
 from edge.model_loader import load_model
@@ -804,7 +805,7 @@ def main() -> None:
         "utc": datetime.now(timezone.utc).isoformat(),
         "task": "E3.1/E3.2 client LoRA on real partition",
         "client_id": client_id,
-        "client_dir": str(client_dir),
+        "client_dir": portable_path(client_dir),
         "profile": profile.name,
         "model_id": profile.model_id,
         "quantization": {
