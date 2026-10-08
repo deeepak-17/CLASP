@@ -220,6 +220,30 @@ def _composite_config(rank: int, modules: tuple[str, ...], template: dict | None
     return cfg
 
 
+def _check_same_modules(live: list[_Part]) -> None:
+    """Refuse parts that adapt different (layer, module) sets.
+
+    The composite declares one rank, r_cluster + r_client. A module present in
+    only one part would keep that part's rank, so the stored tensors would not
+    match the declared ``r`` and PEFT would refuse to load the adapter. The edge
+    applies the same rule (``edge.merge.AdapterCompatibilityError``).
+    """
+    if len(live) < 2:
+        return
+    cluster, client = (set(p.factors) for p in live)
+    if cluster == client:
+        return
+    detail = "; ".join(
+        f"only in {label}: {', '.join(mods[:3])}{' ...' if len(mods) > 3 else ''}"
+        for label, mods in (("cluster", sorted(cluster - client)),
+                            ("client", sorted(client - cluster))) if mods
+    )
+    raise CompositeError(
+        f"cluster and client adapt different modules ({detail}) — the composite would "
+        "mix ranks under one declared r and fail to load"
+    )
+
+
 def build_composite(cluster: PartSpec, client: PartSpec) -> Composite:
     """Merge ``cluster`` (alpha) and ``client`` (beta) into one exact composite.
 
@@ -231,6 +255,7 @@ def build_composite(cluster: PartSpec, client: PartSpec) -> Composite:
     if not live:
         raise CompositeError("alpha and beta are both 0 — the composite would be empty")
 
+    _check_same_modules(live)
     modules = sorted({m for p in live for m in p.factors})
     tensors: dict[str, np.ndarray] = {}
     for module in modules:

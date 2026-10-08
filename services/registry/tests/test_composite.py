@@ -114,19 +114,6 @@ def test_works_without_embedded_config_using_registry_hparams():
         np.testing.assert_allclose(got[key], want_c[key] + want_l[key], rtol=1e-5, atol=1e-5)
 
 
-def test_module_present_in_one_part_only_is_kept():
-    cluster = make_adapter(1, modules=("q_proj",))
-    client = make_adapter(2, modules=("q_proj", "v_proj"))
-    out = build_composite(
-        PartSpec(cluster, LoRAHyperParams(rank=R, lora_alpha=R, target_modules=("q_proj",)), 1.0),
-        PartSpec(client, _hp(), 1.0),
-    )
-    sd = load(out.payload)
-    assert sd[_peft(0, "q_proj", "lora_A")].shape[0] == 2 * R
-    assert sd[_peft(0, "v_proj", "lora_A")].shape[0] == R
-    assert out.hparams.target_modules == ("q_proj", "v_proj")
-
-
 def test_deterministic_bytes():
     a = build_composite(PartSpec(make_adapter(1), _hp(), 0.5), PartSpec(make_adapter(2), _hp(), 1.0))
     b = build_composite(PartSpec(make_adapter(1), _hp(), 0.5), PartSpec(make_adapter(2), _hp(), 1.0))
@@ -155,6 +142,37 @@ def test_rejects_shape_mismatch_between_parts():
     sd[key] = np.zeros((R, D + 1), dtype=np.float32)
     with pytest.raises(CompositeError, match="shape"):
         build_composite(PartSpec(cluster, _hp(), 1.0), PartSpec(save(sd), _hp(), 1.0))
+
+
+def test_rejects_partial_module_overlap():
+    """Cluster on {q, v}, client on {q}: v would keep rank R under a declared 2R."""
+    client = make_adapter(2, modules=("q_proj",))
+    hp_client = LoRAHyperParams(rank=R, lora_alpha=R, target_modules=("q_proj",))
+    with pytest.raises(CompositeError, match="different modules.*only in cluster: 0.v_proj"):
+        build_composite(PartSpec(make_adapter(1), _hp(), 1.0), PartSpec(client, hp_client, 1.0))
+
+
+def test_rejects_disjoint_layers():
+    sd = {k: v for k, v in load(make_adapter(2)).items() if ".layers.1." not in k}
+    with pytest.raises(CompositeError, match="only in cluster: 1.q_proj"):
+        build_composite(PartSpec(make_adapter(1), _hp(), 1.0), PartSpec(save(sd), _hp(), 1.0))
+
+
+def test_pruned_part_may_cover_other_modules():
+    """alpha=0 drops the cluster entirely, so its module set is irrelevant."""
+    cluster = make_adapter(1, modules=("q_proj",))
+    hp_cluster = LoRAHyperParams(rank=R, lora_alpha=R, target_modules=("q_proj",))
+    out = build_composite(PartSpec(cluster, hp_cluster, 0.0), PartSpec(make_adapter(2), _hp(), 1.0))
+    assert out.rank == R
+
+
+def test_every_composite_tensor_matches_the_declared_rank():
+    out = build_composite(PartSpec(make_adapter(1), _hp(), 0.5),
+                          PartSpec(make_adapter(2), _hp(), 1.0))
+    header_len = int.from_bytes(out.payload[:8], "little")
+    cfg = json.loads(json.loads(out.payload[8:8 + header_len])["__metadata__"]["adapter_config"])
+    for key, t in load(out.payload).items():
+        assert (t.shape[0] if "lora_A" in key else t.shape[1]) == cfg["r"], key
 
 
 def test_rejects_unpaired_lora_factor():

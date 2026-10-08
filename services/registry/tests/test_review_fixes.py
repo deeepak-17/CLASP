@@ -58,13 +58,14 @@ def test_composite_config_template_is_allow_listed():
 
 
 def test_cluster_only_module_uses_the_client_key_convention():
+    """beta=0 keeps only the cluster; modules the client lacks still get PEFT keys."""
     def short(layer, m, part):
         return f"layers.{layer}.{m}.{part}.weight"
     cluster = make_adapter(1, keyer=short, modules=("q_proj", "v_proj"))
     client = make_adapter(2, modules=("q_proj",))
     out = build_composite(PartSpec(cluster, _hp(), 1.0),
                           PartSpec(client, LoRAHyperParams(rank=R, lora_alpha=R,
-                                                           target_modules=("q_proj",)), 1.0))
+                                                           target_modules=("q_proj",)), 0.0))
     assert all(k.startswith("base_model.model.model.layers.") for k in load(out.payload))
 
 
