@@ -189,3 +189,52 @@ def test_promote_with_composite_into_wrong_kind_records_nothing(client):
                          "client": "flask", "alpha": 0.5, "beta": 1.0}
     assert client.post("/adapters/flask/promote", json=body).status_code == 409
     assert client.get("/adapters/flask/promotions").json()["decisions"] == []
+
+
+# --------------------------------------------------------------------------- #
+# base_model provenance comes from the parts, not a default
+# --------------------------------------------------------------------------- #
+BIG = "deepseek-ai/deepseek-coder-6.7b-base"
+
+
+def _with_base(seed, base):
+    sd = load(make_adapter(seed))
+    cfg = {"peft_type": "LORA", "r": R, "lora_alpha": R, "target_modules": list(MODULES),
+           "use_rslora": False, "base_model_name_or_path": base}
+    return save(sd, metadata={"adapter_config": json.dumps(cfg), "format": "pt"})
+
+
+def _seed_bases(api, cluster_base, client_base):
+    _save(api, "cluster-web", _with_base(1, cluster_base), kind="cluster",
+          aggregation="svd_exact", source_clients=["flask"])
+    _save(api, "flask", _with_base(2, client_base), kind="client")
+
+
+def test_base_model_is_read_from_the_parts(client):
+    _seed_bases(client, BIG, BIG)
+    body = {"cluster": "cluster-web", "client": "flask", "alpha": 0.5, "beta": 1.0}
+    r = client.post("/adapters/composite-flask/compose", json=body)
+    assert r.status_code == 201, r.text
+    assert r.json()["composed_from"]["base_model"] == BIG
+
+
+def test_parts_on_different_bases_are_refused(client):
+    _seed_bases(client, BIG, "deepseek-ai/deepseek-coder-1.3b-base")
+    body = {"cluster": "cluster-web", "client": "flask", "alpha": 0.5, "beta": 1.0}
+    r = client.post("/adapters/composite-flask/compose", json=body)
+    assert r.status_code == 422 and "different base models" in r.json()["detail"]
+
+
+def test_explicit_base_model_must_match_the_parts(client):
+    _seed_bases(client, BIG, BIG)
+    body = {"cluster": "cluster-web", "client": "flask", "alpha": 0.5, "beta": 1.0,
+            "base_model": "deepseek-ai/deepseek-coder-1.3b-base"}
+    r = client.post("/adapters/composite-flask/compose", json=body)
+    assert r.status_code == 422 and "does not match" in r.json()["detail"]
+    assert client.get("/adapters").json()["adapters"] == ["cluster-web", "flask"]
+
+
+def test_base_model_defaults_only_when_no_part_names_one(client):
+    _seed(client)  # make_adapter embeds no base_model_name_or_path
+    assert _compose(client).json()["composed_from"]["base_model"] == \
+        "deepseek-ai/deepseek-coder-1.3b-base"

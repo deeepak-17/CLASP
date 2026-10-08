@@ -25,7 +25,7 @@ from contracts import (
     PrivacySpec,
 )
 
-from .composite import PartSpec, build_composite
+from .composite import PartSpec, build_composite, embedded_base_model
 from .storage import RegistryStore
 
 
@@ -41,7 +41,7 @@ class ComposeRequest:
     beta: float
     cluster_version: int | None = None  # None -> the part's active version
     client_version: int | None = None
-    base_model: str = DEFAULT_BASE_MODEL
+    base_model: str | None = None  # None -> read from the parts, else the dev default
 
 
 @dataclass(frozen=True)
@@ -81,8 +81,8 @@ def parse_compose_request(body: object) -> ComposeRequest:
             raise CompositionError(f"missing field: {key}")
     cluster_name, cluster_version = _part_ref(body["cluster"], "cluster")
     client_name, client_version = _part_ref(body["client"], "client")
-    base_model = body.get("base_model", DEFAULT_BASE_MODEL)
-    if not isinstance(base_model, str) or not base_model:
+    base_model = body.get("base_model")
+    if base_model is not None and (not isinstance(base_model, str) or not base_model):
         raise CompositionError("base_model must be a non-empty string")
     return ComposeRequest(
         cluster_name=cluster_name, client_name=client_name,
@@ -95,6 +95,28 @@ def combined_privacy(a: PrivacySpec, b: PrivacySpec) -> PrivacySpec:
     if a.epsilon is None or b.epsilon is None:
         return PrivacySpec(epsilon=None, delta=a.delta + b.delta)
     return PrivacySpec(epsilon=a.epsilon + b.epsilon, delta=a.delta + b.delta)
+
+
+def _base_model(requested: str | None, embedded: dict[str, str | None]) -> str:
+    """The composite's base model: the one its parts were trained on.
+
+    Parts that embed ``base_model_name_or_path`` must agree with each other and
+    with an explicit request; a composite labelled with the wrong base would be
+    loaded onto the wrong model. With nothing embedded, the request (or the
+    1.3B dev default) stands.
+    """
+    named = {label: base for label, base in embedded.items() if base}
+    if len(set(named.values())) > 1:
+        raise CompositionError(
+            "parts were trained on different base models: "
+            + ", ".join(f"{label} -> {base}" for label, base in named.items())
+        )
+    found = next(iter(named.values()), None)
+    if requested and found and requested != found:
+        raise CompositionError(
+            f"base_model {requested!r} does not match the parts' embedded base model {found!r}"
+        )
+    return requested or found or DEFAULT_BASE_MODEL
 
 
 def _resolve(store: RegistryStore, name: str, version: int | None,
@@ -123,19 +145,21 @@ def plan_composite(store: RegistryStore, req: ComposeRequest,
     store.check_kind(target_name, AdapterKind.COMPOSITE)
     cluster = _resolve(store, req.cluster_name, req.cluster_version, AdapterKind.CLUSTER)
     client = _resolve(store, req.client_name, req.client_version, AdapterKind.CLIENT)
+    cluster_payload = store.load_payload(cluster.ref.name, cluster.ref.version)
+    client_payload = store.load_payload(client.ref.name, client.ref.version)
     try:
-        built = build_composite(
-            PartSpec(store.load_payload(cluster.ref.name, cluster.ref.version),
-                     cluster.hparams, req.alpha),
-            PartSpec(store.load_payload(client.ref.name, client.ref.version),
-                     client.hparams, req.beta),
-        )
+        built = build_composite(PartSpec(cluster_payload, cluster.hparams, req.alpha),
+                                PartSpec(client_payload, client.hparams, req.beta))
+        base_model = _base_model(req.base_model, {
+            f"{cluster.ref.name} v{cluster.ref.version}": embedded_base_model(cluster_payload),
+            f"{client.ref.name} v{client.ref.version}": embedded_base_model(client_payload),
+        })
     except ValueError as e:
         raise CompositionError(str(e)) from e
     provenance = CompositeProvenance(
         cluster_name=cluster.ref.name, cluster_version=cluster.ref.version,
         client_name=client.ref.name, client_version=client.ref.version,
-        alpha=req.alpha, beta=req.beta, base_model=req.base_model,
+        alpha=req.alpha, beta=req.beta, base_model=base_model,
     )
     save_kwargs = {
         "kind": AdapterKind.COMPOSITE,

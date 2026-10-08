@@ -241,8 +241,10 @@ def compose(name: str, response: Response, body: dict = Body(...)) -> dict:
 
     Body: ``{"cluster": "cluster-web" | {"name", "version"}, "client": ...,
     "alpha": 0.5, "beta": 1.0, "base_model"?: str}``. Part versions default to
-    each part's active version. Re-composing identical inputs returns the
-    existing version with 200 instead of writing a duplicate.
+    each part's active version. ``base_model`` defaults to the base the parts
+    embed; parts on different bases, or a request that contradicts them, are
+    refused. Re-composing identical inputs returns the existing version with
+    200 instead of writing a duplicate.
     """
     store = get_store()
     with _WRITE_LOCK:

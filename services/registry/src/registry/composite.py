@@ -105,6 +105,16 @@ def _embedded_config(payload: bytes) -> dict | None:
     return cfg
 
 
+def embedded_base_model(payload: bytes) -> str | None:
+    """The ``base_model_name_or_path`` a payload's embedded adapter_config names, if any."""
+    try:
+        cfg = _embedded_config(payload)
+    except (ValueError, UnicodeDecodeError) as e:
+        raise CompositeError(f"unreadable embedded adapter_config: {e}") from e
+    value = (cfg or {}).get("base_model_name_or_path")
+    return value if isinstance(value, str) and value else None
+
+
 def _module_id(prefix: str) -> str:
     """(layer, module) identity shared by both key conventions."""
     m = _LAYER_MODULE_RE.search(prefix)
