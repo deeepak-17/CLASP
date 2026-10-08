@@ -25,7 +25,12 @@ from cluster.aggregation import (
     truncated_svd_refactor,
 )
 from tests.conftest import trained_adapter
-from tests.http_helpers import reset_server_state, restore_server_state, upload_body
+from tests.http_helpers import (
+    create_cluster,
+    reset_server_state,
+    restore_server_state,
+    upload_body,
+)
 
 client = TestClient(server.app)
 
@@ -33,6 +38,7 @@ client = TestClient(server.app)
 @pytest.fixture
 def _clean_server():
     saved = reset_server_state()
+    create_cluster(client, "t")
     yield
     restore_server_state(saved)
 

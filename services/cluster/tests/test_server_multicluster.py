@@ -11,7 +11,7 @@ from cluster.adapter_format import LoRAAdapter
 from cluster.aggregation import aggregate_svd
 from cluster.schemas.messages import TensorPayload
 from tests.conftest import trained_adapter
-from tests.http_helpers import reset_server_state, restore_server_state
+from tests.http_helpers import create_cluster, reset_server_state, restore_server_state
 
 client = TestClient(server.app)
 
@@ -49,6 +49,7 @@ def _decode(js):
 def test_clusters_aggregate_independently_and_keep_separate_round_counters():
     a = {c: trained_adapter(i) for i, c in enumerate(("a1", "a2"))}
     b = {c: trained_adapter(10 + i) for i, c in enumerate(("b1", "b2"))}
+    create_cluster(client, "team-a", "team-b")
     for cid, ad in a.items():
         assert client.post("/clusters/team-a/uploads", json=_body(cid, ad)).status_code == 201
     for cid, ad in b.items():

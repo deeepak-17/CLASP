@@ -15,10 +15,10 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
 | Edge -> Cluster adapter upload (A) | `POST /clusters/{id}/uploads`, `POST /uploads` — **done, tested** | no upload client in `services/edge` | **BLOCKED BY P1** (live) — mockable, mocked in tests |
 | LoRA hyper-parameters | defaults r=16, alpha=16, q/k/v/o — **aligned in Week 6** | Edge pins r=16, alpha=16, q/k/v/o | **MATCH** |
 | Cluster -> Edge adapter retrieval | `GET /clusters/{id}/adapters/active` (PEFT keys + `peft_config`) — **done, tested** | no download client in Edge | **BLOCKED BY P1** (live) |
-| Client identity | self-asserted `client_id`; `configure_identity()` hook — **done, tested with a stub** | none | **BLOCKED BY P3** (real identity) |
-| mTLS (G1) | `cluster/tls.py`, tested against an *ephemeral test CA* | `security/` is empty | **BLOCKED BY P3** |
+| Client identity | self-asserted `client_id`; `configure_identity()` is a **hook, not wired at startup** (only tests call it; the running service has no authenticated identity) | none | **BLOCKED BY P3** (real identity) |
+| mTLS (G1) | `cluster/tls.py`, tested against an *ephemeral test CA*; **not wired into a running service — mTLS is not finished** | `security/` is empty | **BLOCKED BY P3** |
 | DP mu tuning (W9) | toy non-DP mu sweep only | `security/` is empty | **BLOCKED BY P3** |
-| Cluster -> Registry snapshot | `SnapshotSink` + `AdapterRef` mapping + in-memory stub — **done, tested** | `services/registry` is empty | **BLOCKED BY P4** (live) |
+| Cluster -> Registry snapshot | `SnapshotSink` + `AdapterRef` mapping + in-memory stub — **hook, not wired at startup** (only tests call `configure_snapshot_sink`) | `services/registry` is empty | **BLOCKED BY P4** (live) |
 | Evaluation | none needed by Cluster (see below) | `services/evaluation` is empty | **BLOCKED BY P5** (eval of cluster adapters) |
 
 ## P1 Edge
@@ -59,7 +59,9 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
 * **P2-side infrastructure built** (and the only thing that can honestly be built):
   * `cluster/tls.py` — `MTLSFiles`, `uvicorn_ssl_kwargs()`, `client_ssl_context()`,
     `flower_certificates()`, `common_name_from_peercert()`.
-  * `server.configure_identity(provider, require=...)` — an upload whose `client_id` differs from the
+  * `server.configure_identity(provider, require=...)` — **a hook for later: nothing in the running service
+    calls it** (only tests do), so by default uploads are not tied to any certificate. When a provider is
+    installed, an upload whose `client_id` differs from the
     authenticated identity is refused (403), a missing identity is refused (401) when required, a
     failing provider fails closed (401); a member of cluster A may not read cluster B's adapter (403).
   * `tests/test_tls_p2_side.py` — starts the real HTTP app under uvicorn with `uvicorn_ssl_kwargs`
@@ -103,7 +105,7 @@ DP on, and record the chosen mu with its epsilon.
 * **Interface**: Cluster defines `cluster.integration.SnapshotSink.publish(ref, broadcast)` and maps
   round `r` of cluster `c` to `AdapterRef(name=c, version=r+1, kind=CLUSTER, cluster_id=c)`. **This naming is
   Cluster's proposal** — P4 has not specified one. It is wired into `MultiClusterFederation(sink=...)` and
-  `server.configure_snapshot_sink(...)`; a failing sink is reported (`publish_error`) and never loses a round.
+  `server.configure_snapshot_sink(...)` (**a hook only tests call — the running service publishes nothing**); a failing sink is reported (`publish_error`) and never loses a round.
 * **Mockable**: yes — `InMemorySnapshotSink` (a test double, not a registry), `tests/test_integration_stubs.py`.
 * **Blocked**: publishing to a real registry; the wire format of the snapshot (the registry may want
   safetensors + metadata rather than `ClusterAdapterBroadcast`); the Registry -> Evaluation extended metadata

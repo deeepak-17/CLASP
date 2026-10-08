@@ -14,7 +14,9 @@ network or ray.
 
 from __future__ import annotations
 
+import contextlib
 import re
+import threading
 import time
 from collections.abc import Callable
 
@@ -269,8 +271,23 @@ class _ClusterState:
     Multi-cluster (Week 8): the service holds one ``_ClusterState`` per cluster
     id in ``_clusters``; the legacy single-cluster endpoints are the same
     handlers bound to ``DEFAULT_CLUSTER_ID``. Buffers never cross clusters —
-    every handler takes the state of exactly one cluster. Not thread-safe
-    beyond what FastAPI's default single-worker server already serializes.
+    every handler takes the state of exactly one cluster.
+
+    Concurrency: the handlers are plain ``def`` functions, so FastAPI runs them
+    on a thread pool and several can touch one cluster at the same time, even
+    with a single worker process. ``lock`` serializes every read-modify-write of
+    ``uploads``, ``round_id``, ``active``, ``last_manifest`` and ``last_round``:
+    ``_upload`` and ``_aggregate`` hold it for their whole body, so an upload can
+    neither be iterated while it is added nor be cleared without having been
+    aggregated. An upload that waits behind a running aggregate then sees the
+    advanced ``round_id`` and gets an honest 409, never a 201 that is later
+    dropped. Lock order (to stay deadlock-free): ``_registry_lock`` first, then
+    at most one cluster lock — except ``recluster``, which takes every cluster
+    lock in sorted id order. Code holding a cluster lock never takes
+    ``_registry_lock``.
+
+    The lock is per process: with several worker processes each has its own
+    state anyway, so run this service with one worker.
     """
 
     def __init__(
@@ -280,6 +297,7 @@ class _ClusterState:
     ) -> None:
         self.cluster_id = cluster_id
         self.clock = clock  # injectable so straggler timeouts are testable
+        self.lock = threading.Lock()
         self.uploads: dict[str, _StoredUpload] = {}
         self.round_id: int = 0
         self.active: ClusterAdapterBroadcast | None = None
@@ -300,6 +318,10 @@ _clusters: dict[str, _ClusterState] = {DEFAULT_CLUSTER_ID: _state}
 # NOTE: client_id is self-asserted here — binding it to an authenticated
 # identity is the mTLS layer's job (P3), not something this service can do.
 _membership: dict[str, str] = {}
+# Guards *mutation* of ``_clusters`` / ``_membership`` (creating a cluster,
+# moving clients). Lock-free readers take a ``dict(...)`` snapshot instead of
+# iterating the live dict, so they can never see "changed size during iteration".
+_registry_lock = threading.RLock()
 
 
 # ---- client identity hook (the seam where P3's mTLS identity plugs in) -------
@@ -312,6 +334,11 @@ _membership: dict[str, str] = {}
 # with ``require=True`` an unauthenticated upload is refused (401). With no
 # provider (the default) behaviour is unchanged. This module does NOT verify
 # certificates or issue identities — that is P3 (see docs/INTEGRATION_BOUNDARIES.md).
+#
+# STATUS: a hook for later. Nothing in the running service calls
+# ``configure_identity`` (or ``configure_snapshot_sink`` below) — only tests do —
+# so by default uploads are NOT bound to a client certificate and nothing is
+# published to a registry. mTLS is not finished; do not read this seam as it.
 IdentityProvider = Callable[[Request], "str | None"]
 
 
@@ -374,6 +401,10 @@ class AggregateRequest(_BaseModel):
     straggler_timeout_s: float | None = None
     min_clients: int = 1
     min_fraction: float = 0.0
+    # Denominator for ``min_fraction``. Default: the number of clients assigned
+    # to the cluster (PUT .../members); with nobody assigned, the uploads that
+    # arrived (so min_fraction cannot bite — assign members or set this).
+    expected_clients: int | None = _Field(None, ge=1)
     weighting: str = "samples"  # "samples" | "uniform"
 
 
@@ -398,7 +429,10 @@ def _cluster(cluster_id: str, create: bool = False) -> _ClusterState:
     if state is None:
         if not create:
             raise HTTPException(status_code=404, detail=f"unknown cluster {cluster_id!r}")
-        state = _clusters[cluster_id] = _ClusterState(cluster_id)
+        with _registry_lock:  # two racing creators must end up sharing one state
+            state = _clusters.get(cluster_id)
+            if state is None:
+                state = _clusters[cluster_id] = _ClusterState(cluster_id)
     return state
 
 
@@ -409,7 +443,7 @@ def _healthz() -> dict[str, object]:
         "pending_uploads": len(_state.uploads),
         "round_id": _state.round_id,
         "has_active_adapter": _state.active is not None,
-        "clusters": sorted(_clusters),
+        "clusters": sorted(dict(_clusters)),
     }
 
 
@@ -417,6 +451,18 @@ def _upload(
     state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None = None
 ) -> dict[str, object]:
     """Seam A: Edge -> Cluster. Accepts one client's trained LoRA adapter.
+
+    Holds the cluster's lock for the whole check-and-store, so it is atomic with
+    respect to ``_aggregate`` and to membership moves (see ``_ClusterState``).
+    """
+    with state.lock:
+        return _upload_locked(state, upload, authenticated_as)
+
+
+def _upload_locked(
+    state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None
+) -> dict[str, object]:
+    """Body of ``_upload``; the caller must hold ``state.lock``.
 
     ``upload.tensors`` may use either key convention ``LoRAAdapter`` already
     parses: the short internal 'layers.<i>.<module>.<part>.weight' form, or
@@ -503,11 +549,42 @@ def _upload(
     }
 
 
+def _expected_clients(cluster_id: str, requested: int | None) -> int | None:
+    """How many clients this round was *expected* to hear from (the denominator
+    of ``min_fraction``): an explicit ``expected_clients`` wins, else the number
+    of clients assigned to the cluster, else ``None`` (= nobody is assigned, so
+    fall back to the uploads that arrived)."""
+    if requested is not None:
+        return requested
+    with _registry_lock:
+        members = sum(1 for owner in _membership.values() if owner == cluster_id)
+    return members or None
+
+
 def _aggregate(state: _ClusterState, request: AggregateRequest | None) -> ClusterAdapterBroadcast:
     """Runs the existing aggregation core over every upload currently
     buffered in ``state``, then clears the buffer and advances that cluster's
     round counter — the same one-round-at-a-time semantics
-    ``simulation.run_round`` already uses."""
+    ``simulation.run_round`` already uses.
+
+    The cluster lock is held for the whole call. ``aggregate_svd`` can take
+    seconds on real adapters; an upload arriving meanwhile waits and is then
+    judged against the *new* round (409 if it was for the one just aggregated),
+    instead of being accepted into a buffer that is about to be cleared. Reads
+    that do not need a consistent buffer (``/healthz``, ``/clusters``, the
+    active-adapter and manifest GETs) take no lock and are not blocked.
+    """
+    expected = _expected_clients(
+        state.cluster_id, request.expected_clients if request is not None else None
+    )  # before the cluster lock: lock order is registry -> cluster, never reverse
+    with state.lock:
+        return _aggregate_locked(state, request, expected)
+
+
+def _aggregate_locked(
+    state: _ClusterState, request: AggregateRequest | None, expected: int | None
+) -> ClusterAdapterBroadcast:
+    """Body of ``_aggregate``; the caller must hold ``state.lock``."""
     if not state.uploads:
         raise HTTPException(status_code=400, detail="no uploads to aggregate")
 
@@ -534,14 +611,19 @@ def _aggregate(state: _ClusterState, request: AggregateRequest | None) -> Cluste
         )
         for client_id, stored in state.uploads.items()
     ]
-    outcome = apply_policy(updates, policy, expected=len(updates))
+    # ``min_fraction`` is a fraction of the clients the round *expected*, not of
+    # the uploads that happened to arrive (that would always be 100%). Never
+    # below what actually arrived.
+    expected_n = max(len(updates), expected or 0)
+    outcome = apply_policy(updates, policy, expected=expected_n)
     if not outcome.accepted or not outcome.quorum_met:
         # keep the buffer so the caller can retry once more clients arrive
         raise HTTPException(
             status_code=409,
             detail=(
                 f"quorum not met: {len(outcome.accepted)} usable upload(s), "
-                f"{outcome.required} required; skipped={outcome.skipped}"
+                f"{outcome.required} required (of {expected_n} expected); "
+                f"skipped={outcome.skipped}"
             ),
         )
     adapters = [u.adapter for u in outcome.accepted]
@@ -560,6 +642,7 @@ def _aggregate(state: _ClusterState, request: AggregateRequest | None) -> Cluste
         "cluster_id": state.cluster_id,
         "round_id": state.round_id,
         "num_clients": len(outcome.accepted),
+        "expected_clients": expected_n,
         "aggregation": req.aggregation,
         "weighting": req.weighting,
         "source_clients": sorted(u.client_id for u in outcome.accepted),
@@ -622,15 +705,17 @@ def _active(state: _ClusterState, request: Request | None = None) -> ClusterAdap
                 f"cluster {state.cluster_id!r}'s adapter"
             ),
         )
-    if state.active is None:
+    active = state.active  # one atomic read: _aggregate swaps the reference
+    if active is None:
         raise HTTPException(status_code=404, detail="no aggregated cluster adapter yet")
-    return state.active
+    return active
 
 
 def _manifest(state: _ClusterState) -> dict[str, object]:
-    if state.last_manifest is None:
+    manifest = state.last_manifest
+    if manifest is None:
         raise HTTPException(status_code=404, detail="no aggregation has run yet")
-    return state.last_manifest
+    return manifest
 
 
 # ---- legacy single-cluster surface (cluster-default) ----------------------
@@ -666,15 +751,20 @@ def get_last_manifest() -> dict[str, object]:
 
 @app.get("/clusters")
 def list_clusters() -> dict[str, object]:
+    # Snapshots, not the live dicts: another request may be creating a cluster
+    # or moving a client while this one iterates. Takes no cluster lock, so it
+    # answers even while an aggregate is running.
+    clusters = dict(_clusters)
+    membership = dict(_membership)
     return {
         "clusters": {
             cid: {
                 "round_id": st.round_id,
                 "pending_uploads": len(st.uploads),
                 "has_active_adapter": st.active is not None,
-                "members": sorted(c for c, owner in _membership.items() if owner == cid),
+                "members": sorted(c for c, owner in membership.items() if owner == cid),
             }
-            for cid, st in sorted(_clusters.items())
+            for cid, st in sorted(clusters.items())
         }
     }
 
@@ -684,24 +774,38 @@ def set_members(cluster_id: str, body: MembersRequest) -> dict[str, object]:
     """Assign ``client_ids`` to this cluster (moving them out of any other).
     Created lazily on first reference. Uploads already buffered by a moved
     client in its old cluster are discarded so they cannot leak into the old
-    cluster's aggregate after the move."""
+    cluster's aggregate after the move.
+
+    This is the **only** endpoint that creates a cluster: an upload to an id
+    nobody registered is a 404, so a typo cannot silently open a new cluster.
+
+    Order matters for isolation: membership is changed first (under the registry
+    lock), the stale buffered uploads are dropped afterwards under each old
+    cluster's lock. An upload that checked the old membership either finished
+    before that drop (and is removed by it) or is refused with 403."""
     state = _cluster(cluster_id, create=True)
-    for client_id in body.client_ids:
-        previous = _membership.get(client_id)
-        if previous is not None and previous != cluster_id:
-            _clusters[previous].uploads.pop(client_id, None)
-        _membership[client_id] = cluster_id
-    return {
-        "cluster_id": state.cluster_id,
-        "members": sorted(c for c, owner in _membership.items() if owner == cluster_id),
-    }
+    moved_from: list[tuple[str, str]] = []
+    with _registry_lock:
+        for client_id in body.client_ids:
+            previous = _membership.get(client_id)
+            if previous is not None and previous != cluster_id:
+                moved_from.append((previous, client_id))
+            _membership[client_id] = cluster_id
+        members = sorted(c for c, owner in _membership.items() if owner == cluster_id)
+    for previous, client_id in moved_from:
+        old = _clusters[previous]
+        with old.lock:  # may wait for a running aggregate of the old cluster
+            old.uploads.pop(client_id, None)
+    return {"cluster_id": state.cluster_id, "members": members}
 
 
 @app.post("/clusters/{cluster_id}/uploads", status_code=201)
 def upload_adapter_to_cluster(
     cluster_id: str, upload: AdapterUpload, request: Request
 ) -> dict[str, object]:
-    return _upload(_cluster(cluster_id, create=True), upload, _caller_identity(request))
+    # create=False: only ``PUT /clusters/{id}/members`` creates a cluster, so a
+    # mistyped id is a 404 and callers cannot mint unlimited clusters.
+    return _upload(_cluster(cluster_id), upload, _caller_identity(request))
 
 
 @app.post("/clusters/{cluster_id}/aggregate", response_model=ClusterAdapterBroadcast)
@@ -745,9 +849,24 @@ def recluster(body: ReclusterRequest | None = None) -> dict[str, object]:
       ``base_cluster_id`` so a stale adapter is refused (409).
     * Administrative: like ``PUT .../members`` this changes membership and has
       no caller authentication of its own — it belongs behind P3's authorization
-      / network policy. Not thread-safe beyond a single worker.
+      / network policy.
+    * Concurrency: holds the registry lock and *every* cluster lock (sorted id
+      order) for its whole run, so the membership, the retained evidence and the
+      buffers it reads and edits cannot change underneath it. Uploads and
+      aggregates for any cluster wait until it is done; it in turn waits for a
+      running aggregate. Run it between rounds.
     """
     req = body or ReclusterRequest()
+    with _registry_lock:
+        states = sorted(_clusters.items())
+        with contextlib.ExitStack() as held:
+            for _cid, st in states:
+                held.enter_context(st.lock)
+            return _recluster_locked(req)
+
+
+def _recluster_locked(req: ReclusterRequest) -> dict[str, object]:
+    """Body of ``recluster``; the caller holds the registry lock and every cluster lock."""
     cluster_ids = sorted({owner for owner in _membership.values()})
     if len(cluster_ids) < 2:
         raise HTTPException(

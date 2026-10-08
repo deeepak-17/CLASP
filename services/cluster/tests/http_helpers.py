@@ -31,6 +31,15 @@ def restore_server_state(saved: tuple[dict, dict]) -> None:
     server.configure_snapshot_sink(None)
 
 
+def create_cluster(client, *cluster_ids: str, members: dict[str, list[str]] | None = None) -> None:
+    """Register clusters the way the service requires: only ``PUT .../members``
+    creates one (an upload to an unknown id is a 404). With no ``members`` the
+    cluster is created empty, so nobody is *assigned* to it."""
+    for cid in cluster_ids:
+        r = client.put(f"/clusters/{cid}/members", json={"client_ids": (members or {}).get(cid, [])})
+        assert r.status_code == 200, r.text
+
+
 def upload_body(client_id, adapter: LoRAAdapter, round_id=0, n=10, **extra):
     return {
         "client_id": client_id,

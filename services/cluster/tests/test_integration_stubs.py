@@ -11,7 +11,12 @@ from cluster import server
 from cluster.integration import InMemorySnapshotSink, cluster_adapter_ref
 from cluster.redistribution import adapter_from_broadcast
 from tests.conftest import trained_adapter
-from tests.http_helpers import reset_server_state, restore_server_state, upload_body
+from tests.http_helpers import (
+    create_cluster,
+    reset_server_state,
+    restore_server_state,
+    upload_body,
+)
 
 client = TestClient(server.app)
 
@@ -19,6 +24,7 @@ client = TestClient(server.app)
 @pytest.fixture(autouse=True)
 def _clean():
     saved = reset_server_state()
+    create_cluster(client, "team-a")
     yield
     restore_server_state(saved)
 

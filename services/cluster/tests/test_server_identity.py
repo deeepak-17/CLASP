@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 
 from cluster import server
 from tests.conftest import trained_adapter
-from tests.http_helpers import reset_server_state, restore_server_state, upload_body
+from tests.http_helpers import (
+    create_cluster,
+    reset_server_state,
+    restore_server_state,
+    upload_body,
+)
 
 client = TestClient(server.app)
 HEADER = "x-test-client-cn"  # stand-in for "CN of the verified client certificate"
@@ -20,6 +25,7 @@ def _stub_provider(request):
 @pytest.fixture(autouse=True)
 def _clean():
     saved = reset_server_state()
+    create_cluster(client, "team-a")
     yield
     restore_server_state(saved)
 

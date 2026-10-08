@@ -25,7 +25,7 @@ see §16.
 | Live Edge ⇄ Cluster ⇄ Registry ⇄ Evaluation, mTLS (G1), DP µ tuning | **blocked by other modules** | `INTEGRATION_BOUNDARIES.md` |
 | Real model / real data | not done | §15 |
 
-Verification environment: Linux sandbox, Python 3.11 and 3.10, torch 2.14 (executed on CPU), flwr 1.39. **Not** run on Prasanth's
+Verification environment: Linux sandbox, Python 3.11 and 3.10, torch 2.14 (executed on CPU), flwr 1.32 (3.11) / 1.30 (3.10). **Not** run on Prasanth's
 Windows machine from here (§14).
 
 ## 2. Architecture
@@ -200,13 +200,28 @@ cluster (`isolation_stress`).
 | `GET /healthz` | liveness + default-cluster state |
 | `POST /uploads`, `POST /aggregate`, `GET /adapters/cluster/active`, `GET /aggregate/manifest` | legacy single-cluster surface (cluster id `cluster-default`) |
 | `GET /clusters` | per cluster: round, pending uploads, has-active-adapter, members |
-| `PUT /clusters/{id}/members` `{"client_ids": [...]}` | assign clients (moving them out of any other cluster) |
-| `POST /clusters/{id}/uploads` | accept one `AdapterUpload` (201) |
-| `POST /clusters/{id}/aggregate` | aggregate the buffer: `{aggregation, rank, include_manifest, straggler_timeout_s, min_clients, min_fraction, weighting}` → `ClusterAdapterBroadcast` |
+| `PUT /clusters/{id}/members` `{"client_ids": [...]}` | assign clients (moving them out of any other cluster); **the only call that creates a cluster** (`[]` registers an empty one) |
+| `POST /clusters/{id}/uploads` | accept one `AdapterUpload` (201); **404** for a cluster nobody registered |
+| `POST /clusters/{id}/aggregate` | aggregate the buffer: `{aggregation, rank, include_manifest, straggler_timeout_s, min_clients, min_fraction, expected_clients, weighting}` → `ClusterAdapterBroadcast` |
 | `GET /clusters/{id}/adapters/active`, `GET /clusters/{id}/aggregate/manifest` | retrieve the aggregated adapter / the last manifest |
 | `POST /recluster` | dynamic re-clustering, §12 |
 
-State is in memory (lost on restart), single worker, not thread-safe beyond that.
+State is in memory (lost on restart) and per process: run a single worker.
+
+**Concurrency.** The handlers are plain `def` functions, so FastAPI runs them on a thread pool and several can touch
+one cluster at once. Each `_ClusterState` has a lock that is held across the whole of an upload and the whole of an
+aggregate: an upload cannot be iterated while it is added, and an upload that arrives while `aggregate_svd` is running
+waits and is then answered 409 (its round was consumed) instead of 201-then-dropped. `PUT .../members` and `POST
+/recluster` take the registry lock (and, for the latter, every cluster lock in sorted order); `/healthz`, `/clusters`
+and the GET endpoints take no cluster lock and read snapshots, so a liveness probe never queues behind an aggregate.
+Evidence: `tests/test_server_concurrency.py` drives the real app from real threads (a gated slow aggregate; a
+12-uploader/continuous-aggregator stress run asserting every accepted upload is aggregated exactly once); with the
+per-cluster lock disabled two of those tests fail.
+
+**Quorum denominator.** `min_fraction` is a fraction of the clients the round *expected*, not of the uploads that
+arrived (that would always be 100 %): `expected_clients` from the request, else the number of clients assigned to the
+cluster, else — when nobody is assigned — the uploads that arrived, where `min_fraction` therefore cannot bite. The
+value used is recorded in the manifest (`expected_clients`) and never falls below the uploads actually received.
 
 ## 12. Clustering: flattening, cosine similarity, k-means, warm start, dynamic re-clustering, static fallback
 
@@ -317,7 +332,7 @@ What the numbers do and do not show: the group structure is **planted by constru
 works when structure exists — not that real project clusters exist. The µ sweep says nothing about DP. Loss differences
 between SVD and naive come from a single seed.
 
-Test and lint status at the time of writing (this environment): **203 passed, 0 failed, 1 skipped** on Python 3.11.17 and again on Python 3.10.20 (the one skip, `tests/test_demo.py:42`, is environment-dependent: it asserts the torch-missing path and skips when torch is installed); `ruff check .` clean on both ruff 0.16.8 and the team-pinned ruff 0.15.22 (built-in defaults, run from `services/cluster`; the repository commits no ruff configuration); `python -m cluster.demo --seed 42`, `python -m cluster.demo_all_weeks`, `python -m cluster.demo_phase2` and `python -m cluster.evidence` all exit 0. Raw logs: `demo_runs/validation/`.
+Test and lint status at the time of writing (this environment): **216 passed, 0 failed, 1 skipped** on Python 3.11.17 and again on Python 3.10.20 (the one skip, `tests/test_demo.py:42`, is environment-dependent: it asserts the torch-missing path and skips when torch is installed); `ruff check .` clean on both ruff 0.16.8 and the team-pinned ruff 0.15.22 (built-in defaults, run from `services/cluster`; the repository commits no ruff configuration); `python -m cluster.demo --seed 42`, `python -m cluster.demo_all_weeks`, `python -m cluster.demo_phase2` and `python -m cluster.evidence` all exit 0. Raw logs: `demo_runs/validation/`.
 
 Verification matrix:
 
@@ -334,9 +349,9 @@ Verification matrix:
 1. **Toy workload.** All training/evidence uses a synthetic regression with a chained 4-module toy "layer"; no real
    DeepSeek-Coder adapter, dataset, GPU or real-width run. Real-width shapes appear only in shape/format tests with synthetic adapters.
 2. **Timeouts act on reported/arrival time**, not a hard deadline; Flower's `round_timeout` is not configured.
-3. **In-memory HTTP state**: resets on restart, single worker, no persistence, no locking.
-4. **Identity** is self-asserted unless an identity provider is installed; membership and re-cluster endpoints are unauthenticated admin operations.
-5. **No mTLS yet** on the real path (G1 blocked); `start_grpc_server` is insecure; uvicorn does not expose the peer certificate to the app.
+3. **In-memory HTTP state**: resets on restart, no persistence, one worker (locks are per process).
+4. **Identity** is self-asserted. `server.configure_identity` and `server.configure_snapshot_sink` are **hooks that only tests call**: nothing in the running service installs them, so by default uploads are not bound to a client certificate and nothing is published to a registry. Membership and re-cluster endpoints are unauthenticated admin operations.
+5. **mTLS is not finished.** `cluster/tls.py` builds TLS settings and is tested against an ephemeral test CA, but it is not wired into a deployed service, uvicorn does not expose the peer certificate to the app, and `start_grpc_server` is insecure. G1 is blocked by P3.
 6. **Flower strategy = one cluster per server**; multi-cluster over Flower gRPC is not implemented (multi-cluster = HTTP service + in-process federation).
 7. **Re-clustering** uses the last round only, needs ≥ k updates, keeps k = number of existing clusters (never creates/merges clusters), and
    its `min_separation = 0.1` is a heuristic tuned on nothing but the toy. Clustering on real update directions is untested.

@@ -70,7 +70,7 @@ runs with the same seed produce a byte-identical aggregated adapter (see
 | Multi-cluster HTTP (W8) | `cluster/server.py` | `/clusters/{id}/uploads\|aggregate\|adapters/active\|aggregate/manifest`, `PUT /clusters/{id}/members` (403 for a client uploading to a cluster it is not assigned to) |
 | Clustering novelty (W10) | `cluster/clustering.py` | flatten delta_W update -> cosine matrix (also computed from the LoRA factors without forming delta_W) -> k-means (k=2) -> `ClusterAssigner`: warm start, dynamic re-clustering after round 2, static fallback, dynamic-vs-warm-start comparison |
 | Re-clustering over HTTP (W10) | `cluster/server.py` | `POST /recluster`: dry run by default, `apply` moves clients; evidence = last completed round |
-| P2-side seams (W7, W9) | `cluster/tls.py`, `cluster/integration.py`, `server.configure_identity` / `configure_snapshot_sink` | mTLS wiring + identity hook (tested with an ephemeral CA / stub — **G1 blocked by P3**), registry `SnapshotSink` stub (**blocked by P4**) |
+| P2-side seams (W7, W9) | `cluster/tls.py`, `cluster/integration.py`, `server.configure_identity` / `configure_snapshot_sink` | **Hooks only, not wired at startup.** `tls.py` builds TLS settings and is tested against an ephemeral test CA; `configure_identity` / `configure_snapshot_sink` are called only from tests, so the running service has **no** authenticated client identity and publishes **nothing** to the registry. **mTLS is not finished** (G1 blocked by P3); the registry sink is a stub (**blocked by P4**) |
 
 Re-clustering uses each client's *update* (`delta_W(returned) - delta_W(adapter it started from)`).
 Order inside a round: every cluster aggregates the clients that trained from its adapter,
@@ -83,11 +83,25 @@ Re-clustering is also available over HTTP: `POST /recluster` (dry run by default
 clients) uses the last completed round of each cluster. Details, request/response and the isolation argument:
 [`docs/P2_CLUSTER_REPORT.md`](docs/P2_CLUSTER_REPORT.md) §11-12.
 
-Known limits (full list in the report, §15): `client_id` on the HTTP path is self-asserted unless an identity
-provider is installed (`server.configure_identity`; real identity = P3's mTLS, **G1 blocked by P3**); membership and
-re-cluster endpoints are unauthenticated admin operations; HTTP state is in memory; the Flower strategy aggregates a
-single cluster per server; all evidence is a toy workload, not the real model, and not DP (**µ tuning under DP is
-blocked by P3**).
+HTTP service behaviour worth knowing:
+
+* **Only `PUT /clusters/{id}/members` creates a cluster.** An upload or aggregate for an id nobody registered is a
+  `404` (a typo cannot open a new cluster). `PUT` with an empty `client_ids` registers an empty cluster.
+* **Quorum denominator.** `min_fraction` is a fraction of the clients the round *expected*: the request's
+  `expected_clients`, else the number of clients assigned to the cluster, else (nobody assigned) the uploads that
+  arrived — in which case `min_fraction` cannot bite, so assign members or pass `expected_clients`. The manifest
+  records `expected_clients`.
+* **Concurrency.** Handlers run on FastAPI's thread pool; each cluster has a lock held across a whole upload and a
+  whole aggregate, so an upload that arrives during an aggregate waits and is then answered `409` (its round was
+  consumed) instead of a `201` that is later dropped. `/healthz`, `/clusters` and the GET endpoints take no lock.
+  State is per process: run **one worker**.
+
+Known limits (full list in the report, §15): **mTLS is not finished and not wired into the running service.**
+`client_id` on the HTTP path is self-asserted: `server.configure_identity` / `configure_snapshot_sink` are hooks for
+P3's identity and P4's registry that only tests call, so by default uploads are not tied to a client certificate and
+nothing is published (real identity = P3, **G1 blocked by P3**); membership and re-cluster endpoints are
+unauthenticated admin operations; HTTP state is in memory; the Flower strategy aggregates a single cluster per
+server; all evidence is a toy workload, not the real model, and not DP (**µ tuning under DP is blocked by P3**).
 
 ## Weeks 14-16 documentation
 
