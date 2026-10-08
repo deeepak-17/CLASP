@@ -1,0 +1,486 @@
+{
+  "utc": "2026-10-06T08:34:23.681974+00:00",
+  "task": "W4/G2 3-layer composition + W5/G3 full E2E round",
+  "cluster_adapters_source": "supplied (--cluster-adapters)",
+  "round": 2,
+  "profile": "dev",
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "seed": 0,
+  "beta": 1.0,
+  "alpha_grid": [
+    0.0,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "cluster_rank": 16,
+  "clusters": {
+    "scientific": {
+      "members": [
+        "scientific/client-numpy",
+        "scientific/client-pandas",
+        "scientific/client-scikit-learn"
+      ],
+      "source": "artifacts\\round2_cluster\\cluster-scientific",
+      "provenance": {
+        "registry_url": "http://localhost:8004",
+        "adapter": "cluster-scientific",
+        "version": 2,
+        "aggregation": "svd_exact",
+        "round": 1,
+        "source_clients": [
+          "client-numpy",
+          "client-pandas",
+          "client-scikit-learn"
+        ],
+        "sha256_verified": "139a801adebb31b554024395f63f5d728d5ed25c771f69d9fa7ea9a04a5fa03f"
+      }
+    },
+    "web": {
+      "members": [
+        "web/client-flask",
+        "web/client-requests",
+        "web/client-werkzeug"
+      ],
+      "source": "artifacts\\round2_cluster\\cluster-web",
+      "provenance": {
+        "registry_url": "http://localhost:8004",
+        "adapter": "cluster-web",
+        "version": 2,
+        "aggregation": "svd_exact",
+        "round": 1,
+        "source_clients": [
+          "client-flask",
+          "client-requests",
+          "client-werkzeug"
+        ],
+        "sha256_verified": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279"
+      }
+    }
+  },
+  "clients": {
+    "scientific/client-numpy": {
+      "cluster": "scientific",
+      "training": {
+        "d3": {
+          "alpha": 0.5,
+          "cluster_adapter": "artifacts\\round2_cluster\\cluster-scientific"
+        },
+        "d3_deviation": null
+      },
+      "n_train_files": 199,
+      "n_train_blocks": 1286,
+      "n_held_out_blocks": 106,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.508,
+          "ppl_delta": -0.083,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.25,
+          "beta": 1.0,
+          "perplexity": 2.493,
+          "ppl_delta": -0.098,
+          "merge_rel_err": 2.2789737325487586e-07
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.491,
+          "ppl_delta": -0.1,
+          "merge_rel_err": 2.623966911427385e-07
+        },
+        {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "perplexity": 2.505,
+          "ppl_delta": -0.086,
+          "merge_rel_err": 3.2687854443599193e-07
+        }
+      ],
+      "best_alpha": 0.5,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.736,
+        "client_only_ppl": 2.667,
+        "composite_ppl": 2.651,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.651,
+        "n_tokens": 108026
+      },
+      "personalization_delta_ppl": -0.085,
+      "cluster_contribution_ppl": -0.016,
+      "cluster_contribution_at_alpha_ref": -0.016,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 297.7
+    },
+    "scientific/client-pandas": {
+      "cluster": "scientific",
+      "training": {
+        "d3": {
+          "alpha": 0.5,
+          "cluster_adapter": "artifacts\\round2_cluster\\cluster-scientific"
+        },
+        "d3_deviation": null
+      },
+      "n_train_files": 239,
+      "n_train_blocks": 1687,
+      "n_held_out_blocks": 159,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.534,
+          "ppl_delta": -0.157,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.25,
+          "beta": 1.0,
+          "perplexity": 2.519,
+          "ppl_delta": -0.172,
+          "merge_rel_err": 2.577770199133392e-07
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.514,
+          "ppl_delta": -0.177,
+          "merge_rel_err": 2.775291771627623e-07
+        },
+        {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "perplexity": 2.526,
+          "ppl_delta": -0.165,
+          "merge_rel_err": 2.9989485686318375e-07
+        }
+      ],
+      "best_alpha": 0.5,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.91,
+        "client_only_ppl": 2.736,
+        "composite_ppl": 2.714,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.714,
+        "n_tokens": 162647
+      },
+      "personalization_delta_ppl": -0.196,
+      "cluster_contribution_ppl": -0.022,
+      "cluster_contribution_at_alpha_ref": -0.022,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 410.9
+    },
+    "scientific/client-scikit-learn": {
+      "cluster": "scientific",
+      "training": {
+        "d3": {
+          "alpha": 0.5,
+          "cluster_adapter": "artifacts\\round2_cluster\\cluster-scientific"
+        },
+        "d3_deviation": null
+      },
+      "n_train_files": 222,
+      "n_train_blocks": 1696,
+      "n_held_out_blocks": 244,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.354,
+          "ppl_delta": -0.207,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.25,
+          "beta": 1.0,
+          "perplexity": 2.335,
+          "ppl_delta": -0.226,
+          "merge_rel_err": 2.835714041302742e-07
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.33,
+          "ppl_delta": -0.231,
+          "merge_rel_err": 2.478103068271574e-07
+        },
+        {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "perplexity": 2.343,
+          "ppl_delta": -0.218,
+          "merge_rel_err": 2.8928800508510456e-07
+        }
+      ],
+      "best_alpha": 0.5,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.584,
+        "client_only_ppl": 2.388,
+        "composite_ppl": 2.367,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.367,
+        "n_tokens": 248968
+      },
+      "personalization_delta_ppl": -0.217,
+      "cluster_contribution_ppl": -0.021,
+      "cluster_contribution_at_alpha_ref": -0.021,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 549.2
+    },
+    "web/client-flask": {
+      "cluster": "web",
+      "training": {
+        "d3": {
+          "alpha": 0.5,
+          "cluster_adapter": "artifacts\\round2_cluster\\cluster-web"
+        },
+        "d3_deviation": null
+      },
+      "n_train_files": 21,
+      "n_train_blocks": 80,
+      "n_held_out_blocks": 11,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.311,
+          "ppl_delta": -0.141,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.25,
+          "beta": 1.0,
+          "perplexity": 2.278,
+          "ppl_delta": -0.174,
+          "merge_rel_err": 2.7175033028988063e-07
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.264,
+          "ppl_delta": -0.188,
+          "merge_rel_err": 3.2324888402363403e-07
+        },
+        {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "perplexity": 2.268,
+          "ppl_delta": -0.184,
+          "merge_rel_err": 3.1641749579916223e-07
+        }
+      ],
+      "best_alpha": 0.5,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.452,
+        "client_only_ppl": 2.311,
+        "composite_ppl": 2.264,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.264,
+        "n_tokens": 10549
+      },
+      "personalization_delta_ppl": -0.188,
+      "cluster_contribution_ppl": -0.047,
+      "cluster_contribution_at_alpha_ref": -0.047,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 81.7
+    },
+    "web/client-requests": {
+      "cluster": "web",
+      "training": {
+        "d3": {
+          "alpha": 0.5,
+          "cluster_adapter": "artifacts\\round2_cluster\\cluster-web"
+        },
+        "d3_deviation": null
+      },
+      "n_train_files": 16,
+      "n_train_blocks": 52,
+      "n_held_out_blocks": 1,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 3.323,
+          "ppl_delta": -0.14,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.25,
+          "beta": 1.0,
+          "perplexity": 3.28,
+          "ppl_delta": -0.183,
+          "merge_rel_err": 2.2125873875217374e-07
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 3.259,
+          "ppl_delta": -0.204,
+          "merge_rel_err": 3.0544013312302764e-07
+        },
+        {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "perplexity": 3.269,
+          "ppl_delta": -0.194,
+          "merge_rel_err": 3.625178313458293e-07
+        }
+      ],
+      "best_alpha": 0.5,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 3.463,
+        "client_only_ppl": 3.323,
+        "composite_ppl": 3.259,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 3.259,
+        "n_tokens": 513
+      },
+      "personalization_delta_ppl": -0.204,
+      "cluster_contribution_ppl": -0.064,
+      "cluster_contribution_at_alpha_ref": -0.064,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 48.9
+    },
+    "web/client-werkzeug": {
+      "cluster": "web",
+      "training": {
+        "d3": {
+          "alpha": 0.5,
+          "cluster_adapter": "artifacts\\round2_cluster\\cluster-web"
+        },
+        "d3_deviation": null
+      },
+      "n_train_files": 44,
+      "n_train_blocks": 170,
+      "n_held_out_blocks": 30,
+      "grid_max_blocks": 30,
+      "alpha_grid": [
+        {
+          "alpha": 0.0,
+          "beta": 1.0,
+          "perplexity": 2.695,
+          "ppl_delta": -0.133,
+          "merge_rel_err": 0.0
+        },
+        {
+          "alpha": 0.25,
+          "beta": 1.0,
+          "perplexity": 2.663,
+          "ppl_delta": -0.165,
+          "merge_rel_err": 2.559811051813562e-07
+        },
+        {
+          "alpha": 0.5,
+          "beta": 1.0,
+          "perplexity": 2.648,
+          "ppl_delta": -0.18,
+          "merge_rel_err": 2.5355387449336764e-07
+        },
+        {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "perplexity": 2.664,
+          "ppl_delta": -0.164,
+          "merge_rel_err": 3.340671005841965e-07
+        }
+      ],
+      "best_alpha": 0.5,
+      "beta": 1.0,
+      "full_split": {
+        "base_ppl": 2.828,
+        "client_only_ppl": 2.695,
+        "composite_ppl": 2.648,
+        "alpha_ref": 0.5,
+        "alpha_ref_ppl": 2.648,
+        "n_tokens": 30279
+      },
+      "personalization_delta_ppl": -0.18,
+      "cluster_contribution_ppl": -0.047,
+      "cluster_contribution_at_alpha_ref": -0.047,
+      "promotion": {
+        "in_project_improved": true,
+        "noise_band": 0.0,
+        "noise_band_source": "PLACEHOLDER \u2014 P5's measured band (W5) does not exist yet",
+        "humaneval_guard": "unavailable (evalplus needs Unix `resource`; W1 debt)",
+        "humaneval_max_drop_allowed": 2.0,
+        "decision": "PROVISIONAL_PROMOTE",
+        "decision_is_authoritative": false
+      },
+      "wall_seconds": 177.9
+    }
+  },
+  "timings": {
+    "aggregate_seconds": 33.9,
+    "total_minutes": 31.8,
+    "nfr_round_minutes": 30.0,
+    "nfr_note": "this round EXCLUDES client training, which ran separately; see the round-cost breakdown in the report"
+  },
+  "hardware": {
+    "device": "NVIDIA GeForce RTX 2050",
+    "peak_vram_gb": 1.818
+  },
+  "versions": {
+    "python": "3.10.11",
+    "torch": "2.14.0+cu126",
+    "transformers": "5.16.1"
+  },
+  "known_deviations": {
+    "d3_composition_order": "closed: every client trained on frozen (base + alpha*cluster)",
+    "d5_regression_guard": "HumanEval half unavailable on Windows; decisions provisional",
+    "d5_noise_band": "placeholder 0.0; P5's measured band outstanding",
+    "d1_web_cluster": "on disk = {flask, requests, werkzeug}; D1 says {django, flask, requests}"
+  }
+}
