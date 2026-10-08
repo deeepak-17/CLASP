@@ -120,7 +120,7 @@ class HarnessRun:
                     "computed by executing every assembled program (eval_harness.execution) and "
                     "scoring with eval_harness.scoring.pass_at_k.",
                     "This artefact still is NOT an EvalResult contract document — it is the raw "
-                    "per-run record. See eval_harness/results/results.json for the dashboard-facing "
+                    "per-run record. See results/results.json for the dashboard-facing "
                     "EvalResult rollup (eval_harness.results_store).",
                 ]
                 if self.scored
@@ -163,7 +163,7 @@ class EvaluationHarness:
 
         Args:
             limit: Per-benchmark task cap, overriding ``run.limit``.
-            write_artifact: Write the run JSON to ``eval_harness/results/``.
+            write_artifact: Write the run JSON to ``results/``.
         """
         effective_limit = limit if limit is not None else self._config.run.limit
         run_id = f"{self._config.run.run_id_prefix}-{file_timestamp()}"
@@ -284,6 +284,7 @@ class EvaluationHarness:
                 temperature=generation.temperature,
                 stop_sequences=tuple(generation.stop_sequences),
                 num_samples=self._config.run.num_samples_per_task,
+                seed=generation.seed,
             )
             result = self._client.generate(request)
 
@@ -395,7 +396,7 @@ def render_dry_run_report(run: HarnessRun, config: EvaluationConfig) -> Markdown
             "The `EdgeInferenceClient` protocol round-trips request → completion.",
             "Stop-sequence truncation runs over every completion.",
             "`assemble_program` produces a program for every task/completion pair.",
-            "The run artefact is written to `eval_harness/results/` in the expected shape.",
+            "The run artefact is written to `results/` in the expected shape.",
         ]
     )
 

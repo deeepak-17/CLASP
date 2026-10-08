@@ -27,6 +27,8 @@ evaluation:
   generation:
     max_new_tokens: 384
     temperature: 0.2
+    # Sampling seed; each task samples from a seed derived from this and its id.
+    seed: 0
     # Truncate a completion at the first of these, so a model that keeps
     # generating past the function body does not corrupt the assembled program.
     stop_sequences:

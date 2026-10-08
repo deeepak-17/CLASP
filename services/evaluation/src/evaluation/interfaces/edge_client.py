@@ -40,12 +40,25 @@ class GenerationRequest:
     temperature: float = 0.2
     stop_sequences: tuple[str, ...] = ()
     num_samples: int = 1
+    #: Run-level sampling seed; ``None`` leaves sampling unseeded.
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         if not self.prompt:
             raise ClaspP5Error(f"GenerationRequest for {self.task_id} has an empty prompt")
         if self.num_samples < 1:
             raise ClaspP5Error("num_samples must be >= 1")
+
+
+def task_seed(seed: int, task_id: str) -> int:
+    """Per-task sampling seed derived from the run seed and the task id.
+
+    Deriving it per task (rather than seeding once per run) makes every task's
+    samples independent of which tasks ran before it, so a ``--limit``-ed run
+    reproduces the same completions as the full run for the tasks they share.
+    """
+    digest = hashlib.sha256(f"{seed}|{task_id}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
 
 @dataclass(frozen=True)
@@ -160,7 +173,7 @@ class MockEdgeInferenceClient:
     def _synthesise(request: GenerationRequest, sample_index: int) -> str:
         """Return a deterministic placeholder body for ``request``."""
         seed = hashlib.sha256(
-            f"{request.task_id}|{request.prompt}|{sample_index}".encode("utf-8")
+            f"{request.task_id}|{request.prompt}|{sample_index}|{request.seed}".encode("utf-8")
         ).hexdigest()[:8]
         return (
             f"    # MOCK COMPLETION (seed={seed}, sample={sample_index})\n"

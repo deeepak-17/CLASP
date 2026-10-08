@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-samples", type=int, default=None, help="Samples per task. Overrides run.num_samples_per_task.")
     parser.add_argument("--k", type=int, nargs="+", default=None, help="k values for Pass@k. Overrides scoring.pass_at_k.")
     parser.add_argument(
-        "--output", type=Path, default=None, help="results.json path. Defaults to eval_harness/results/results.json."
+        "--output", type=Path, default=None, help="results.json path. Defaults to results/results.json."
     )
     return parser
 
@@ -142,7 +142,7 @@ def main(args: argparse.Namespace) -> int:
                 model_checkpoint=_BASELINE_MODEL_ID,
                 dataset_split=split,
                 num_problems=summary.tasks_attempted,
-                seed=None,
+                seed=config.generation.seed,
                 generation=GenerationSnapshot(
                     max_new_tokens=config.generation.max_new_tokens,
                     temperature=config.generation.temperature,

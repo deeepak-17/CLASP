@@ -5,13 +5,13 @@
 Two artefacts, two audiences
 -----------------------------
 :mod:`eval_harness.harness` already writes one JSON file per run to
-``eval_harness/results/<run_id>.json``, containing every raw completion. That
+``results/<run_id>.json``, containing every raw completion. That
 document is deliberately **not** the dashboard's contract: it is large (every
 sample of every task), it is not shaped like
 :class:`~interfaces.contracts.EvalResult`, and there is one per run rather
 than one place a dashboard can read to answer "show me every scored result".
 
-This module writes the other artefact: ``eval_harness/results/results.json``,
+This module writes the other artefact: ``results/results.json``,
 an append-only *index* of :class:`ResultRecord` — one entry per scored
 benchmark run, each wrapping a schema-valid ``EvalResult`` plus the extra
 metadata a dashboard (or a panel) needs that the frozen P4 contract does not

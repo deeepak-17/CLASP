@@ -152,12 +152,18 @@ class GenerationConfig:
     max_new_tokens: int = 384
     temperature: float = 0.2
     stop_sequences: list[str] = field(default_factory=list)
+    #: Sampling seed. Each task draws from its own seed derived from this one
+    #: and its task id (:func:`~evaluation.interfaces.edge_client.task_seed`),
+    #: so a run is reproducible and independent of task order.
+    seed: int = 0
 
     def __post_init__(self) -> None:
         if self.max_new_tokens < 1:
             raise ConfigError("generation.max_new_tokens must be >= 1")
         if self.temperature < 0:
             raise ConfigError("generation.temperature must be >= 0")
+        if self.seed < 0:
+            raise ConfigError("generation.seed must be >= 0")
 
 
 @dataclass(frozen=True)

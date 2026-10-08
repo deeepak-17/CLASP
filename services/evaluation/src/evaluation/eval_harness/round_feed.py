@@ -6,7 +6,7 @@ registry versions per cluster, their in-project metrics, the HumanEval guard
 status and the registry's D5 decision. That file is large and nested; the
 dashboard is a static app that reads small JSON from ``public/data/``. This
 module is the bridge: it reads one or more round manifests and writes the
-compact ``eval_harness/results/rounds.json`` the dashboard's Rounds page
+compact ``results/rounds.json`` the dashboard's Rounds page
 renders.
 
 Every field is read from the manifest, never recomputed or filled in. A

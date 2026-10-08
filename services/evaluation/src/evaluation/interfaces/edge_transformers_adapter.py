@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 from evaluation.interfaces.contracts import AdapterRef
-from evaluation.interfaces.edge_client import GenerationRequest, GenerationResult
+from evaluation.interfaces.edge_client import GenerationRequest, GenerationResult, task_seed
 from evaluation.utils.errors import DependencyError
 from evaluation.utils.logging_utils import get_logger
 from evaluation.utils.timing import Stopwatch
@@ -150,6 +150,9 @@ class TransformersEdgeInferenceClient:
 
         inputs = self._tokenizer(request.prompt, return_tensors="pt").to(self._model.device)
         prompt_len = inputs["input_ids"].shape[1]
+        if request.temperature > 0 and request.seed is not None:
+            # Seeded sampling: the same (seed, task) reproduces the same samples.
+            torch.manual_seed(task_seed(request.seed, request.task_id))
 
         with torch.no_grad():
             output = self._model.generate(

@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-artifact",
         action="store_true",
-        help="Skip writing the run JSON to eval_harness/results/.",
+        help="Skip writing the run JSON to results/.",
     )
     parser.add_argument(
         "--output", type=Path, default=None, help="Report path. Defaults to reports/dry_run_report.md."

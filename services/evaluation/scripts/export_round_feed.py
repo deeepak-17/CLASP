@@ -2,7 +2,7 @@
 """Export federated-round manifests into the dashboard's rounds.json.
 
 Reads one or more ``round{N}_manifest.json`` files written by
-``scripts/demo_round.py`` and writes ``eval_harness/results/rounds.json``,
+``scripts/demo_round.py`` and writes ``results/rounds.json``,
 which ``dashboard`` copies in (``npm run sync-data``) for its Rounds page.
 
 Usage::
@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = base_parser(__doc__.splitlines()[0])
     parser.add_argument("manifests", type=Path, nargs="+", help="round{N}_manifest.json file(s).")
     parser.add_argument(
-        "--out", type=Path, default=None, help="Output path. Defaults to eval_harness/results/rounds.json."
+        "--out", type=Path, default=None, help="Output path. Defaults to results/rounds.json."
     )
     return parser
 
