@@ -157,18 +157,33 @@ def _guard_contract(metrics: Dict):
                         pass_at_k={int(k): float(v) for k, v in metrics["pass_at_k"].items()})
 
 
-def predict_decision(in_project: Dict, baseline_in_project: Optional[Dict],
-                     noise_band: float, guard: GuardStatus) -> Tuple[str, str]:
+def _previous_version(versions: Sequence[int], version: int) -> Optional[int]:
+    """The rollback target D5 would use: the version just before ``version``.
+
+    Mirrors ``registry.storage.previous_version`` over a version list the
+    registry itself returned; None when ``version`` is the first one.
+    """
+    earlier = [v for v in versions if v < version]
+    return max(earlier) if earlier else None
+
+
+def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict],
+                     previous_version: Optional[int]) -> Tuple[str, str]:
     """What D5 will say, and why — for the manifest ONLY.
 
     Computed by the registry's own rule, ``registry.promotion.decide`` (P4), on
-    exactly the inputs being sent: the edge does not keep a copy of D5. The
-    authoritative decision is still whatever the live registry returns; this
-    sits beside it in the manifest so a disagreement between the inputs'
-    implications and the service's answer is visible instead of invisible.
+    exactly the inputs being sent: the EvalResult body and baseline guard of
+    seam C2, with the candidate as the active version (the only one the
+    registry evaluates) and ``previous_version`` as the rollback target. The
+    edge does not keep a copy of D5. The authoritative decision is still
+    whatever the live registry returns; this sits beside it in the manifest so
+    a disagreement between the inputs' implications and the service's answer is
+    visible instead of invisible.
 
     Returns ("unavailable", why) if the registry package is not installed
-    alongside the edge — a prediction the edge cannot make is not made up.
+    alongside the edge, or if the rule cannot decide on these inputs (a
+    rollback with no previous version) — a prediction the edge cannot make is
+    not made up.
     """
     try:
         from contracts import AdapterKind, AdapterRef, EvalResult, InProjectMetrics
@@ -183,17 +198,23 @@ def predict_decision(in_project: Dict, baseline_in_project: Optional[Dict],
                                 perplexity=float(d["perplexity"]),
                                 n_examples=int(d["n_examples"]))
 
-    # Placeholder versions: decide() reads them only to fill
-    # active_version_after; the action and reason depend on the metrics alone.
+    ref = eval_result["adapter"]
+    baseline = eval_result.get("baseline_in_project")
     result = EvalResult(
-        adapter=AdapterRef(name="prediction", version=2, kind=AdapterKind.CLUSTER),
-        in_project=metrics(in_project),
-        guard=(_guard_contract(guard.candidate),) if guard.available else (),
-        baseline_in_project=metrics(baseline_in_project) if baseline_in_project else None,
-        baseline_noise_band=float(noise_band))
-    baseline_guard = (_guard_contract(guard.baseline),) if guard.available else ()
-    decision = decide(result, baseline_guard=baseline_guard,
-                      active_version_before=2, previous_version=1)
+        adapter=AdapterRef(name=ref["name"], version=int(ref["version"]),
+                           kind=AdapterKind(ref["kind"]), cluster_id=ref.get("cluster_id")),
+        in_project=metrics(eval_result["in_project"]),
+        guard=tuple(_guard_contract(g) for g in eval_result.get("guard", ())),
+        baseline_in_project=metrics(baseline) if baseline else None,
+        baseline_noise_band=float(eval_result.get("baseline_noise_band", 0.0)),
+        seed=int(eval_result.get("seed", 0)))
+    try:
+        decision = decide(result,
+                          baseline_guard=tuple(_guard_contract(g) for g in baseline_guard),
+                          active_version_before=result.adapter.version,
+                          previous_version=previous_version)
+    except ValueError as exc:
+        return "unavailable", f"registry.promotion.decide could not decide: {exc}"
     return decision.action.value, decision.reason
 
 
@@ -223,9 +244,12 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         guard=[guard.candidate] if guard.available else [],
         baseline_noise_band=noise_band, seed=seed)
     baseline_guard: List[Dict] = [guard.baseline] if guard.available else []
+    # Read before C2: a rollback moves the active pointer, not the history.
+    versions = [v["ref"]["version"] for v in client.list_versions(adapter_name)["versions"]]
+    previous_version = _previous_version(versions, version)
     decision = client.promote(adapter_name, eval_result, baseline_guard)
     expected_action, expected_why = predict_decision(
-        in_project, baseline_in_project, noise_band, guard)
+        eval_result, baseline_guard, previous_version)
     return {
         "adapter": adapter_name,
         "candidate_version": version,
