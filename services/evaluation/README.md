@@ -11,6 +11,14 @@ and seams.
 pip install -e contracts -e "services/evaluation[test]"
 pytest services/evaluation/tests
 
-cd services/evaluation && python scripts/run_baseline_eval.py --help   # CLIs run from here
-cd dashboard && npm install && npm run dev                              # dashboard
+cd services/evaluation
+python scripts/rebuild_results.py        # every result, report, figure + the archive, no GPU
+cd dashboard && npm install && npm run dev   # dashboard (or: docker compose up -d dashboard → :8005)
 ```
+
+| Read | For |
+|---|---|
+| [`docs/report/eval_section.md`](docs/report/eval_section.md) | the evaluation section of the Phase II report |
+| [`docs/demo_scenario.md`](docs/demo_scenario.md) | the demo walkthrough and its dataset |
+| [`docs/debt_list.md`](docs/debt_list.md) | review feedback and what is still open |
+| [`docs/phase3_ablation_reuse.md`](docs/phase3_ablation_reuse.md) | reusing the harness for Phase III sweeps |

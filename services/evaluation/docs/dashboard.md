@@ -137,3 +137,17 @@ so the alert logic and P4's rollback trigger are cross-checked on every export.
 Contract between the two sides: `dashboard/src/lib/roundsFeed.ts` (runtime guard)
 mirrors `FEED_VERSION` 1.0.0; `ROUNDS_JSON=<rounds.json> npm test` runs that guard
 against a real exporter output.
+
+## Pages added for personalization, lineage and noise
+
+| page | feed (`results/`) | produced by |
+|---|---|---|
+| Personalization | `personalization.json` | `scripts/build_personalization_report.py` |
+| Adapter Lineage | `lineage.json` | `scripts/export_lineage.py` |
+| Noise & Guard | `noise_report.json` | `scripts/build_noise_report.py` |
+
+All three load through `src/lib/useFeed.ts`: a missing feed renders which
+script produces it; a malformed one renders the guard that rejected it
+(`src/lib/{personalization,lineage,noise}.ts`). `tests/feeds.test.ts` runs the
+committed feeds through those guards. Served in compose by
+`dashboard/Dockerfile` (static build behind nginx, port 8005).
