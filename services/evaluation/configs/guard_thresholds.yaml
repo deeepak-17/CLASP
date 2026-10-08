@@ -1,0 +1,34 @@
+# Evaluation noise thresholds — derived, not chosen.
+#
+# Regenerate the evidence with `python scripts/build_noise_report.py`; it reads
+# this file, recomputes every derived number from the scored anchor, and writes
+# results/noise_report.json + reports/eval_noise_report.md.
+
+humaneval_guard:
+  # The D5 rule as the registry implements it (registry.promotion
+  # GUARD_PASS_AT_1_TOLERANCE). Owned by P4; P5 does not change it.
+  tolerance_pass_at_1: 0.02
+  # Scored baseline anchor the noise floor is measured from.
+  baseline_anchor: "results/humaneval_guard/base_anchor.json"
+  # Fraction of tasks whose pass/fail flips between baseline and candidate.
+  # Assumed until a candidate anchor exists; then the measured value replaces it.
+  assumed_discordance: 0.10
+  # Size of the full benchmark the guard should move to.
+  full_benchmark_size: 164
+  # A drop beyond the tolerance but inside the paired noise floor is reported
+  # as `within_noise` (not evidence of a regression), never as a pass.
+  classification: "regression if drop > max(tolerance, paired noise floor at scored n)"
+
+in_project:
+  # D5's noise band for edit similarity: the 95% paired-bootstrap interval of
+  # (candidate - baseline) over the same held-out examples. Requires per-example
+  # rows (evaluation.completion.per_example_rows) from the edge run.
+  method: "paired bootstrap, 95%, 10000 resamples, seed 0"
+  n_examples: 60
+  # Exact match is a proportion, so its band has a closed form at this n.
+  exact_match_assumed_discordance: 0.10
+
+bootstrap:
+  n_resamples: 10000
+  confidence: 0.95
+  seed: 0

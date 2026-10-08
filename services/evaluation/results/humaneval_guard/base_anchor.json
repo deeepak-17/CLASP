@@ -1,0 +1,188 @@
+{
+  "subset": {
+    "n": 20,
+    "task_ids": [
+      "HumanEval/0",
+      "HumanEval/1",
+      "HumanEval/2",
+      "HumanEval/3",
+      "HumanEval/4",
+      "HumanEval/5",
+      "HumanEval/6",
+      "HumanEval/7",
+      "HumanEval/8",
+      "HumanEval/9",
+      "HumanEval/10",
+      "HumanEval/11",
+      "HumanEval/12",
+      "HumanEval/13",
+      "HumanEval/14",
+      "HumanEval/15",
+      "HumanEval/16",
+      "HumanEval/17",
+      "HumanEval/18",
+      "HumanEval/19"
+    ]
+  },
+  "n_problems": 20,
+  "base_pass_at_1": 0.5,
+  "base_solved": 10,
+  "plus_pass_at_1": null,
+  "plus_solved": null,
+  "scorer": {
+    "name": "clasp-p5 eval_harness.execution",
+    "tests": "original HumanEval check() tests (eval_harness/humaneval/tasks.jsonl)",
+    "isolation": "subprocess per program, temp dir, wall-clock timeout, POSIX rlimits",
+    "plus_note": "EvalPlus extended tests not run \u2014 plus_pass_at_1 is null, not zero",
+    "comparability": "compare only with an anchor scored by the same scorer"
+  },
+  "samples": {
+    "path": "results/humaneval_guard/base_samples.jsonl",
+    "sha256": "ad912167212a8c4ea16a405842a50988a52e0634ab258ba220fef7e77c67566b",
+    "n_samples": 20
+  },
+  "generation_manifest_supplied": false,
+  "scored_at": "2026-10-08T07:25:50Z",
+  "per_task": [
+    {
+      "task_id": "HumanEval/0",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/1",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "rate_paren_groups)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-skwncaz4/candidate.py\", line 45, in check\n    assert candidate('(()()) ((())) () ((())()())') == [\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        '(()())', '((()))', '()', '((())()())'\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ]\n    ^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/2",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/3",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/4",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/5",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "ders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-kjuvu9uq/candidate.py\", line 31, in <module>\n    check(intersperse)\n    ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-kjuvu9uq/candidate.py\", line 28, in check\n    assert candidate([5, 6, 3, 2], 8) == [5, 8, 6, 8, 3, 8, 2]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/6",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "xfd8k40000gn/T/clasp-p5-exec-y4c3uf3z/candidate.py\", line 29, in <module>\n    check(parse_nested_parens)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-y4c3uf3z/candidate.py\", line 25, in check\n    assert candidate('(()()) ((())) () ((())()())') == [2, 3, 1, 3]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/7",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/8",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/9",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": " ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-2t20l7si/candidate.py\", line 27, in check\n    assert candidate([]) == []\n           ~~~~~~~~~^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-2t20l7si/candidate.py\", line 10, in rolling_max\n    max_so_far = numbers[0]\n                 ~~~~~~~^^^\nIndexError: list index out of range\n"
+    },
+    {
+      "task_id": "HumanEval/10",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "most recent call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-1cn9kb4e/candidate.py\", line 45, in <module>\n    check(make_palindrome)\n    ~~~~~^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-1cn9kb4e/candidate.py\", line 41, in check\n    assert candidate('xyz') == 'xyzyx'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/11",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "ast):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-qlr_ib0o/candidate.py\", line 26, in <module>\n    check(string_xor)\n    ~~~~~^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-qlr_ib0o/candidate.py\", line 22, in check\n    assert candidate('111000', '101010') == '010010'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/12",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/13",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/14",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/15",
+      "passed": true,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": ""
+    },
+    {
+      "task_id": "HumanEval/16",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-kcvp5so4/candidate.py\", line 28, in <module>\n    check(count_distinct_characters)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-kcvp5so4/candidate.py\", line 24, in check\n    assert candidate('abcde' + 'cade' + 'CADE') == 5\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/17",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "Traceback (most recent call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-cp3zdl2_/candidate.py\", line 36, in <module>\n    check(parse_music)\n    ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-cp3zdl2_/candidate.py\", line 30, in check\n    assert candidate('') == []\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/18",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-y9zg5l6z/candidate.py\", line 29, in <module>\n    check(how_many_times)\n    ~~~~~^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-y9zg5l6z/candidate.py\", line 26, in check\n    assert candidate('cacacacac', 'cac') == 4\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "task_id": "HumanEval/19",
+      "passed": false,
+      "timed_out": false,
+      "entry_point_defined": true,
+      "stderr_tail": "olders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-bmnpawf_/candidate.py\", line 31, in <module>\n    check(sort_numbers)\n    ~~~~~^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-bmnpawf_/candidate.py\", line 27, in check\n    assert candidate('three five nine') == 'three five nine'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    }
+  ]
+}
