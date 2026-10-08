@@ -187,9 +187,9 @@ def validate_adapter_metadata(metadata: dict[str, Any]) -> list[str]:
     errors = []
     required_fields = ['client_id', 'round_id', 'rank', 'target_modules']
     
-    for field in required_fields:
-        if field not in metadata:
-            errors.append(f"Missing required metadata field: {field}")
+    for req_field in required_fields:
+        if req_field not in metadata:
+            errors.append(f"Missing required metadata field: {req_field}")
             
     # Check types if fields exist
     if 'client_id' in metadata and not isinstance(metadata['client_id'], str):

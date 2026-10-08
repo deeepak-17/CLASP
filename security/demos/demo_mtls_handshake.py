@@ -119,10 +119,10 @@ def _demo_handshake(d: Path, label: str, client_name: str,
             print(f"  ❌ UNEXPECTED FAILURE: {result.get('error', 'unknown')}")
     else:
         if result.get("ok"):
-            print(f"  ❌ UNEXPECTED SUCCESS — bad cert should have been rejected!")
+            print("  ❌ UNEXPECTED SUCCESS — bad cert should have been rejected!")
         else:
             err = result.get("error") or result.get("client_error", "connection refused")
-            print(f"  ✅ Handshake REJECTED — bad cert correctly denied")
+            print("  ✅ Handshake REJECTED — bad cert correctly denied")
             print(f"     Error: {err[:100]}")
     print()
 

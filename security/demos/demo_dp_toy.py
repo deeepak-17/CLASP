@@ -95,8 +95,8 @@ def main() -> None:
     print("-" * 40)
     print(f"\n  Final privacy guarantee: (ε={final_eps:.4f}, δ={args.delta})-DP")
     print(f"  Model trained for {args.epochs} epochs with σ={args.noise_multiplier}")
-    print(f"\n  Interpretation: An adversary observing the trained model cannot")
-    print(f"  distinguish whether any single training example was included")
+    print("\n  Interpretation: An adversary observing the trained model cannot")
+    print("  distinguish whether any single training example was included")
     print(f"  in the dataset with probability better than e^ε ≈ {__import__('math').exp(final_eps):.2f}")
     print()
 
