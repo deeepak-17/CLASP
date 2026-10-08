@@ -514,6 +514,20 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     sigma = float(dp_opt.noise_multiplier)
     q = float(dp_loader.sample_rate)
 
+    # Count real (noised) logical steps through Opacus's public step hook: it
+    # fires only when a logical batch completes, never on the skipped
+    # accumulation steps of BatchMemoryManager. Any hook already attached
+    # (e.g. an accountant) is chained, not replaced.
+    noised_steps = [0]
+    prior_hook = dp_opt.step_hook
+
+    def _count_step(opt) -> None:
+        if prior_hook is not None:
+            prior_hook(opt)
+        noised_steps[0] += 1
+
+    dp_opt.attach_step_hook(_count_step)
+
     planned_steps = epochs * len(dp_loader)
     warmup_steps = max(1, int(planned_steps * warmup_ratio))
     scheduler = transformers.get_cosine_schedule_with_warmup(
@@ -543,8 +557,9 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
                                        f"do NOT save this adapter")
                 loss.backward()
                 micro_losses.append(val)
+                before = noised_steps[0]
                 dp_opt.step()
-                if not dp_opt._is_last_step_skipped:     # a real logical step
+                if noised_steps[0] > before:              # a real logical step
                     scheduler.step()
                     steps += 1
                     step_losses.append(sum(micro_losses) / len(micro_losses))
@@ -587,7 +602,7 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
             "epsilon_opacus_rdp": round(eps_opacus, 6),
             "epsilon_security_tracker": round(eps_tracker, 6),
             "target_epsilon": target_epsilon,
-            "within_d7_budget": eps_opacus <= 8.0,
+            "within_d7_budget": eps_opacus <= DEFAULT_DP_EPSILON,
             "sample_rate": q,
             "logical_batch_size": batch_size,
             "epochs": epochs,
