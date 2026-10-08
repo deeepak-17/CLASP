@@ -38,7 +38,10 @@ def sanitize_client_id(client_id: str) -> str:
         raise ValidationError("client_id", "Exceeds maximum length of 64 characters.")
         
     if not re.match(r'^[a-zA-Z0-9\-]+$', client_id):
-        raise ValidationError("client_id", "Must contain only alphanumeric characters and hyphens.")
+        raise ValidationError(
+            "client_id", 
+            "Must contain only alphanumeric characters and hyphens."
+        )
         
     return client_id
 
@@ -86,7 +89,10 @@ def validate_tensor_payload(
         raise ValidationError("tensors", "Payload must be a list of tensors.")
         
     if len(tensors) > max_tensors:
-        raise ValidationError("tensors", f"Exceeds maximum allowed tensors ({max_tensors}).")
+        raise ValidationError(
+            "tensors", 
+            f"Exceeds maximum allowed tensors ({max_tensors})."
+        )
         
     for i, tensor in enumerate(tensors):
         if not isinstance(tensor, dict):
@@ -99,7 +105,10 @@ def validate_tensor_payload(
         # Basic check for base64 size limit (very rough approximation)
         data = tensor.get("data_b64", "")
         if isinstance(data, str) and (len(data) * 3 / 4) > max_tensor_bytes:
-             raise ValidationError(f"tensors[{i}].data_b64", f"Exceeds maximum tensor size ({max_tensor_bytes} bytes).")
+            raise ValidationError(
+                f"tensors[{i}].data_b64", 
+                f"Exceeds maximum tensor size ({max_tensor_bytes} bytes)."
+            )
 
 def validate_round_id(round_id: int) -> None:
     """
@@ -131,7 +140,9 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.max_body_bytes = max_body_bytes
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         """
         Process the request and check body size.
         """
@@ -140,7 +151,9 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
             try:
                 length = int(content_length)
                 if length > self.max_body_bytes:
-                    logger.warning(f"Rejected request due to large body size: {length} bytes")
+                    logger.warning(
+                        f"Rejected request due to large body size: {length} bytes"
+                    )
                     return Response("Payload Too Large", status_code=413)
             except ValueError:
                 pass

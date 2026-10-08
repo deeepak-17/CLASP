@@ -140,7 +140,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.limiter = limiter
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         """
         Process the request and enforce rate limits.
         """
@@ -156,7 +158,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             headers = {
                 "Retry-After": str(int(stats["next_refill_seconds"] + 1))
             }
-            return Response(content="Too Many Requests", status_code=429, headers=headers)
+            return Response(
+                content="Too Many Requests", 
+                status_code=429, 
+                headers=headers
+            )
 
         return await call_next(request)
 
@@ -180,6 +186,8 @@ def rate_limit_dependency(limiter: RateLimiter) -> Callable[..., Any]:
             raise HTTPException(
                 status_code=429,
                 detail="Too Many Requests",
-                headers={"Retry-After": str(int(stats["next_refill_seconds"] + 1))}
+                headers={
+                    "Retry-After": str(int(stats["next_refill_seconds"] + 1))
+                }
             )
     return dependency
