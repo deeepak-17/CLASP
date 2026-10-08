@@ -22,6 +22,8 @@ to the DummyClient engine instead of crashing outright.
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from flwr.client import NumPyClient
 
@@ -44,16 +46,25 @@ except ImportError:  # pragma: no cover - exercised only in torch-less envs
 class DummyClient(NumPyClient):
     """Week 1 skeleton client: proves the payload round-trips intact."""
 
-    def __init__(self, client_id: str, num_examples: int = 1):
+    def __init__(
+        self, client_id: str, num_examples: int = 1, simulated_delay_s: float = 0.0
+    ):
         self.client_id = client_id
         self.num_examples = num_examples
+        # Reported (not slept) as extra ``duration_s`` so straggler tests are
+        # deterministic and instantaneous.
+        self.simulated_delay_s = simulated_delay_s
 
     def fit(self, parameters: list[np.ndarray], config: dict):
         # Echo the payload with a visible, deterministic change so the server
         # can assert the round actually touched this client.
+        t0 = time.monotonic()
         bump = float(config.get("bump", 1.0))
         updated = [p + bump for p in parameters]
-        return updated, self.num_examples, {"client_id": self.client_id}
+        return updated, self.num_examples, {
+            "client_id": self.client_id,
+            "duration_s": (time.monotonic() - t0) + self.simulated_delay_s,
+        }
 
     def evaluate(self, parameters: list[np.ndarray], config: dict):
         return 0.0, self.num_examples, {}
@@ -141,6 +152,7 @@ if TORCH_AVAILABLE:
             mu: float = 0.01,
             lr: float = 1e-2,
             local_steps: int = 20,
+            simulated_delay_s: float = 0.0,
         ):
             self.client_id = client_id
             self.model = model
@@ -148,6 +160,8 @@ if TORCH_AVAILABLE:
             self.mu = mu
             self.lr = lr
             self.local_steps = local_steps
+            # Reported (not slept) as extra ``duration_s``; see DummyClient.
+            self.simulated_delay_s = simulated_delay_s
 
         def _trainable(self) -> list[torch.nn.Parameter]:
             return [p for p in self.model.parameters() if p.requires_grad]
@@ -172,6 +186,7 @@ if TORCH_AVAILABLE:
         # --- Flower NumPyClient API ----------------------------------------------
 
         def fit(self, parameters: list[np.ndarray], config: dict):
+            t0 = time.monotonic()
             global_adapter = LoRAAdapter.from_ndarrays(
                 parameters,
                 rank=self.model.rank,
@@ -180,7 +195,11 @@ if TORCH_AVAILABLE:
             )
             final_loss = self.train_local(global_adapter)
             updated = self.model.get_adapter().to_ndarrays()
-            return updated, len(self.x), {"client_id": self.client_id, "loss": final_loss}
+            return updated, len(self.x), {
+                "client_id": self.client_id,
+                "loss": final_loss,
+                "duration_s": (time.monotonic() - t0) + self.simulated_delay_s,
+            }
 
         def evaluate(self, parameters: list[np.ndarray], config: dict):
             adapter = LoRAAdapter.from_ndarrays(

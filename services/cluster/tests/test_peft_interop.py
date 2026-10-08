@@ -89,17 +89,30 @@ def test_to_peft_config_matches_edge_contract_hyperparams():
     assert cfg["lora_bias"] is False
 
 
-def test_to_peft_config_default_alpha_diverges_from_edge_contract():
-    """Documents the cross-team mismatch found while inspecting the repo:
-    Cluster's own DEFAULT_ALPHA (32.0) is NOT edge's contract lora_alpha
-    (16). This is not a Cluster bug to silently patch — it is a value the
-    caller must supply correctly (alpha=16.0) to produce an edge-loadable
-    config; this test pins that the method is honest about the adapter's
-    *actual* alpha rather than hardcoding edge's 16."""
-    adapter = random_adapter(8, 8, rank=16, num_layers=1, seed=4)  # default alpha=32.0
+def test_default_alpha_now_matches_edge_contract():
+    """Week 6 review fix: Cluster's DEFAULT_ALPHA used to be 32.0 while Edge's
+    contract pins lora_alpha=16, so an adapter built with defaults produced a
+    config Edge's compatibility check would reject. Defaults now agree."""
+    adapter = random_adapter(8, 8, rank=16, num_layers=1, seed=4)  # all defaults
+    cfg = adapter.to_peft_config()
+    assert cfg["lora_alpha"] == EDGE_CONTRACT_HYPERPARAMS["lora_alpha"] == 16
+    assert cfg["r"] == EDGE_CONTRACT_HYPERPARAMS["r"]
+    assert adapter.scaling == pytest.approx(1.0)  # alpha / r
+
+
+def test_to_peft_config_reports_a_non_default_alpha_honestly():
+    """The honesty property of the old divergence test is kept: to_peft_config
+    reports the adapter's *actual* alpha instead of hardcoding Edge's 16."""
+    adapter = random_adapter(8, 8, rank=16, num_layers=1, alpha=32.0, seed=4)
     cfg = adapter.to_peft_config()
     assert cfg["lora_alpha"] == pytest.approx(32.0)
     assert cfg["lora_alpha"] != EDGE_CONTRACT_HYPERPARAMS["lora_alpha"]
+
+
+def test_base_model_name_is_configurable():
+    adapter = random_adapter(8, 8, rank=16, seed=4)
+    cfg = adapter.to_peft_config(base_model_name_or_path="deepseek-ai/deepseek-coder-6.7b-base")
+    assert cfg["base_model_name_or_path"] == "deepseek-ai/deepseek-coder-6.7b-base"
 
 
 def test_from_state_dict_still_parses_the_output_of_to_peft_state_dict():

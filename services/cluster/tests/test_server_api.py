@@ -53,6 +53,7 @@ def _reset_state():
     _state.round_id = 0
     _state.active = None
     _state.last_manifest = None
+    _state.last_round.clear()
 
 
 def test_healthz():

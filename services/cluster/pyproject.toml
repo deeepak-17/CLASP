@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest", "httpx", "safetensors"]
+test = ["pytest", "httpx", "safetensors", "scikit-learn", "cryptography"]
 
 [build-system]
 requires = ["setuptools>=68"]

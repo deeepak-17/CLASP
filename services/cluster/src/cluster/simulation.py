@@ -139,3 +139,60 @@ def run_federated(
         adapter = result.adapter
         results.append(result)
     return results
+
+
+def make_clustered_clients(
+    groups: dict[str, int] | None = None,
+    dim: int = 32,
+    rank: int = DEFAULT_RANK,
+    mu: float = 0.01,
+    lr: float = 1e-1,
+    local_steps: int = 30,
+    samples_per_client: int = 64,
+    group_shift: float = 1.5,
+    client_shift: float = 0.05,
+    seed: int = 0,
+) -> tuple[dict[str, LoRAClient], dict[str, str]]:
+    """Week 8/10: real FedProx clients organized into project groups.
+
+    ``groups`` maps a project/cluster id to its client count (default: two
+    clusters x 3 clients, the G2 scenario). All clients share one base map;
+    every group adds its own ground-truth shift (``group_shift``) and every
+    client a small private one (``client_shift``), so clients within a group
+    pull their adapters in a similar direction and groups pull in different
+    ones — the structure dynamic re-clustering is meant to find.
+
+    ``lr`` default is 0.1 (was 0.05 while ``DEFAULT_ALPHA`` was 32): the
+    effective update rate scales with (alpha/rank)^2, so halving alpha to match
+    Edge's lr_alpha=16 needs a ~4x larger step x count product to keep the
+    clusters' update directions separable (8/8 seeds recover a wrong warm-start
+    label at lr=0.1, 4/8 at the old lr — measured in the Week 6 review).
+
+    Returns ``(clients, warm_start)``: client_id -> client, and client_id ->
+    group id (the warm-start assignment).
+    """
+    import torch
+
+    groups = groups or {"cluster-web": 3, "cluster-sci": 3}
+    gen = torch.Generator().manual_seed(seed)
+    base_true = torch.randn(dim, dim, generator=gen) / dim**0.5
+    clients: dict[str, LoRAClient] = {}
+    warm_start: dict[str, str] = {}
+    for group_id, count in groups.items():
+        shift_g = group_shift * torch.randn(dim, dim, generator=gen) / dim**0.5
+        for i in range(count):
+            client_id = f"{group_id}/client-{i}"
+            model = ToyLoRAModel(dim=dim, rank=rank, target_modules=TARGET_MODULES, seed=seed)
+            x = torch.randn(samples_per_client, dim, generator=gen)
+            shift_c = client_shift * torch.randn(dim, dim, generator=gen) / dim**0.5
+            y = x @ (base_true + shift_g + shift_c).T
+            clients[client_id] = LoRAClient(
+                client_id=client_id,
+                model=model,
+                data=(x, y),
+                mu=mu,
+                lr=lr,
+                local_steps=local_steps,
+            )
+            warm_start[client_id] = group_id
+    return clients, warm_start

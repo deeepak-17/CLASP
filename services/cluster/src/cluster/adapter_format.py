@@ -19,7 +19,10 @@ aggregator/Flower wire uses. A key with no ``layers.<i>.`` segment is still
 accepted for a single-layer adapter (``num_layers=1``), read as layer 0, so
 older single-layer dumps keep working.
 
-Contract constants (contracts v1.0): rank 16, target modules q/k/v/o.
+Contract constants (contracts v1.0): rank 16, lora_alpha 16, target modules
+q/k/v/o. ``DEFAULT_ALPHA`` was 32.0 until the Week 6 review pass; it now
+matches Edge's pinned ``lora_alpha=16`` (services/edge/src/edge/lora_init.py)
+so an adapter built with defaults is the adapter Edge expects.
 """
 
 from __future__ import annotations
@@ -30,7 +33,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 DEFAULT_RANK = 16
-DEFAULT_ALPHA = 32.0
+DEFAULT_ALPHA = 16.0  # = Edge's contract lora_alpha; scaling = alpha / rank = 1.0
+DEFAULT_BASE_MODEL = "deepseek-ai/deepseek-coder-1.3b-base"  # Edge "dev" profile
 TARGET_MODULES: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
 
 _A_KEY = "lora_A"
@@ -96,6 +100,13 @@ class LoRAAdapter:
                     raise AdapterFormatError(
                         f"layer {layer}, module {name!r}: lora_B rank {b.shape[1]} "
                         f"!= contract rank {self.rank}"
+                    )
+                # A diverged client (e.g. FedProx lr*mu >= 2) returns NaN/inf; one such
+                # tensor would crash the SVD for the whole round, so reject it at intake.
+                if not (np.isfinite(a).all() and np.isfinite(b).all()):
+                    raise AdapterFormatError(
+                        f"layer {layer}, module {name!r}: lora_A/lora_B contain "
+                        f"non-finite values (NaN/inf)"
                     )
 
     def delta_w(self, module: str, layer: int = 0) -> np.ndarray:
@@ -256,18 +267,18 @@ class LoRAAdapter:
         return sd
 
     def to_peft_config(
-        self, base_model_name_or_path: str = "deepseek-ai/deepseek-coder-1.3b-base"
+        self, base_model_name_or_path: str = DEFAULT_BASE_MODEL
     ) -> dict[str, object]:
         """``adapter_config.json`` fields edge.merge.py's ``load_adapter`` /
         ``validate_compatibility`` read. Structural fields (peft_type,
         use_rslora, use_dora, fan_in_fan_out, lora_bias) are pinned to the
         values edge.merge.STRUCTURAL_FIELDS checks for equality between
         adapters; ``r``/``lora_alpha``/``target_modules`` reflect this
-        adapter's own values rather than a hardcoded copy of edge's contract
-        — a real integration would need the two teams' alpha conventions
-        reconciled (edge's CONTRACT_HYPERPARAMS pins lora_alpha=16; this
-        module's own DEFAULT_ALPHA is 32.0), which is cross-team and out of
-        Cluster's scope to silently resolve.
+        adapter's own values. With the defaults they equal Edge's contract
+        (r=16, lora_alpha=16, q/k/v/o); an adapter built with a different
+        alpha is reported honestly rather than silently rewritten to 16.
+        ``base_model_name_or_path`` defaults to Edge's dev profile model —
+        pass the real one (Edge's "target" profile is the 6.7B model).
         """
         return {
             "peft_type": "LORA",

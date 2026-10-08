@@ -86,6 +86,35 @@ def _paired(
         yield adapter, weight
 
 
+def ensure_compatible(template: LoRAAdapter, adapter: LoRAAdapter) -> None:
+    """Every contribution must share the template's structure *and* scaling.
+
+    ``rank`` and ``alpha`` set the LoRA scaling ``alpha / rank`` that turns
+    ``B @ A`` into the effective update, so averaging ``B @ A`` products of
+    adapters with different scalings would silently mix incomparable updates
+    (Week 6 review: only target_modules / num_layers were checked before).
+    """
+    if adapter.target_modules != template.target_modules:
+        raise ValueError(
+            f"all client adapters must share target_modules "
+            f"({adapter.target_modules} != {template.target_modules})"
+        )
+    if adapter.num_layers != template.num_layers:
+        raise ValueError(
+            f"all client adapters must share num_layers "
+            f"({adapter.num_layers} != {template.num_layers})"
+        )
+    if adapter.rank != template.rank:
+        raise ValueError(
+            f"all client adapters must share rank ({adapter.rank} != {template.rank})"
+        )
+    if not np.isclose(adapter.alpha, template.alpha):
+        raise ValueError(
+            f"all client adapters must share alpha ({adapter.alpha} != {template.alpha}); "
+            f"alpha/rank is the LoRA scaling, so mixed values are not comparable"
+        )
+
+
 def truncated_svd_refactor(delta_w: np.ndarray, rank: int) -> tuple[np.ndarray, np.ndarray]:
     """Best rank-``rank`` factorization of delta_w: returns (A, B), B @ A ≈ delta_w.
 
@@ -94,6 +123,10 @@ def truncated_svd_refactor(delta_w: np.ndarray, rank: int) -> tuple[np.ndarray, 
     """
     if delta_w.ndim != 2:
         raise ValueError("delta_w must be 2-D")
+    if rank < 1 or rank > min(delta_w.shape):
+        raise ValueError(
+            f"rank must be in [1, {min(delta_w.shape)}] for a {delta_w.shape} matrix, got {rank}"
+        )
     u, s, vt = np.linalg.svd(delta_w, full_matrices=False)
     u_r, s_r, vt_r = u[:, :rank], s[:rank], vt[:rank, :]
     sqrt_s = np.sqrt(s_r)
@@ -123,10 +156,8 @@ def aggregate_svd(
                 for layer in adapter.layer_indices
                 for m in adapter.target_modules
             }
-        elif adapter.target_modules != template.target_modules:
-            raise ValueError("all client adapters must share target_modules")
-        elif adapter.num_layers != template.num_layers:
-            raise ValueError("all client adapters must share num_layers")
+        else:
+            ensure_compatible(template, adapter)
         for layer in adapter.layer_indices:
             for module in adapter.target_modules:
                 means[(layer, module)].update(adapter.delta_w(module, layer), weight)
@@ -142,9 +173,13 @@ def aggregate_svd(
             a, b = truncated_svd_refactor(means[(layer, module)].result(), out_rank)
             dtype = template.modules[layer][module]["lora_A"].dtype
             modules[layer][module] = {"lora_A": a.astype(dtype), "lora_B": b.astype(dtype)}
+    # Keep the effective update (alpha/rank) * B @ A unchanged when the caller
+    # asks for a different output rank: alpha scales with the rank. (Week 6
+    # review: alpha used to be copied as-is, silently rescaling the update by
+    # rank_in / rank_out.) A no-op when out_rank == template.rank.
     return LoRAAdapter(
         rank=out_rank,
-        alpha=template.alpha,
+        alpha=template.alpha * out_rank / template.rank,
         target_modules=template.target_modules,
         num_layers=template.num_layers,
         modules=modules,
@@ -167,12 +202,10 @@ def aggregate_naive(
                 for layer in adapter.layer_indices
                 for m in adapter.target_modules
             }
-        elif adapter.target_modules != template.target_modules:
-            # mirror the mismatch guard from aggregate_svd; without this,
-            # mismatched clients silently corrupt the averaged factors.
-            raise ValueError("all client adapters must share target_modules")
-        elif adapter.num_layers != template.num_layers:
-            raise ValueError("all client adapters must share num_layers")
+        else:
+            # same guard as aggregate_svd; without it mismatched clients
+            # silently corrupt the averaged factors.
+            ensure_compatible(template, adapter)
         for layer in adapter.layer_indices:
             for module in adapter.target_modules:
                 for part in ("lora_A", "lora_B"):
@@ -214,10 +247,17 @@ def exact_average_delta(
     """
     means: dict[str, StreamingWeightedMean] = {}
     modules_order: tuple[str, ...] | None = None
+    template: LoRAAdapter | None = None
     for adapter, weight in _paired(adapters, weights):
-        if modules_order is None:
+        adapter.validate()
+        if template is None:
+            template = adapter
             modules_order = adapter.target_modules
             means = {m: StreamingWeightedMean() for m in modules_order}
+        else:
+            ensure_compatible(template, adapter)
+        if not 0 <= layer < adapter.num_layers:
+            raise ValueError(f"layer {layer} out of range for {adapter.num_layers} layer(s)")
         for module in modules_order:
             means[module].update(adapter.delta_w(module, layer), weight)
     if modules_order is None:

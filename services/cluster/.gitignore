@@ -1,0 +1,11 @@
+# generated next to the cluster package (Week 6 review)
+pytest_out.txt
+.coverage
+.coverage.*
+.pytest_cache/
+.ruff_cache/
+# local virtualenvs
+.venv/
+venv/
+__pycache__/
+*.egg-info/

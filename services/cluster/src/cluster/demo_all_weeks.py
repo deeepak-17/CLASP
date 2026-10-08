@@ -2,7 +2,7 @@
 ================================================================
   CLASP - P2 Cluster Service
   Student : Prasanth
-  Week 1 to Week 4 - Complete Progress Demonstration
+  Progress Demonstration
 ================================================================
 
 Run command:
@@ -14,6 +14,12 @@ What this script shows:
     WEEK 2 - 3 simulated clients, FedProx proximal term, adapter format
     WEEK 3 - Delta-W reconstruction, Streaming exact average, SVD refactor
     WEEK 4 - Round metrics (timer), Redistribution, Round-trip test, Fault tolerance
+    WEEK 5 - 3-client aggregation round (the same code as ``python -m cluster.demo``)
+    WEEKS 6-13 - the real multi-cluster pipeline (``cluster.demo_phase2``): straggler
+             timeout, per-cluster SVD aggregation, redistribution with retries,
+             isolation, dynamic re-clustering, static fallback, reproducibility, HTTP
+    WEEKS 14-16 - report/evidence deliverables: checked for existence, not re-run here
+    Blocked by other modules (not demonstrated): G1 mTLS and DP mu-tuning (P3)
 """
 
 from __future__ import annotations
@@ -57,9 +63,9 @@ def show(label: str, value) -> None:
 # ================================================================
 
 def demo_week1():
-    heading("WEEK 1 - Flower Environment + Skeleton Round-Trip")
+    heading("Flower Environment + Skeleton Round-Trip")
 
-    info("WEEK 1 TASK: Set up Flower, create a skeleton client and server.")
+    info("TASK: Set up Flower, create a skeleton client and server.")
     info("The DummyClient simply echoes parameters back with a visible bump.")
     info("This proves the Flower pipeline is wired correctly end to end.")
     print()
@@ -80,8 +86,8 @@ def demo_week1():
     show("  total arrays (A+B x 4 modules)", len(global_arrays))
     print()
 
-    subheading("WEEK 1 - DummyClient round-trip (client.py, lines 44-59)")
-    info("Source: client.py line 51-56")
+    subheading("DummyClient round-trip (client.py: DummyClient.fit)")
+    info("Source: client.py, DummyClient.fit (abridged)")
     info("  def fit(self, parameters, config):")
     info("      bump = float(config.get('bump', 1.0))")
     info("      updated = [p + bump for p in parameters]")
@@ -101,7 +107,7 @@ def demo_week1():
            f"num_examples={n_examples}, mean_diff={diff:.4f} (bump=1.0 applied)")
 
     print()
-    ok("WEEK 1 COMPLETE: Flower pipeline wired, DummyClient round-trip works")
+    ok("COMPLETE: Flower pipeline wired, DummyClient round-trip works")
     ok("Files: client.py (DummyClient class), server.py (SVDLoRAStrategy skeleton)")
 
 
@@ -115,11 +121,11 @@ def demo_week1():
 # ================================================================
 
 def demo_week2():
-    heading("WEEK 2 - FedProx Proximal Term + Adapter Format Contract")
+    heading("FedProx Proximal Term + Adapter Format Contract")
 
     # ----------- WEEK 2 MON: 3 simulated clients -----------
-    subheading("WEEK 2 Mon - 3 Simulated Clients (simulation.py, lines 43-45)")
-    info("Source: simulation.py line 43-45")
+    subheading("3 Simulated Clients (simulation.py: make_dummy_clients)")
+    info("Source: simulation.py, make_dummy_clients (abridged)")
     info("  def make_dummy_clients(n=3):")
     info("      return [DummyClient(client_id=f'dummy-{i}', ...)]")
     print()
@@ -130,13 +136,13 @@ def demo_week2():
         ok(f"Created: {c.client_id} (num_examples={c.num_examples})")
 
     # ----------- WEEK 2 TUE: FedProx proximal term -----------
-    subheading("WEEK 2 Tue - FedProx Proximal Term (client.py, lines 151-166)")
+    subheading("FedProx Proximal Term (client.py: LoRAClient.train_local)")
     info("FedProx paper (Li et al. 2020): adds a penalty to local training.")
     info("Formula: total_loss = task_loss + (mu/2) * ||w - w_global||^2")
     info("Purpose: Prevents clients from drifting too far from global model.")
     info("This is critical for non-IID data (each client has different data).")
     print()
-    info("Source: client.py line 161-164 (the FedProx term):")
+    info("Source: client.py, LoRAClient.train_local (the FedProx term, abridged):")
     info("  prox = sum(")
     info("      ((p - g) ** 2).sum()")
     info("      for p, g in zip(self._trainable(), global_params)")
@@ -144,11 +150,11 @@ def demo_week2():
     info("  (loss + 0.5 * self.mu * prox).backward()")
     print()
     ok("FedProx: mu=0.01 (proximal weight), 20 local steps per round")
-    ok("Without FedProx: clients diverge on non-IID data -> bad aggregation")
-    ok("With FedProx: clients stay close to global model -> stable aggregation")
+    ok("FedProx motivation (paper): limit client drift on non-IID data")
+    ok("Measured effect: tests/test_fedprox.py and the mu sweep in `python -m cluster.evidence`")
 
     # ----------- WEEK 2 THU: Adapter format -----------
-    subheading("WEEK 2 Thu - Adapter Format: PEFT state_dict <-> NumPy (adapter_format.py)")
+    subheading("Adapter Format: PEFT state_dict <-> NumPy (adapter_format.py)")
     info("Problem: P1 (Edge) saves adapters as PyTorch PEFT state_dict keys.")
     info("Problem: Flower sends/receives flat Python lists of NumPy arrays.")
     info("Solution: LoRAAdapter class converts between both formats.")
@@ -187,17 +193,17 @@ def demo_week2():
     ok("Round-trip verified: from_ndarrays(to_ndarrays()) == original")
 
     # ----------- WEEK 2 FRI: Contracts -----------
-    subheading("WEEK 2 Fri - Contracts Freeze (adapter_format.py, lines 21-23)")
-    info("Source: adapter_format.py line 21-23")
+    subheading("Contracts Freeze (adapter_format.py: DEFAULT_RANK / DEFAULT_ALPHA / TARGET_MODULES)")
+    info("Source: adapter_format.py, module constants")
     info("  DEFAULT_RANK = 16        <- agreed with all teams")
-    info("  DEFAULT_ALPHA = 32.0     <- LoRA scaling = alpha/rank = 2.0")
+    info("  DEFAULT_ALPHA = 16.0     <- = Edge's lora_alpha; LoRA scaling = alpha/rank = 1.0")
     info("  TARGET_MODULES = ('q_proj', 'k_proj', 'v_proj', 'o_proj')")
     print()
-    ok("Contracts frozen: rank=16, alpha=32, 4 attention modules")
-    ok("All services (P1/P2/P3/P4/P5) use these same constants")
+    ok("Contracts: rank=16, alpha=16 (matches Edge's lora_init.py), 4 attention modules")
+    ok("Cluster's defaults match the values Edge pins; P3/P4/P5 have no code to compare yet")
 
     print()
-    ok("WEEK 2 COMPLETE: FedProx implemented, adapter format works, contracts frozen")
+    ok("COMPLETE: FedProx implemented, adapter format works, contracts frozen")
 
 
 # ================================================================
@@ -209,7 +215,7 @@ def demo_week2():
 # ================================================================
 
 def demo_week3():
-    heading("WEEK 3 - Delta-W Reconstruction + Streaming Mean + SVD Aggregation")
+    heading("Delta-W Reconstruction + Streaming Mean + SVD Aggregation")
 
     from cluster.adapter_format import random_adapter
     from cluster.aggregation import (
@@ -220,11 +226,11 @@ def demo_week3():
     )
 
     # ----------- WEEK 3 TUE: Delta-W -----------
-    subheading("WEEK 3 Tue - Delta-W Reconstruction: delta_W = B @ A (adapter_format.py, line 68-71)")
+    subheading("Delta-W Reconstruction: delta_W = B @ A (adapter_format.py: LoRAAdapter.delta_w)")
     info("LoRA formula: new_output = W0*x + (alpha/r) * B @ A @ x")
     info("The CHANGE in weights is: delta_W = B @ A")
     info("")
-    info("Source: adapter_format.py line 68-71:")
+    info("Source: adapter_format.py, LoRAAdapter.delta_w:")
     info("  def delta_w(self, module: str, layer: int = 0) -> np.ndarray:")
     info("      pair = self.modules[layer][module]")
     info("      return pair['lora_B'] @ pair['lora_A']")
@@ -245,7 +251,7 @@ def demo_week3():
     ok("Verified: delta_w() == lora_B @ lora_A  [CORRECT]")
 
     # ----------- WEEK 3 WED: Streaming Mean -----------
-    subheading("WEEK 3 Wed - Streaming Weighted Mean (aggregation.py, lines 24-53)")
+    subheading("Streaming Weighted Mean (aggregation.py: StreamingWeightedMean)")
     info("Problem: With 100 clients, loading all delta_Ws into memory at once")
     info("         would require 100x memory. Not scalable.")
     info("")
@@ -253,7 +259,7 @@ def demo_week3():
     info("  m <- m + (w_i / W_i) * (x_i - m)")
     info("This uses ONE accumulator regardless of number of clients.")
     info("")
-    info("Source: aggregation.py line 36-44:")
+    info("Source: aggregation.py, StreamingWeightedMean.update (abridged):")
     info("  def update(self, value, weight=1.0):")
     info("      self._total_weight += weight")
     info("      if self._mean is None:")
@@ -279,16 +285,17 @@ def demo_week3():
     ok("Both match exactly - streaming algorithm is memory-efficient and correct")
 
     # ----------- WEEK 3 THU: SVD Aggregation -----------
-    subheading("WEEK 3 Thu - Truncated SVD Re-factorization (aggregation.py, lines 56-107)")
-    info("WHY SVD IS NEEDED (the key academic contribution):")
+    subheading("Truncated SVD Re-factorization (aggregation.py: truncated_svd_refactor / aggregate_svd)")
+    info("WHY AGGREGATE IN WEIGHT SPACE (then re-factorize with SVD):")
     info("")
-    info("  Naive approach (WRONG):  mean(B_k) @ mean(A_k)")
-    info("  Correct approach (MINE): SVD of mean(B_k @ A_k)")
+    info("  Naive baseline (ablation):  mean(B_k) @ mean(A_k)")
+    info("  This implementation:        SVD of mean(B_k @ A_k)")
     info("")
-    info("These two are DIFFERENT! Averaging A and B separately is algebraically")
-    info("incorrect. The SVD path averages in weight-matrix space, which is correct.")
+    info("These differ in general: mean(B) @ mean(A) is not mean(B @ A) when clients")
+    info("have different A matrices (they coincide only if all clients share the same A).")
+    info("The SVD path averages the weight updates themselves, then truncates to rank r.")
     print()
-    info("Source: aggregation.py line 56-69 (truncated_svd_refactor):")
+    info("Source: aggregation.py, truncated_svd_refactor (abridged):")
     info("  u, s, vt = np.linalg.svd(delta_w, full_matrices=False)")
     info("  sqrt_s = np.sqrt(s[:rank])")
     info("  b = u[:, :rank] * sqrt_s          # (out, rank)")
@@ -327,15 +334,15 @@ def demo_week3():
     svd_err   = float(np.linalg.norm(svd_merged.delta_w(module) - exact[module]))
     naive_err = float(np.linalg.norm(naive_merged.delta_w(module) - exact[module]))
 
-    ok(f"SVD aggregation error   from true mean: {svd_err:.8f}  <- MY METHOD")
-    ok(f"Naive aggregation error from true mean: {naive_err:.8f}  <- WRONG METHOD")
+    ok(f"SVD aggregation error   from true mean: {svd_err:.8f}  <- exact mean + truncated SVD")
+    ok(f"Naive aggregation error from true mean: {naive_err:.8f}  <- naive A/B averaging (baseline)")
     if svd_err <= naive_err + 1e-9:
-        ok("SVD is MORE ACCURATE than naive averaging [PROVEN]")
+        ok("SVD error <= naive error on this random 3-client example (one example, not a proof)")
     else:
-        ok("Note: at very small rank both may be similar (expected)")
+        ok("Note: on this example the naive baseline was not worse (rank/data dependent)")
 
     print()
-    ok("WEEK 3 COMPLETE: delta_W reconstruction, streaming mean, SVD aggregation all working")
+    ok("COMPLETE: delta_W reconstruction, streaming mean, SVD aggregation all working")
 
 
 # ================================================================
@@ -348,7 +355,7 @@ def demo_week3():
 # ================================================================
 
 def demo_week4():
-    heading("WEEK 4 - Metrics + Redistribution + Tests + Fault Tolerance")
+    heading("Metrics + Redistribution + Tests + Fault Tolerance")
 
     from flwr.common import (
         Code,
@@ -401,17 +408,19 @@ def demo_week4():
     initial = random_adapter(32, 32, seed=0)
 
     # ----------- WEEK 4 MON: Round Metrics + Timer -----------
-    subheading("WEEK 4 Mon - Round Metrics + Wall-Clock Timer (server.py, lines 80-92)")
+    subheading("Round Metrics + Wall-Clock Timer (server.py: SVDLoRAStrategy.aggregate_fit)")
     info("TASK: Log round_id, num_clients, mean_loss, duration_s after every round.")
     info("")
-    info("Source: server.py line 80-92:")
+    info("Source: server.py, SVDLoRAStrategy.aggregate_fit (abridged):")
     info("  metrics = {")
     info("      'round': server_round,")
     info("      'num_clients': len(results),")
+    info("      'num_failures': num_failures + len(skipped),")
     info("      'aggregation': self.aggregation,")
     info("  }")
     info("  if losses:")
     info("      metrics['mean_loss'] = float(sum(losses) / len(losses))")
+    info("  metrics['duration_s'] = time.monotonic() - t0")
     info("  self.round_log.append(metrics)")
     print()
     info("WHY time.monotonic() and NOT time.time()?")
@@ -443,16 +452,16 @@ def demo_week4():
             show(f"  {k}", v)
 
     ok(f"round_log has {len(strategy.round_log)} entry after 1 round")
-    ok("WEEK 4 Mon: Round metrics logged correctly [PASS]")
+    ok("Round metrics logged correctly [PASS]")
 
     # ----------- WEEK 4 TUE: Redistribution -----------
-    subheading("WEEK 4 Tue - Redistribution to Clients (server.py, line 93)")
+    subheading("Redistribution to Clients (server.py: SVDLoRAStrategy.aggregate_fit)")
     info("After aggregation, the merged adapter must be sent BACK to all clients.")
     info("Flower handles the actual network transmission.")
     info("Your job: return the merged adapter in Flower's Parameters format.")
     info("")
-    info("Source: server.py line 93 (the redistribution line):")
-    info("  return ndarrays_to_parameters(merged.to_ndarrays()), metrics")
+    info("Source: server.py, SVDLoRAStrategy.aggregate_fit (the return statement):")
+    info("  return ndarrays_to_parameters(merged.to_ndarrays()), metrics_out")
     info("")
     info("  merged.to_ndarrays()         -> 8 flat NumPy arrays")
     info("  ndarrays_to_parameters(...)  -> Flower Parameters (gRPC format)")
@@ -467,10 +476,10 @@ def demo_week4():
     recovered = LoRAAdapter.from_ndarrays(arrays_out)
     recovered.validate()
     ok(f"Client can decode it: rank={recovered.rank}, modules={list(recovered.target_modules)}")
-    ok("WEEK 4 Tue: Redistribution works [PASS]")
+    ok("Redistribution works [PASS]")
 
     # ----------- WEEK 4 WED: Round-trip test -----------
-    subheading("WEEK 4 Wed - Round-Trip Correctness Test (tests/test_aggregation.py)")
+    subheading("Round-Trip Correctness Test (tests/test_aggregation.py)")
     info("TASK: Verify that the merged adapter is the best rank-r approximation")
     info("of the exact weighted average delta_W.")
     info("")
@@ -497,11 +506,11 @@ def demo_week4():
         ok(f"{m}: recon_error={err:.2e}, optimal_bound={optimal_truncation_err:.2e} "
            f"-> {'PASS' if passed else 'FAIL'}")
 
-    ok("WEEK 4 Wed: Round-trip correctness verified [PASS]" if all_pass
-       else "WEEK 4 Wed: Round-trip test FAILED")
+    ok("Round-trip correctness verified [PASS]" if all_pass
+       else "Round-trip test FAILED")
 
     # ----------- WEEK 4 THU: Fault Tolerance -----------
-    subheading("WEEK 4 Thu - Fault Tolerance: 3-Layer Defense (server.py)")
+    subheading("Fault Tolerance: 3-Layer Defense (server.py)")
     info("PROBLEM: In real networks, clients fail. We need the server to be")
     info("robust to partial failures without crashing the entire round.")
     info("")
@@ -513,13 +522,19 @@ def demo_week4():
     info("  LAYER 2: Filter non-OK Status codes")
     info("           (clients that completed gRPC but failed internally)")
     info("")
-    info("  LAYER 3: Retry malformed parameters with exponential backoff")
-    info("           (clients that sent corrupted/truncated tensor data)")
+    info("  LAYER 3: Skip + count malformed payloads (corrupted/truncated")
+    info("           tensor data); retry-with-backoff lives on the")
+    info("           REDISTRIBUTION side (redistribution.redistribute)")
     info("")
     info("  + QUORUM GUARD: Skip round if too few clients succeeded")
     print()
 
+    from cluster.straggler import StragglerPolicy
+
     fault_strategy = build_strategy(initial, min_clients=1)
+    quorum_strategy = build_strategy(
+        initial, min_clients=1, straggler_policy=StragglerPolicy(min_fraction=0.5)
+    )
 
     # ---- Layer 1: Transport failures ----
     info(">>> Layer 1 Demo: 2 gRPC transport failures + 1 OK client")
@@ -556,7 +571,7 @@ def demo_week4():
     info("\n>>> Quorum Guard Demo: 1 OK + 3 stragglers = 25% OK < 50% threshold")
     good       = make_trained_adapter(23)
     stragglers = [make_trained_adapter(s) for s in (24, 25, 26)]
-    p, m = fault_strategy.aggregate_fit(
+    p, m = quorum_strategy.aggregate_fit(
         server_round=3,
         results=[
             (None, good_fit_res(good, 100, 0.3)),
@@ -568,11 +583,10 @@ def demo_week4():
         ok("Result: params=None, metrics={}  (round SKIPPED by quorum guard)")
         ok("25% OK < 50% minimum threshold -> round aborted, no corrupt aggregate")
     else:
-        ok("Note: quorum guard not in current server.py (basic version)")
-        ok("Quorum guard was added in the advanced fault-tolerance implementation")
+        ok("UNEXPECTED: round was not skipped by the quorum guard")
 
     print()
-    ok("WEEK 4 COMPLETE: Metrics, redistribution, tests, fault tolerance all working")
+    ok("COMPLETE: Metrics, redistribution, tests, fault tolerance all working")
 
 
 # ================================================================
@@ -581,13 +595,13 @@ def demo_week4():
 # ================================================================
 
 def demo_full_simulation():
-    heading("FULL SIMULATION - Weeks 1-4 Working Together (3 Federated Rounds)")
+    heading("FULL SIMULATION - Training and Aggregation Working Together (3 Federated Rounds)")
 
     info("This shows the complete P2 pipeline running end-to-end:")
-    info("  make_real_clients()  ->  3 FedProx-trained clients  (W2 Tue, W3 Mon)")
-    info("  run_round()          ->  1 federated round           (W4 Tue)")
-    info("  aggregate_svd()      ->  SVD aggregation             (W3 Thu)")
-    info("  round_log            ->  metrics per round           (W4 Mon)")
+    info("  make_real_clients()  ->  3 FedProx-trained clients")
+    info("  run_round()          ->  1 federated round")
+    info("  aggregate_svd()      ->  SVD aggregation")
+    info("  round_log            ->  metrics per round")
     print()
 
     from cluster.adapter_format import random_adapter
@@ -632,6 +646,67 @@ def demo_full_simulation():
 
 
 # ================================================================
+#  WEEKS 5-16
+# ================================================================
+
+def demo_week5():
+    """Week 5: one 3-client aggregation round through the real pipeline."""
+    heading("3-client federated aggregation round (cluster.demo)")
+    from cluster.demo import run_demo
+
+    result = run_demo(clients=3, seed=42, verbose=False)
+    metrics = result["round_metrics"]
+    info("Same code path as: python -m cluster.demo --seed 42 (without writing a backup file)")
+    show("engine", result["engine_used"])
+    show("num_clients", metrics["num_clients"])
+    show("aggregation", metrics["aggregation"])
+    show("mean_loss", f"{metrics['mean_loss']:.6f}")
+    assert str(result["status"]).lower() == "success", result["status"]
+    ok(f"Round finished with status {result['status']}")
+    return result
+
+
+def demo_weeks_6_to_13():
+    """Weeks 6-13: the real multi-cluster pipeline, with its own assertions."""
+    heading("Multi-cluster pipeline (cluster.demo_phase2)")
+    info("Review fixes (alpha=16 contract, validation) - covered by the test suite")
+    info("Clusters, isolation, straggler policy, re-clustering, fallback, HTTP")
+    info("The block below asserts its own claims; it raises if one stops being true.")
+    print()
+    from cluster import demo_phase2
+
+    return demo_phase2.run(seed=42, verbose=True)
+
+
+def demo_weeks_14_to_16():
+    """Weeks 14-16: report and evidence deliverables. Existence check only."""
+    from pathlib import Path
+
+    heading("Report, documentation and evidence deliverables")
+    root = Path(__file__).resolve().parents[2]
+    deliverables = [
+        ("docs/P2_CLUSTER_REPORT.md", "Phase II report, P2 section (architecture ... limitations)"),
+        ("docs/INTEGRATION_BOUNDARIES.md", "Edge / Security / Registry / Evaluation boundaries"),
+        ("docs/WEEK6_REVIEW.md", "Review pass notes (no panel feedback was available)"),
+        ("docs/DEMO_SCRIPT.md", "Final demo script"),
+        ("demo_runs/phase2_cluster_evidence.json", "Evidence (regenerate: python -m cluster.evidence)"),
+        ("demo_runs/phase2_cluster_evidence.md", "Evidence, readable form"),
+    ]
+    missing = []
+    shown_as = {"docs/WEEK6_REVIEW.md": "docs/ (review pass notes)"}
+    for rel, what in deliverables:
+        shown = shown_as.get(rel, rel)
+        if (root / rel).is_file():
+            ok(f"{shown:<42} {what}")
+        else:
+            missing.append(shown)
+            print(f"  [MISSING]  {shown:<39} {what}")
+    info("These are documents/evidence files; this script only checks they exist.")
+    info("Content is validated by tests/test_evidence.py and by running the evidence module.")
+    return missing
+
+
+# ================================================================
 #  MAIN
 # ================================================================
 
@@ -640,7 +715,7 @@ def main():
     print(LINE)
     print("  CLASP - P2 Cluster Service")
     print("  Student: Prasanth")
-    print("  Week 1 to Week 4 - Complete Progress Demonstration")
+    print("  Progress Demonstration")
     print(LINE)
 
     start = time.monotonic()
@@ -650,41 +725,52 @@ def main():
     demo_week3()
     demo_week4()
     demo_full_simulation()
+    demo_week5()
+    demo_weeks_6_to_13()
+    missing = demo_weeks_14_to_16()
 
     elapsed = time.monotonic() - start
 
-    heading("SUMMARY - All Weeks Demonstrated")
+    heading("SUMMARY - What Was Demonstrated")
     rows = [
-        ("Week 1", "Mon-Fri", "Flower env, DummyClient skeleton round-trip",
+        ("Flower skeleton", "DummyClient round-trip through the Flower pipeline",
          "client.py, server.py"),
-        ("Week 2", "Mon",     "3 simulated clients (make_dummy_clients)",
-         "simulation.py:43"),
-        ("Week 2", "Tue",     "FedProx proximal term in local training loop",
-         "client.py:151-166"),
-        ("Week 2", "Thu",     "Adapter format: PEFT state_dict <-> NumPy arrays",
+        ("Simulation", "3 simulated clients (make_dummy_clients)",
+         "simulation.py"),
+        ("FedProx", "Proximal term in the local training loop",
+         "client.py: LoRAClient.train_local"),
+        ("Adapter format", "PEFT state_dict <-> NumPy arrays",
          "adapter_format.py"),
-        ("Week 2", "Fri",     "Contracts frozen: rank=16, 4 attention modules",
-         "adapter_format.py:21-23"),
-        ("Week 3", "Tue",     "Delta-W reconstruction: delta_W = B @ A",
-         "adapter_format.py:68"),
-        ("Week 3", "Wed",     "Streaming weighted mean (memory-efficient)",
-         "aggregation.py:24-53"),
-        ("Week 3", "Thu",     "Truncated SVD re-factorization to rank 16",
-         "aggregation.py:56-107"),
-        ("Week 4", "Mon",     "Round metrics: timer, num_clients, mean_loss",
-         "server.py:80-92"),
-        ("Week 4", "Tue",     "Redistribution: return merged params to Flower",
-         "server.py:93"),
-        ("Week 4", "Wed",     "Round-trip correctness tests",
+        ("Contracts", "rank=16, alpha=16, 4 attention modules",
+         "adapter_format.py: constants"),
+        ("Delta-W", "delta_W = B @ A reconstruction",
+         "adapter_format.py: delta_w"),
+        ("Streaming mean", "Weighted mean with one accumulator",
+         "aggregation.py: StreamingWeightedMean"),
+        ("SVD aggregation", "Exact mean, truncated SVD re-factorization",
+         "aggregation.py: aggregate_svd"),
+        ("Round metrics", "Timer, num_clients, mean_loss",
+         "server.py: aggregate_fit"),
+        ("Redistribution", "Merged params returned to Flower",
+         "server.py: aggregate_fit"),
+        ("Round-trip check", "Reconstruction vs optimal rank-r bound",
          "tests/test_aggregation.py"),
-        ("Week 4", "Thu",     "Fault tolerance: 3-layer defense + quorum guard",
-         "server.py:aggregate_fit"),
+        ("Fault tolerance", "Status/malformed skip + quorum guard",
+         "server.py: aggregate_fit"),
+        ("Federated round", "3-client round with metrics (ran above)",
+         "demo.py"),
+        ("Review pass", "alpha=16, validation (no panel feedback existed)",
+         "docs/ (review pass notes)"),
+        ("Multi-cluster", "Isolation, straggler, re-cluster, fallback (ran above)",
+         "federation.py, clustering.py"),
+        ("Deliverables", "Report + evidence + demo script (existence checked)",
+         "docs/, demo_runs/"),
     ]
 
-    print(f"\n  {'Week':<8} {'Day':<6} {'What Was Done':<42} {'File'}")
-    print(f"  {'----':<8} {'---':<6} {'-------------':<42} {'----'}")
-    for week, day, what, file in rows:
-        print(f"  [OK] {week:<6} {day:<6} {what:<42} {file}")
+    print(f"\n       {'Area':<18} {'What Was Done':<56} {'File'}")
+    print(f"       {'----':<18} {'-------------':<56} {'----'}")
+    for area, what, file in rows:
+        print(f"  [OK] {area:<18} {what:<56} {file}")
 
     print()
     print(f"  All demonstrations completed in {elapsed:.2f}s")
@@ -692,8 +778,15 @@ def main():
     print("    adapter_format.py, client.py, simulation.py, demo.py, tests/")
     print()
     print(LINE)
-    print("  Status: Week 1-4 COMPLETE")
+    if missing:
+        print(f"  Status: pipeline demonstrated; MISSING deliverables: {', '.join(missing)}")
+    else:
+        print("  Status: pipeline demonstrated; report/evidence deliverables present")
     print(LINE)
+    print("  Not demonstrated (blocked by other modules):")
+    print("    - G1 mTLS and DP mu-tuning: need P3 (Security)")
+    print("    - live Edge client, registry and evaluation: need P1 / P4 / P5")
+    print("    - team-level report assembly and venue/submission tasks: not P2 work")
     print()
 
 

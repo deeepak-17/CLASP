@@ -82,6 +82,12 @@ class AdapterUpload(BaseModel):
     num_layers: int = Field(1, ge=1)
     num_examples: int = Field(gt=0)
     seed: int | None = None
+    # Optional (backward compatible; schema stays "1.0"): the cluster whose
+    # adapter this client trained from. A cluster refuses an upload whose
+    # base_cluster_id names a different cluster (a client that was re-clustered
+    # but has not yet pulled its new cluster's adapter), mirroring the
+    # federation's ``stale_adapter`` skip. ``None`` = not stated, not checked.
+    base_cluster_id: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tensors: list[TensorPayload]
 

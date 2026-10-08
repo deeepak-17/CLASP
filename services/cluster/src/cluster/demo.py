@@ -1,4 +1,4 @@
-"""Week 5 demo (P2): 3-client federated aggregation round.
+"""Federated aggregation demo (P2): 3-client round.
 
 Reuses the existing P2 pipeline end to end and adds nothing new to the
 aggregation/training math itself:
@@ -67,7 +67,7 @@ def _resolve_engine(requested: str) -> str:
                 "engine=fedprox requires torch, which is not installed in this "
                 "environment. Install it with `pip install torch` (see "
                 "services/cluster/README.md) or run with --engine dummy / "
-                "--engine auto to use the Week 1/2 round-trip fallback."
+                "--engine auto to use the DummyClient round-trip fallback."
             )
         return "fedprox"
     if requested == "dummy":
@@ -110,12 +110,12 @@ def run_demo(
             print(msg)
 
     log(_BANNER)
-    log(" CLASP Cluster Layer (P2) - Week 5 Demo")
+    log(" CLASP Cluster Layer (P2) - Federated Aggregation Demo")
     log(" 3-client federated aggregation round")
     log(_BANNER)
     log(f"engine              : {resolved_engine}"
         + ("" if resolved_engine == "fedprox" else
-           "  (torch not available -> DummyClient round-trip fallback, W1/W2)"))
+           "  (torch not available -> DummyClient round-trip fallback)"))
     log(f"num_clients         : {clients}")
     log(f"aggregation method  : {aggregation}")
     log(f"svd_rank (requested): {rank}")
