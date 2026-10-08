@@ -9,7 +9,7 @@ reproduced — and the measured evidence behind each claim.
 |---|---|
 | `docker compose up -d` | `registry` (:8004, stateful) + `cluster` (:8002). The cluster waits for a **healthy** registry. |
 | `docker compose --profile demo up` | + `demo-ui` (:8010) and `demo-seed`, a one-shot job that drives the registry end to end and writes `registry-demo.json` to the `demo-reports` volume |
-| `docker compose --profile train up edge` | + the edge federated round (`edge.round`) on the NVIDIA runtime, with trained adapters and corpus mounted |
+| `docker compose --profile train up edge` | + the edge federated round (`edge.round`) on the NVIDIA runtime. Trained adapters come from `services/edge/artifacts`; the corpus from `datasets/materialized` (`CLASP_CORPUS_DIR`), read-only. `CLASP_EDGE_ADAPTERS` / `CLASP_EDGE_ROUND` pick the adapter set and round (default round 1; D3's round 2 needs clients retrained on base + α·cluster) |
 | `-f docker-compose.yml -f docker-compose.mtls.yml` | the registry behind mutual TLS (§4) |
 
 `security/` is a library, never a container. Every image is `python:3.11-slim`
@@ -50,7 +50,9 @@ runs the compose demo from that clone. It passes at the commit that introduced i
    rebuilt from v2 in the same call.
 4. Save a worse client v3 and promote it: D5 says ROLLBACK (edit-similarity delta
    0.01 below the 0.02 band; pass@1 dropped 0.10), so `active` returns to v2.
-5. Run a restore drill on a 24-layer, rank-16 adapter, timed (§5).
+5. Run a restore drill on a 24-layer, rank-16 client that backs a composite.
+   The composite must follow it back to the v1 build. The clock covers the
+   restore plus the edge's fetch of the composite (§5).
 6. Read the lineage (composite v1 ← cluster@v1 + client@v1; composite v2 ←
    cluster@v1 + client@v2), the audit trail (`promote`, `rollback`) and a GC dry run.
 
@@ -80,7 +82,7 @@ library's job, so the plain demo round runs without the overlay.
 
 | NFR | Budget | Measured | Where |
 |---|---|---|---|
-| Registry restore-to-previous | ≤ 10 s | **0.019–0.026 s** in Docker (24 MB adapter: 24 layers × q/k/v/o, r = 16, hidden 2048), restore + fetch metadata + fetch payload; 0.24 s in-process in CI | `registry.demo` step `restore_nfr`; `tests/test_restore.py` |
+| Registry restore-to-previous | ≤ 10 s | **0.026 s** to restore a client (24 layers × q/k/v/o, r = 16, hidden 2048) and fetch the 48 MB composite the edge now serves, reusing the earlier composite; **0.088 s** when the composite must be rebuilt | `registry.demo` step `restore_nfr`; `tests/test_restore.py`, `tests/test_cascade.py` |
 | One federated round | ≤ 30 min | **14.0–17.9 min** (four seams, real adapters, 3 runs); **27.8 min** for the full 6-client round excluding training — training adds 55.8 min | `experiments/w12-integration/RESULTS.md`; `experiments/w4w5-g2-g3-round/SUMMARY.md` |
 | Adapter swap | ≤ 2 s | 0.501 s median (p95 1.387 s) | edge, `experiments/w3-edge-lora-composite/RESULTS.md` |
 | Composite TTFT overhead | ≤ 200 ms | +36.7 ms worst | edge, `docs/integration-sprint.md` §9 |
@@ -122,6 +124,13 @@ everything, re-validates every config, and requires every run to be complete.
   seeds and are identified by sha256 in the registry snapshot.
 - Composite ε uses basic composition. That is an upper bound, conservative, and
   correct, but looser than an accountant-level bound.
+- **Open (P3/P4):** two parts at ε ≈ 8 give a composite at ε ≈ 16, above D7's
+  ε ≤ 8. D7 states a *per-run* budget; whether it also caps a composite that
+  releases two runs is not decided yet. Until then the registry records the
+  bound and does not enforce it.
+- Composite ε is `null` today for every composite, because cluster uploads do not
+  carry a `privacy` block yet (P2's follow-up). `null` means "no DP guarantee
+  recorded", never zero.
 - Without the mTLS overlay the registry serves plain HTTP with no
   authentication on every interface. It logs a warning at startup. Use the
   overlay anywhere beyond a trusted lab network.

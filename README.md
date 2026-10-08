@@ -45,9 +45,11 @@ Each module is an installable package that depends on the shared `contracts` pac
 pip install -e contracts -e "services/registry[test]"
 pytest services/registry/tests
 
-# or bring up the stack
-docker compose up -d --build                 # registry (:8004) + cluster (:8002)
-docker compose --profile demo up --build     # + demo UI (:8010) and a registry walkthrough
+# the full demo, one command: registry + cluster + demo UI (:8010) + a registry walkthrough
+docker compose --profile demo up --build
+
+# or just the services: registry (:8004) + cluster (:8002)
+docker compose up -d --build
 ```
 
 `docs/devops.md` covers the compose profiles, CI, mTLS for the registry and the

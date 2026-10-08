@@ -70,6 +70,14 @@ the composite built from the parts' active versions. The composite is built in
 memory before anything is written, so a bad composite request rejects the whole
 call and records no decision.
 
+A ROLLBACK changes what the edge serves, not just the part's pointer: every
+composite whose active version was built from the rolled-back version moves to
+the composite of the restored version. An existing one is reused; otherwise it is
+rebuilt. Each move is recorded in that composite's audit trail and listed under
+`composites` in the response. If a replacement cannot be built, the call is
+refused with 409 and nothing changes. Composites pinned to other versions are
+left alone.
+
 ### Composites
 
 `POST /adapters/composite-flask/compose` with
@@ -78,14 +86,20 @@ The merge is exact, not an approximation: factors are concatenated along the ran
 axis with each part's coefficient and scaling folded into B, so the stored adapter's
 `B·A` equals `α·ΔW_cluster + β·ΔW_client` (rank r_c + r_l, scaling 1.0). It matches
 `edge.merge.compose` tensor for tensor (`tests/integration/test_registry_composite.py`).
-Provenance (exact part versions, α, β, base model) is stored on the version. A
+Both parts must adapt the same (layer, module) set; otherwise the composite would
+mix ranks under one declared `r` and PEFT could not load it, so it is refused
+(the edge applies the same rule). A part with coefficient 0 is dropped and exempt.
+Provenance (exact part versions, α, β, base model) is stored on the version. The
+base model is read from the parts' embedded `base_model_name_or_path`; parts on
+different bases, or a `base_model` that contradicts them, are refused. A
 composite's ε is the basic-composition bound ε_cluster + ε_client, and `null` if
 either part lacks DP. Re-composing identical inputs reuses the existing version.
 
 ### Restore and retention
 
 `POST /adapters/{name}/restore` `{"reason": "...", "to_version"?: n}` repoints
-`active` (default: the previous version) and records it in the audit trail. This
+`active` (default: the previous version) and records it in the audit trail. Like
+a D5 ROLLBACK, it moves the composites built from the current version too. This
 is the rollback drill and the D11 "restore ≤ 10 s" path.
 
 `POST /adapters/{name}/gc` `{"keep_last"?: n, "dry_run"?: bool}` keeps the newest
