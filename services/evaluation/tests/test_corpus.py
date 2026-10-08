@@ -91,6 +91,22 @@ class TestGlobMatching:
     def test_empty_pattern_list_never_matches(self) -> None:
         assert matches_any("a/b.py", []) is False
 
+    @pytest.mark.parametrize(
+        ("path", "pattern", "expected"),
+        [
+            ("tests/t.py", "**/tests/**", True),
+            ("a/b/c.py", "**", True),
+            ("a/b/c.py", "a/*.py", False),
+            ("a/c.py", "a/*.py", True),
+            ("build/x/y.py", "build/**", True),
+            ("rebuild/y.py", "build/**", False),
+            ("a/b.py", "*.py", False),
+        ],
+    )
+    def test_whole_path_semantics_on_every_python(self, path: str, pattern: str, expected: bool) -> None:
+        # Must not depend on PurePath.full_match (3.13+): CI and the container run 3.11.
+        assert matches_any(path, [pattern]) is expected
+
 
 class TestFileSelector:
     @pytest.fixture

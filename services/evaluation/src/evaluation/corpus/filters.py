@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
 from evaluation.corpus.models import FilterConfig
@@ -48,20 +49,24 @@ class AcceptedFile:
 def matches_any(relative_path: str, patterns: list[str]) -> bool:
     """Whether a POSIX-style relative path matches any glob in ``patterns``.
 
-    ``PurePosixPath.full_match`` (Python 3.13+) is used when available because
-    it implements ``**`` correctly; the fallback approximates it by also
-    testing each path suffix, since :meth:`PurePath.match` anchors at the tail.
+    Matching is whole-path with ``PurePosixPath.full_match`` semantics: ``*``,
+    ``?`` and ``[...]`` stay within one segment, and a ``**`` segment matches
+    zero or more segments (so ``**/tests/**`` matches ``tests/t.py``). It is
+    implemented here rather than delegated to ``full_match`` because that only
+    exists on Python 3.13+, and ``PurePath.match`` on older versions anchors at
+    the tail and has no ``**`` — CI and the container run 3.11.
     """
-    candidate = PurePosixPath(relative_path)
-    for pattern in patterns:
-        full_match = getattr(candidate, "full_match", None)
-        if full_match is not None:
-            if full_match(pattern):
-                return True
-            continue
-        if candidate.match(pattern):  # pragma: no cover - Python < 3.13 path
-            return True
-    return False
+    parts = PurePosixPath(relative_path).parts
+    return any(_match_segments(parts, PurePosixPath(p).parts) for p in patterns)
+
+
+def _match_segments(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    if not pattern:
+        return not parts
+    head, rest = pattern[0], pattern[1:]
+    if head == "**":
+        return any(_match_segments(parts[i:], rest) for i in range(len(parts) + 1))
+    return bool(parts) and fnmatchcase(parts[0], head) and _match_segments(parts[1:], rest)
 
 
 class FileSelector:
