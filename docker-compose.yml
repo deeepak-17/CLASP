@@ -92,10 +92,19 @@ services:
     environment:
       CLASP_REGISTRY_URL: http://registry:8004
       CLASP_CLUSTER_URL: http://cluster:8002
-    command: ["python", "-m", "edge.round", "--adapters", "/artifacts/round1",
-              "--out", "/artifacts/round1_out"]
+    # The adapter set and round number are configurable: round 1 uses clients
+    # trained on the bare base; D3's round 2 needs clients retrained on frozen
+    # (base + alpha*cluster) -- point CLASP_EDGE_ADAPTERS at that set and set
+    # CLASP_EDGE_ROUND=2. The corpus (datasets/materialized, gitignored) is
+    # mounted read-only; CLASP_CORPUS_DIR overrides where it lives on the host.
+    command: ["python", "-m", "edge.round",
+              "--adapters", "/artifacts/${CLASP_EDGE_ADAPTERS:-round1}",
+              "--corpus-root", "/corpus",
+              "--round", "${CLASP_EDGE_ROUND:-1}",
+              "--out", "/artifacts/${CLASP_EDGE_ADAPTERS:-round1}_out"]
     volumes:
       - ./services/edge/artifacts:/artifacts
+      - ${CLASP_CORPUS_DIR:-./datasets/materialized}:/corpus:ro
     deploy:
       resources:
         reservations:
