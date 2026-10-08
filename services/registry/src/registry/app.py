@@ -48,6 +48,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, Response,
 from fastapi.responses import JSONResponse
 
 from . import __version__
+from .cascade import apply_cascade, plan_cascade
 from .composition import (
     CompositionError,
     PlannedComposite,
@@ -273,6 +274,17 @@ def _composite_on_promote(spec: object, candidate: str) -> tuple[str, PlannedCom
         raise HTTPException(422, f"composite cannot be built: {e}") from e
 
 
+def _plan_cascade(name: str, from_version: int, to_version: int) -> list:
+    """Plan the composite moves for a part's rollback/restore; 409 if one can't be built."""
+    try:
+        return plan_cascade(get_store(), name, from_version, to_version)
+    except CompositionError as e:
+        raise HTTPException(
+            409, f"{name} v{from_version} -> v{to_version} would leave a composite serving "
+                 f"v{from_version}, and its replacement cannot be built: {e}",
+        ) from e
+
+
 def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...]]:
     try:
         if not isinstance(body.get("eval"), dict) or not isinstance(
@@ -301,8 +313,11 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     With ``composite`` (D6), a PROMOTE also stores the pre-merged composite
     built from the parts' active versions — i.e. including this candidate.
     The composite is built in memory *before* anything is written, so a bad
-    composite request rejects the whole call and records no decision. A
-    ROLLBACK builds nothing; the previous composite stays active.
+    composite request rejects the whole call and records no decision.
+
+    A ROLLBACK also moves every composite the edge is serving from the
+    rolled-back version onto the restored one (``registry.cascade``), so what
+    is served changes with the pointer. The moves are listed in ``composites``.
     """
     with _WRITE_LOCK:
         return _promote(name, body)
@@ -341,10 +356,14 @@ def _promote(name: str, body: dict) -> dict:
     if wants_composite and decision.action == PromotionAction.PROMOTE:
         planned = _composite_on_promote(body["composite"], name)
 
+    cascade = []
     if decision.action == PromotionAction.ROLLBACK:
+        cascade = _plan_cascade(name, active_before, decision.active_version_after)
         store.set_active(name, decision.active_version_after)
     store.record_promotion(name, decision)
     result = _promotion_decision_to_dict(decision)
+    result["composites"] = apply_cascade(store, cascade, action=decision.action,
+                                         reason=f"{name} {decision.reason}")
     if wants_composite:
         composite_name, plan = planned if planned else (None, None)
         result["composite"] = (
@@ -359,6 +378,8 @@ def restore(name: str, body: dict = Body(...)) -> dict:
 
     Body: ``{"reason": str, "to_version"?: int}``; ``to_version`` defaults to
     the version before the current active one. Recorded in the audit trail.
+    Composites built from the current active version follow it, as for a D5
+    ROLLBACK; the moves are listed in ``composites``.
     """
     with _WRITE_LOCK:
         return _restore(name, body)
@@ -386,9 +407,13 @@ def _restore(name: str, body: dict) -> dict:
     store.get_metadata(name, to_version)  # 404 if that version does not exist
     candidate = store.get_metadata(name, active).ref
     decision = restore_decision(candidate, to_version=to_version, reason=reason.strip())
+    cascade = _plan_cascade(name, active, to_version)
     store.set_active(name, to_version)
     store.record_promotion(name, decision)
-    return _promotion_decision_to_dict(decision)
+    result = _promotion_decision_to_dict(decision)
+    result["composites"] = apply_cascade(store, cascade, action=decision.action,
+                                         reason=f"{name} {decision.reason}")
+    return result
 
 
 def _parse_gc_body(body: dict) -> tuple[int, bool]:
