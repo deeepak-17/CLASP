@@ -10,9 +10,10 @@ two independent layers:
    ``__post_init__`` enforces cross-field invariants a schema cannot express
    (``num_clients == len(shards)``, ``total_files == sum(shard.num_files)``).
 
-``jsonschema`` is an optional dependency. If it is absent, layer 1 degrades to
-a reported *skip* rather than a silent pass — a check that quietly stops
-checking is worse than no check.
+``jsonschema`` is a declared dependency of ``clasp-evaluation``. If it is
+nevertheless absent, layer 1 *fails* the document rather than skipping it: a
+validator that reports ``ok`` without having validated is fail-open, and a
+check that quietly stops checking is worse than no check.
 """
 
 from __future__ import annotations
@@ -145,7 +146,7 @@ def validate_document(
         if not structural_errors:
             report.passed("json-schema structural validation")
     else:
-        report.skip("json-schema structural validation (install `jsonschema` to enable)")
+        report.error("json-schema structural validation could not run: `jsonschema` is not installed")
 
     # --- layer 2: semantic --------------------------------------------
     if dataclass_type is None:

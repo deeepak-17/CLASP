@@ -199,7 +199,7 @@ def main(args: argparse.Namespace) -> int:
             "temperature": config.temperature,
             "repeats": args.repeats,
         },
-        "jsonschema_validation": "enabled" if jsonschema_available() else "SKIPPED (jsonschema absent)",
+        "jsonschema_validation": "enabled" if jsonschema_available() else "FAILED CLOSED (jsonschema absent)",
         "clients": per_client,
     }
 

@@ -228,7 +228,7 @@ def render_report(run: ComplianceRun, manifest: PartitionManifest | None) -> Mar
                 "Clients": manifest.num_clients,
                 "Clusters": manifest.num_clusters,
                 "Total files": manifest.total_files,
-                "JSON Schema validation": "enabled" if jsonschema_available() else "SKIPPED (jsonschema absent)",
+                "JSON Schema validation": "enabled" if jsonschema_available() else "FAILED CLOSED (jsonschema absent)",
             }
         )
 
@@ -325,8 +325,8 @@ def main(args: argparse.Namespace) -> int:
     run = ComplianceRun()
     if not jsonschema_available():
         run.warn(
-            "`jsonschema` is not installed — structural validation was skipped. "
-            "Install it before treating this run as a sign-off."
+            "`jsonschema` is not installed — every schema check below fails closed. "
+            "Install it (it is a dependency of clasp-evaluation) and re-run."
         )
 
     manifest = check_manifest_schema(run, manifest_path)

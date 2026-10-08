@@ -43,6 +43,7 @@ from evaluation.interfaces.security_client import (
     PrivacyAccountant,
     PrivacyBudget,
 )
+from evaluation.interfaces import validation
 from evaluation.interfaces.validation import (
     SCHEMA_REGISTRY,
     jsonschema_available,
@@ -440,6 +441,13 @@ class TestPrivacyAccountant:
 class TestContractValidation:
     def test_jsonschema_is_available_in_this_environment(self) -> None:
         assert jsonschema_available(), "install jsonschema so contract checks are meaningful"
+
+    def test_missing_jsonschema_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A validator that cannot run its structural layer must not report ok.
+        monkeypatch.setattr(validation, "_JSONSCHEMA_AVAILABLE", False)
+        report = validate_document("eval_result", {})
+        assert not report.ok
+        assert any("jsonschema" in e for e in report.errors)
 
     @pytest.mark.parametrize("contract", sorted(SCHEMA_REGISTRY))
     def test_every_registered_schema_loads(self, contract: str) -> None:
