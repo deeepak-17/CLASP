@@ -1,0 +1,3 @@
+**/node_modules
+**/dist
+services/evaluation/dashboard/public/data

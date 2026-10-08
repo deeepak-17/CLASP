@@ -34,7 +34,18 @@ services:
     build:
       context: .
       dockerfile: services/evaluation/Dockerfile
+    # `python -m evaluation` checks the registry is reachable when this is set.
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
     depends_on: [registry]
+
+  # P5 evaluation dashboard (static React build). Results are baked in at build
+  # time from services/evaluation/results/; rebuild after re-exporting them.
+  dashboard:
+    build:
+      context: .
+      dockerfile: services/evaluation/dashboard/Dockerfile
+    ports: ["8005:80"]
 
 # Named volume so adapter versions persist across `compose down`/`up` (D9).
 volumes:
