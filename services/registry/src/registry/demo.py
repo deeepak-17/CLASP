@@ -8,7 +8,8 @@ Walks every P4 capability over real HTTP, asserting each response:
     2. compose them into a pre-merged composite            (D6)
     3. save a better client v2, PROMOTE it with build-on-promote composite (D5+D6)
     4. save a bad client v3, D5 ROLLS IT BACK                (D5, real rule)
-    5. operator restore drill on a 1.3B-sized adapter, timed (D11: <= 10 s)
+    5. restore drill on a 1.3B-sized client: its composite follows, timed
+       on the composite the edge fetches            (D11: <= 10 s)
     6. lineage + audit trail, then a retention dry run      (D9)
 
 Adapter names are suffixed with a run id so repeated runs never collide with
@@ -119,6 +120,46 @@ def _eval(name: str, version: int, sim: float, pass1: float) -> dict:
     }
 
 
+def _restore_drill(reg: Registry, run_id: str, hp: dict, *, layers: int, hidden: int,
+                   log) -> float:
+    """D11, timed on what the edge serves: restore a client, read back its composite.
+
+    A 1.3B-sized cluster + client v1/v2 and their composites. Restoring the
+    client must move the served composite back to the v1 build; the clock
+    covers the restore and the edge's fetch of the composite's metadata + payload.
+    """
+    cluster, client, composite = f"nfr-cluster-{run_id}", f"nfr-{run_id}", f"nfr-composite-{run_id}"
+    status, body = reg.save(cluster, make_adapter(5, layers=layers, hidden=hidden),
+                            {"kind": "cluster", "hparams": hp, "aggregation": "svd_exact",
+                             "source_clients": [client]})
+    _expect("save nfr cluster", status, 201, body)
+    compose = {"cluster": cluster, "client": client, "alpha": 0.5, "beta": 1.0}
+    for seed in (6, 7):
+        status, body = reg.save(client, make_adapter(seed, layers=layers, hidden=hidden),
+                                {"kind": "client", "hparams": hp})
+        _expect("save nfr client", status, 201, body)
+        status, body = reg.post_json(f"/adapters/{composite}/compose", compose)
+        _expect("compose nfr", status, 201, body)
+    status, good = reg.get(f"/adapters/{composite}/versions/1/file", raw=True)
+    _expect("fetch nfr composite v1", status, 200, good)
+
+    start = time.perf_counter()
+    status, body = reg.post_json(f"/adapters/{client}/restore", {"reason": "D11 restore drill"})
+    _expect("restore", status, 200, body)
+    status, active = reg.get(f"/adapters/{composite}/active")
+    status, blob = reg.get(f"/adapters/{composite}/versions/{active['ref']['version']}/file",
+                           raw=True)
+    elapsed = time.perf_counter() - start
+    if active["composed_from"]["client_version"] != 1 or blob != good:
+        raise DemoFailure(f"restore: composite still serves {active['composed_from']}")
+    if elapsed > RESTORE_NFR_SECONDS:
+        raise DemoFailure(f"restore NFR: {elapsed:.2f}s > {RESTORE_NFR_SECONDS}s")
+    log("restore_nfr", seconds=round(elapsed, 3), payload_mb=round(len(blob) / 2**20, 1),
+        served_client_version=1, composites_moved=len(body["composites"]),
+        budget_seconds=RESTORE_NFR_SECONDS)
+    return elapsed
+
+
 def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
              nfr_layers: int = 24, nfr_hidden: int = 2048) -> dict:
     cluster, client, composite = f"cluster-web-{run_id}", f"flask-{run_id}", f"composite-flask-{run_id}"
@@ -171,24 +212,8 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
         raise DemoFailure(f"promote v3: expected rollback to v2, got {body}")
     log("rollback", reason=body["reason"])
 
-    nfr = f"nfr-{run_id}"
-    big = [make_adapter(s, layers=nfr_layers, hidden=nfr_hidden) for s in (5, 6)]
-    for payload in big:
-        status, body = reg.save(nfr, payload, {"kind": "client", "hparams": hp})
-        _expect("save nfr", status, 201, body)
-    start = time.perf_counter()
-    status, body = reg.post_json(f"/adapters/{nfr}/restore", {"reason": "D11 restore drill"})
-    _expect("restore", status, 200, body)
-    status, active = reg.get(f"/adapters/{nfr}/active")
-    status, blob = reg.get(f"/adapters/{nfr}/versions/{active['ref']['version']}/file", raw=True)
-    elapsed = time.perf_counter() - start
-    if blob != big[0]:
-        raise DemoFailure("restore: fetched payload is not the previous version")
-    if elapsed > RESTORE_NFR_SECONDS:
-        raise DemoFailure(f"restore NFR: {elapsed:.2f}s > {RESTORE_NFR_SECONDS}s")
-    log("restore_nfr", seconds=round(elapsed, 3), payload_mb=round(len(blob) / 2**20, 1),
-        budget_seconds=RESTORE_NFR_SECONDS)
-    report["restore_seconds"] = elapsed
+    report["restore_seconds"] = _restore_drill(reg, run_id, hp, layers=nfr_layers,
+                                               hidden=nfr_hidden, log=log)
 
     status, body = reg.get(f"/adapters/{composite}/lineage")
     _expect("lineage", status, 200, body)
