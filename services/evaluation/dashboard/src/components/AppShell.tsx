@@ -4,7 +4,10 @@ import { NavLink } from "react-router-dom";
 const NAV_ITEMS = [
   { to: "/", label: "Overview", end: true },
   { to: "/in-project", label: "In-Project Metric" },
+  { to: "/personalization", label: "Personalization" },
   { to: "/rounds", label: "Federated Rounds" },
+  { to: "/lineage", label: "Adapter Lineage" },
+  { to: "/noise", label: "Noise & Guard" },
   { to: "/benchmarks", label: "Benchmarks" },
   { to: "/pass-at-k", label: "Pass@k" },
   { to: "/pipeline", label: "Evaluation Pipeline" },

@@ -59,3 +59,18 @@ if (existsSync(ROUNDS_SOURCE)) {
   if (existsSync(ROUNDS_DEST)) rmSync(ROUNDS_DEST);
   console.log(`[sync-data] ${ROUNDS_SOURCE} not found — Rounds page will show its empty state.`);
 }
+
+// Personalization, lineage and noise feeds (scripts/build_personalization_report.py,
+// scripts/export_lineage.py, scripts/build_noise_report.py). Optional: each page
+// shows how to produce its feed when the file is absent.
+for (const name of ["personalization.json", "lineage.json", "noise_report.json"]) {
+  const source = resolve(MODULE_ROOT, "results", name);
+  const dest = resolve(DEST_DIR, name);
+  if (existsSync(source)) {
+    copyFileSync(source, dest);
+    console.log(`[sync-data] copied ${source} -> ${dest} (${statSync(dest).size} bytes)`);
+  } else {
+    if (existsSync(dest)) rmSync(dest);
+    console.log(`[sync-data] ${source} not found — its page will show how to produce it.`);
+  }
+}

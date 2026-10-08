@@ -30,3 +30,13 @@ export function EmptyResultsState() {
     </div>
   );
 }
+
+/** An optional feed that has not been produced yet: say which script makes it. */
+export function AbsentFeedState({ file, command }: { file: string; command: string }) {
+  return (
+    <div className="empty-state">
+      <code>{file}</code> has not been produced yet. Run <code>{command}</code> from{" "}
+      <code>services/evaluation</code>, then <code>npm run sync-data</code>.
+    </div>
+  );
+}
