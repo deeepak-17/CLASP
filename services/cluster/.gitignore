@@ -9,3 +9,5 @@ pytest_out.txt
 venv/
 __pycache__/
 *.egg-info/
+
+.venv_broken/

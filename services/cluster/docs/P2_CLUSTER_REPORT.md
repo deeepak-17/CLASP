@@ -317,7 +317,7 @@ What the numbers do and do not show: the group structure is **planted by constru
 works when structure exists — not that real project clusters exist. The µ sweep says nothing about DP. Loss differences
 between SVD and naive come from a single seed.
 
-Test and lint status at the time of writing (this environment): **202 passed, 0 failed, 1 skipped** on Python 3.11.17 and again on Python 3.10.20 (the one skip, `tests/test_demo.py:42`, is environment-dependent: it asserts the torch-missing path and skips when torch is installed); `ruff check .` clean on both ruff 0.16.8 and the team-pinned ruff 0.15.22 (built-in defaults, run from `services/cluster`; the repository commits no ruff configuration); `python -m cluster.demo --seed 42`, `python -m cluster.demo_all_weeks`, `python -m cluster.demo_phase2` and `python -m cluster.evidence` all exit 0. Raw logs: `demo_runs/validation/`.
+Test and lint status at the time of writing (this environment): **203 passed, 0 failed, 1 skipped** on Python 3.11.17 and again on Python 3.10.20 (the one skip, `tests/test_demo.py:42`, is environment-dependent: it asserts the torch-missing path and skips when torch is installed); `ruff check .` clean on both ruff 0.16.8 and the team-pinned ruff 0.15.22 (built-in defaults, run from `services/cluster`; the repository commits no ruff configuration); `python -m cluster.demo --seed 42`, `python -m cluster.demo_all_weeks`, `python -m cluster.demo_phase2` and `python -m cluster.evidence` all exit 0. Raw logs: `demo_runs/validation/`.
 
 Verification matrix:
 
