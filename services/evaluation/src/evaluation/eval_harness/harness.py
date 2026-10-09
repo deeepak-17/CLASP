@@ -301,7 +301,9 @@ class EvaluationHarness:
             passed: list[bool] | None = None
             if scoring.execution_enabled:
                 passed = [
-                    execute_program(program, timeout_seconds=scoring.execution_timeout_seconds).passed
+                    execute_program(
+                        program, timeout_seconds=scoring.execution_timeout_seconds, sandbox=scoring.sandbox
+                    ).passed
                     for program in programs
                 ]
 

@@ -53,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, required=True, help="Where to write anchor.json.")
     parser.add_argument("--config", type=Path, default=None, help="Evaluation config (HumanEval task file).")
     parser.add_argument("--timeout", type=float, default=10.0, help="Per-program execution timeout, seconds.")
+    parser.add_argument(
+        "--sandbox", choices=["auto", "docker", "process"], default="auto",
+        help="Isolation for the generated code (docker = no network; auto falls back to process).",
+    )
     return parser
 
 
@@ -67,7 +71,7 @@ def main(args: argparse.Namespace) -> int:
     manifest = read_json(args.generation_manifest) if args.generation_manifest else None
 
     with Stopwatch("score") as watch:
-        outcomes = score_samples(samples, tasks, timeout_seconds=args.timeout)
+        outcomes = score_samples(samples, tasks, timeout_seconds=args.timeout, sandbox=args.sandbox)
     anchor = build_anchor(outcomes, samples_path=args.samples, generation_manifest=manifest)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

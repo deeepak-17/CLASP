@@ -68,7 +68,7 @@ Every result currently in `results.json` is labelled `DEMO_TEST`, and the dashbo
 - No real model has been evaluated yet — Pass@k against `MockEdgeInferenceClient` is 0.0 for every task/k by design (the mock never produces a passing completion), which is the correct output of a working scorer given that input, not a result to report as capability. The in-project metric (§5a) is the same story: `edit_similarity ≈ 0.18`, `exact_match = 0`, `noise_band = 0` against the mock.
 - The `baseline_noise_band` is measured but reads 0.0 — the mock backend is deterministic, so repeated runs don't vary. It becomes a real threshold when a stochastic (real) backend makes the repeats differ; no code change needed.
 - The real Edge-Layer adapter (`src/evaluation/interfaces/edge_transformers_adapter.py`) is implemented but untested against real weights — no GPU/checkpoint in this environment.
-- Execution sandboxing (`src/evaluation/eval_harness/execution.py`) is process-level (timeout + resource limits), not container-grade; fine for this repository's own completions, would want P3 sign-off before running untrusted input at scale.
+- Execution sandboxing (`src/evaluation/eval_harness/execution.py`): a docker container with no network, read-only filesystem and resource limits when Docker is available (`scoring.sandbox`), otherwise a process-level fallback (timeout + resource limits) that is recorded on every result.
 - The dashboard is a single static snapshot with no historical trend view (see `docs/dashboard.md` §9 for the full list).
 
 ---

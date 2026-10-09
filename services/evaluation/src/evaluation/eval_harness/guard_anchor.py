@@ -62,6 +62,7 @@ class SampleOutcome:
     timed_out: bool
     entry_point_defined: bool
     stderr_tail: str = ""
+    isolation: str = "process"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +71,7 @@ class SampleOutcome:
             "timed_out": self.timed_out,
             "entry_point_defined": self.entry_point_defined,
             "stderr_tail": self.stderr_tail,
+            "isolation": self.isolation,
         }
 
 
@@ -113,6 +115,7 @@ def score_samples(
     tasks: Mapping[str, EvalTask],
     *,
     timeout_seconds: float = 10.0,
+    sandbox: str = "auto",
 ) -> list[SampleOutcome]:
     """Execute every sample against its task's tests. Unknown task ids are an error."""
     unknown = sorted({s["task_id"] for s in samples} - tasks.keys())
@@ -124,7 +127,7 @@ def score_samples(
     for sample in samples:
         task = tasks[sample["task_id"]]
         program = assemble_program(task, sample)
-        result = execute_program(program, timeout_seconds=timeout_seconds)
+        result = execute_program(program, timeout_seconds=timeout_seconds, sandbox=sandbox)
         outcomes.append(
             SampleOutcome(
                 task_id=task.task_id,
@@ -132,9 +135,21 @@ def score_samples(
                 timed_out=result.timed_out,
                 entry_point_defined=f"def {task.entry_point}" in program,
                 stderr_tail=result.stderr_tail[-400:],
+                isolation=result.isolation,
             )
         )
     return outcomes
+
+
+_ISOLATION_TEXT = {
+    "docker": "docker container per program: no network, read-only fs, no capabilities, mem/cpu/pid limits",
+    "process": "subprocess per program, temp dir, wall-clock timeout, POSIX rlimits (no network confinement)",
+}
+
+
+def _isolation_summary(outcomes: Sequence[SampleOutcome]) -> str:
+    kinds = sorted({o.isolation for o in outcomes})
+    return "; ".join(_ISOLATION_TEXT.get(k, k) for k in kinds)
 
 
 def _task_order(task_id: str) -> tuple[int, str]:
@@ -186,8 +201,8 @@ def build_anchor(
         "plus_solved": None,
         "scorer": {
             "name": SCORER_NAME,
-            "tests": "original HumanEval check() tests (eval_harness/humaneval/tasks.jsonl)",
-            "isolation": "subprocess per program, temp dir, wall-clock timeout, POSIX rlimits",
+            "tests": "original HumanEval check() tests (src/evaluation/eval_harness/humaneval/tasks.jsonl)",
+            "isolation": _isolation_summary(outcomes),
             "plus_note": "EvalPlus extended tests not run — plus_pass_at_1 is null, not zero",
             "comparability": "compare only with an anchor scored by the same scorer",
         },

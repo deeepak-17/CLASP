@@ -75,13 +75,13 @@ evaluation:
   scoring:
     # k values for the unbiased Pass@k estimator (Chen et al., 2021).
     pass_at_k: [1, 10]
-    # Executes every assembled program in a subprocess sandbox
-    # (eval_harness.execution) to determine pass/fail. Process-level isolation
-    # only — see eval_harness/execution.py's module docstring for exactly what
-    # that does and does not guarantee, and why P3 sign-off on a stronger
-    # sandbox (container/gVisor) is still recommended before running this
-    # against untrusted input beyond this repository's own mock/reference
-    # completions. Left false by default; scripts/run_baseline_eval.py
-    # enables it explicitly for a scored run.
+    # Executes every assembled program to determine pass/fail
+    # (eval_harness.execution). Left false by default;
+    # scripts/run_baseline_eval.py enables it explicitly for a scored run.
     execution_enabled: false
     execution_timeout_seconds: 10
+    # Isolation for model-generated code. "docker": a container with no
+    # network, read-only filesystem, no capabilities, memory/CPU/pid limits.
+    # "process": a subprocess with a timeout and rlimits only. "auto": docker
+    # when a daemon answers, else process (logged, and recorded per result).
+    sandbox: auto

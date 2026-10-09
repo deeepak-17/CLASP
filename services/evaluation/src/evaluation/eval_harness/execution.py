@@ -1,48 +1,47 @@
-"""Sandboxed execution of assembled programs — Week 3 support module.
+"""Sandboxed execution of assembled programs.
 
-The harness and the adapters already assemble a runnable program per
-completion (``BenchmarkAdapter.assemble_program``); this module is the one
-place that actually executes model-generated code to decide pass/fail.
+This is the one place that executes model-generated code (HumanEval/MBPP
+programs assembled by ``BenchmarkAdapter.assemble_program``) to decide
+pass/fail. Two isolation backends, chosen by ``scoring.sandbox``:
 
-Isolation model — read this before enabling ``scoring.execution_enabled``
---------------------------------------------------------------------------
-Every program runs as its own **subprocess**, in a throwaway temporary
-directory, with:
+``docker`` — the isolation D5's guard needs for untrusted model output.
+    Each program runs in a fresh ``python:3.11-slim`` container with **no
+    network** (``--network none``), a read-only root filesystem with the
+    program mounted read-only, all Linux capabilities dropped,
+    ``no-new-privileges``, an unprivileged user, and memory / CPU / process
+    limits; a ``timeout`` inside the container kills the program at the
+    wall-clock limit and the container is force-removed if the client is
+    stuck. See :func:`docker_command`.
 
-* a hard wall-clock timeout (``scoring.execution_timeout_seconds``);
-* a restricted environment (no inherited secrets, minimal ``PATH``);
-* best-effort POSIX resource limits (CPU seconds, address space, no core
-  dumps, capped open-file count) applied via ``preexec_fn`` where the
-  ``resource`` module is available.
+``process`` — the fallback where Docker is unavailable. A subprocess in a
+    throwaway temp directory with a wall-clock timeout, a stripped environment
+    and best-effort POSIX resource limits. It stops runaway loops and fork
+    bombs from hanging the harness but does **not** stop a deliberately
+    malicious program from reading files or opening sockets.
 
-This is **process-level** isolation, not container- or VM-level isolation:
-it stops a runaway loop or an accidental fork bomb from hanging the harness,
-and it stops the executed code from writing outside its temp directory by
-convention, but it does **not** stop a deliberately malicious payload from
-reading the filesystem, opening a socket, or otherwise using any syscall the
-harness process itself is permitted to make. The Week-2 architecture notes
-this in :mod:`eval_harness.harness`: "executing model-generated code
-additionally needs a sandbox policy P3 has to sign off on." That sign-off
-has not happened as of Week 3 — P3's mTLS/DP-SGD workstream is scoped to the
-training path, not eval execution. Running this against completions from a
-trusted or mock generator (as every run in this repository does) is fine;
-running it against arbitrary untrusted input without a stronger sandbox
-(container, gVisor, seccomp profile) would not be.
+``auto`` (the configured default) uses ``docker`` when a Docker daemon
+answers and ``process`` otherwise, and every outcome records which backend
+actually ran (:attr:`ExecutionOutcome.isolation`), so a result can always be
+traced to the isolation it was produced under.
 
-``scoring.execution_enabled`` therefore defaults to ``false`` and must be
-turned on deliberately.
+``scoring.execution_enabled`` still defaults to ``false`` and must be turned
+on deliberately.
 """
 
 from __future__ import annotations
 
+import functools
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from evaluation.utils.errors import EvaluationError
 from evaluation.utils.logging_utils import get_logger
 
 _LOG = get_logger(__name__)
@@ -54,6 +53,16 @@ _MAX_CAPTURED_OUTPUT = 4096
 #: Best-effort ceiling on address space for the child process (POSIX only).
 _MAX_ADDRESS_SPACE_BYTES = 1 << 30  # 1 GiB
 
+#: ``scoring.sandbox`` values.
+SANDBOX_MODES = ("auto", "docker", "process")
+
+#: Image every docker-sandboxed program runs in (has ``timeout`` from coreutils).
+DOCKER_IMAGE = "python:3.11-slim"
+
+#: Extra seconds the docker client may take beyond the program's own limit
+#: (container start-up and teardown) before the container is force-removed.
+_DOCKER_GRACE_SECONDS = 30.0
+
 
 @dataclass(frozen=True)
 class ExecutionOutcome:
@@ -64,6 +73,8 @@ class ExecutionOutcome:
     exit_code: int | None
     duration_seconds: float
     stderr_tail: str = ""
+    #: The backend that actually ran the program: ``"docker"`` or ``"process"``.
+    isolation: str = "process"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +83,7 @@ class ExecutionOutcome:
             "exit_code": self.exit_code,
             "duration_seconds": self.duration_seconds,
             "stderr_tail": self.stderr_tail,
+            "isolation": self.isolation,
         }
 
 
@@ -112,72 +124,185 @@ def _preexec_fn_for_platform():
         return None
 
 
-def execute_program(source: str, *, timeout_seconds: float = 10.0) -> ExecutionOutcome:
+@functools.lru_cache(maxsize=1)
+def docker_available() -> bool:
+    """Whether a Docker daemon answers (cached for the process lifetime)."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        probe = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0 and bool(probe.stdout.strip())
+
+
+def resolve_sandbox(mode: str) -> str:
+    """``auto`` -> ``docker`` if available else ``process``; ``docker`` requires Docker."""
+    if mode not in SANDBOX_MODES:
+        raise EvaluationError(f"sandbox must be one of {SANDBOX_MODES}, got {mode!r}")
+    if mode == "process":
+        return "process"
+    if docker_available():
+        return "docker"
+    if mode == "docker":
+        raise EvaluationError("sandbox 'docker' requested but no Docker daemon is reachable")
+    _warn_process_fallback()
+    return "process"
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_process_fallback() -> None:
+    _LOG.warning(
+        "No Docker daemon reachable: executing generated code with process-level isolation only "
+        "(no network or filesystem confinement). Set scoring.sandbox to 'docker' to require it."
+    )
+
+
+def docker_command(host_dir: Path | str, timeout_seconds: float, *, name: str, image: str = DOCKER_IMAGE) -> list[str]:
+    """The ``docker run`` invocation for one program in ``host_dir/candidate.py``."""
+    return [
+        "docker", "run", "--rm", "--name", name,
+        "--network", "none",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--user", "65534:65534",
+        "--memory", "512m", "--memory-swap", "512m",
+        "--cpus", "1",
+        "--pids-limit", "64",
+        "--ulimit", "nofile=64:64",
+        "-e", "PYTHONDONTWRITEBYTECODE=1",
+        "-v", f"{Path(host_dir).resolve()}:/sandbox:ro",
+        "-w", "/tmp",
+        image,
+        "timeout", "-s", "KILL", f"{timeout_seconds:g}",
+        "python", "/sandbox/candidate.py",
+    ]
+
+
+def execute_program(source: str, *, timeout_seconds: float = 10.0, sandbox: str = "process") -> ExecutionOutcome:
     """Run ``source`` as a standalone Python program and report pass/fail.
 
-    "Passed" means the process exited with status 0 within the timeout — the
+    "Passed" means the program exited with status 0 within the timeout — the
     same signal HumanEval's own ``check()`` harness and MBPP's bare
-    ``assert`` statements use: a failed ``assert`` or an uncaught exception
-    exits non-zero, and the assembled program's tests are what determine
-    that, not this function.
+    ``assert`` statements use.
 
     Args:
         source: A complete, self-contained Python program (prompt +
             completion + tests, as produced by
             ``BenchmarkAdapter.assemble_program``).
-        timeout_seconds: Wall-clock limit. Mirrors
+        timeout_seconds: Wall-clock limit for the program itself. Mirrors
             ``scoring.execution_timeout_seconds``.
+        sandbox: ``"docker"``, ``"process"`` or ``"auto"`` (see the module
+            docstring). Mirrors ``scoring.sandbox``.
 
     Returns:
         An :class:`ExecutionOutcome`. Never raises for a failure *of the
         executed program* — a syntax error, an infinite loop (via timeout)
-        and a failed assertion are all ordinary "did not pass" outcomes, not
-        exceptions from this function.
+        and a failed assertion are all ordinary "did not pass" outcomes.
     """
+    backend = resolve_sandbox(sandbox)
     with tempfile.TemporaryDirectory(prefix="clasp-p5-exec-") as tmpdir:
         script_path = Path(tmpdir) / "candidate.py"
         script_path.write_text(source, encoding="utf-8")
+        if backend == "docker":
+            script_path.chmod(0o644)
+            Path(tmpdir).chmod(0o755)
+            return _run_docker(tmpdir, timeout_seconds)
+        return _run_process(script_path, tmpdir, timeout_seconds)
 
-        # Restricted environment: no inherited API keys/tokens, minimal PATH
-        # so the candidate cannot invoke arbitrary tools found via a broad PATH.
-        env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
 
-        start = time.perf_counter()
-        try:
-            completed = subprocess.run(
-                [sys.executable, str(script_path)],
-                cwd=tmpdir,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                preexec_fn=_preexec_fn_for_platform(),
-            )
-        except subprocess.TimeoutExpired as exc:
-            stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
-            return ExecutionOutcome(
-                passed=False,
-                timed_out=True,
-                exit_code=None,
-                duration_seconds=round(time.perf_counter() - start, 6),
-                stderr_tail=_truncate(stderr or f"execution exceeded {timeout_seconds}s"),
-            )
-        except OSError as exc:  # interpreter missing, permission error, etc.
-            return ExecutionOutcome(
-                passed=False,
-                timed_out=False,
-                exit_code=None,
-                duration_seconds=round(time.perf_counter() - start, 6),
-                stderr_tail=_truncate(f"{type(exc).__name__}: {exc}"),
-            )
-        duration = round(time.perf_counter() - start, 6)
-
+def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float) -> ExecutionOutcome:
+    # Restricted environment: no inherited API keys/tokens, minimal PATH
+    # so the candidate cannot invoke arbitrary tools found via a broad PATH.
+    env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    start = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script_path)],
+            cwd=tmpdir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            preexec_fn=_preexec_fn_for_platform(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
+        return ExecutionOutcome(
+            passed=False,
+            timed_out=True,
+            exit_code=None,
+            duration_seconds=round(time.perf_counter() - start, 6),
+            stderr_tail=_truncate(stderr or f"execution exceeded {timeout_seconds}s"),
+        )
+    except OSError as exc:  # interpreter missing, permission error, etc.
+        return ExecutionOutcome(
+            passed=False,
+            timed_out=False,
+            exit_code=None,
+            duration_seconds=round(time.perf_counter() - start, 6),
+            stderr_tail=_truncate(f"{type(exc).__name__}: {exc}"),
+        )
     return ExecutionOutcome(
         passed=completed.returncode == 0,
         timed_out=False,
         exit_code=completed.returncode,
-        duration_seconds=duration,
+        duration_seconds=round(time.perf_counter() - start, 6),
         stderr_tail=_truncate(completed.stderr),
+    )
+
+
+def _run_docker(tmpdir: str, timeout_seconds: float) -> ExecutionOutcome:
+    name = f"clasp-p5-exec-{uuid.uuid4().hex[:12]}"
+    start = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            docker_command(tmpdir, timeout_seconds, name=name),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + _DOCKER_GRACE_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)
+        return ExecutionOutcome(
+            passed=False,
+            timed_out=True,
+            exit_code=None,
+            duration_seconds=round(time.perf_counter() - start, 6),
+            stderr_tail=f"docker client exceeded {timeout_seconds + _DOCKER_GRACE_SECONDS}s; container removed",
+            isolation="docker",
+        )
+    except OSError as exc:
+        return ExecutionOutcome(
+            passed=False,
+            timed_out=False,
+            exit_code=None,
+            duration_seconds=round(time.perf_counter() - start, 6),
+            stderr_tail=_truncate(f"{type(exc).__name__}: {exc}"),
+            isolation="docker",
+        )
+    duration = round(time.perf_counter() - start, 6)
+    # 137 = SIGKILL: `timeout -s KILL` at the wall-clock limit, or the memory
+    # limit's OOM killer. Elapsed time tells them apart.
+    killed = completed.returncode == 137
+    timed_out = killed and duration >= timeout_seconds
+    note = ""
+    if killed:
+        note = f"execution exceeded {timeout_seconds}s" if timed_out else "killed (memory limit)"
+    return ExecutionOutcome(
+        passed=completed.returncode == 0,
+        timed_out=timed_out,
+        exit_code=completed.returncode,
+        duration_seconds=duration,
+        stderr_tail=_truncate(completed.stderr or note),
+        isolation="docker",
     )
 
 

@@ -52,7 +52,7 @@ pass@k = 1 - C(n-c, k) / C(n, k)
 
 Computed via `math.comb` directly against the written formula (exact integer arithmetic; `n` here is at most a few hundred, so there's no numerical-stability reason to use the running-product form some references use). Edge cases are explicit `ScoringError`s, not silent zeros or crashes: `n=0` ("undefined, not measured as 0%"), `k>n` ("insufficient samples"), `c>n`, `k<1`, negative counts.
 
-`src/evaluation/eval_harness/execution.py::execute_program` determines `passed`/`failed` by actually running the assembled program (prompt + completion + tests) in a subprocess, with a timeout and best-effort POSIX resource limits. **This is process-level isolation, not container-level** — see that module's docstring for exactly what it does and does not guarantee, and why running it against genuinely untrusted input (as opposed to this repository's own mock/reference completions) still wants P3 sign-off on a stronger sandbox.
+`src/evaluation/eval_harness/execution.py::execute_program` determines `passed`/`failed` by actually running the assembled program (prompt + completion + tests) under the isolation `scoring.sandbox` selects: a docker container with no network, read-only filesystem, dropped capabilities and memory/CPU/pid limits, or — where Docker is unavailable — a subprocess with a timeout and POSIX resource limits. Each outcome records which backend ran (`isolation`).
 
 `src/evaluation/eval_harness/harness.py::EvaluationHarness` wires the two together when `scoring.execution_enabled: true`: every assembled program is executed, `TaskOutcome.passed` is populated, and `eval_harness.scoring.aggregate_pass_at_k` computes the per-benchmark summary. A task/`k` combination that can't be scored (e.g. `num_samples_per_task=1` but `pass_at_k: [1, 10]` is configured) is reported by name in the log and excluded from that `k`'s mean — never silently absorbed into a lower denominator.
 
@@ -85,7 +85,7 @@ python scripts/score_humaneval_samples.py --samples <eval_out>/samples.jsonl \
 
 - Original HumanEval `check()` tests only — `plus_pass_at_1` is `null`, and the anchor's `scorer` block names the harness. Score the candidate and the baseline with the **same** tool.
 - Measured on the 20 base-model samples committed at `services/edge/eval_out/samples.jsonl` (sha256 `ad912167…`): **base pass@1 = 0.50 (10/20)**. The canonical solutions of the same 20 tasks score 20/20 through the same path (`scripts/sanity_check_scoring.py --benchmark HumanEval --limit 20`), so the misses are the model's.
-- Process-level isolation only (see `src/evaluation/eval_harness/execution.py`) — fine for the team's own model's output.
+- Isolation is set by `scoring.sandbox`: `docker` runs each program in a container with no network, a read-only filesystem, no capabilities and memory/CPU/pid limits; `process` is a subprocess with a timeout and rlimits only; `auto` (default) uses docker when a daemon answers and otherwise falls back to process with a warning. Every outcome and guard anchor records which one ran. The docker path has not been exercised on the development machine (no Docker there); its flags are pinned by `tests/test_sandbox.py`.
 
 ## 6. `results.json` (`src/evaluation/eval_harness/results_store.py`)
 

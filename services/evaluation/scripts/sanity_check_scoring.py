@@ -60,10 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout", type=float, default=10.0, help="Per-program execution timeout, seconds."
     )
+    parser.add_argument(
+        "--sandbox", choices=["auto", "docker", "process"], default="auto",
+        help="Isolation for the generated code (docker = no network; auto falls back to process).",
+    )
     return parser
 
 
-def _check_benchmark(name: BenchmarkName, config, *, limit: int | None, timeout: float):
+def _check_benchmark(name: BenchmarkName, config, *, limit: int | None, timeout: float, sandbox: str):
     adapter = build_adapter(name, config)
     tasks: list[EvalTask] = adapter.load_tasks(limit=limit)
 
@@ -77,7 +81,7 @@ def _check_benchmark(name: BenchmarkName, config, *, limit: int | None, timeout:
                 outcomes.append(TaskOutcome(task_id=task.task_id, benchmark=name, completions=[], passed=[False]))
                 continue
             program = adapter.assemble_program(task, task.canonical_solution)
-            outcome = execute_program(program, timeout_seconds=timeout)
+            outcome = execute_program(program, timeout_seconds=timeout, sandbox=sandbox)
             if not outcome.passed:
                 failures.append((task.task_id, outcome.stderr_tail[-300:]))
             outcomes.append(
@@ -104,7 +108,7 @@ def main(args: argparse.Namespace) -> int:
     paths = project_paths()
 
     benchmarks = [parse_benchmark_name(args.benchmark)] if args.benchmark else list(BenchmarkName)
-    results = [_check_benchmark(b, config, limit=args.limit, timeout=args.timeout) for b in benchmarks]
+    results = [_check_benchmark(b, config, limit=args.limit, timeout=args.timeout, sandbox=args.sandbox) for b in benchmarks]
 
     lines = [
         "",

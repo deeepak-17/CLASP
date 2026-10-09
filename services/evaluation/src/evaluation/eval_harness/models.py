@@ -197,8 +197,13 @@ class ScoringConfig:
     pass_at_k: list[int] = field(default_factory=lambda: [1])
     execution_enabled: bool = False
     execution_timeout_seconds: int = 10
+    #: Isolation for executing generated code: "auto" | "docker" | "process"
+    #: (see :mod:`evaluation.eval_harness.execution`).
+    sandbox: str = "auto"
 
     def __post_init__(self) -> None:
+        if self.sandbox not in ("auto", "docker", "process"):
+            raise ConfigError(f"scoring.sandbox must be auto, docker or process, got '{self.sandbox}'")
         if not self.pass_at_k:
             raise ConfigError("scoring.pass_at_k must list at least one k")
         for k in self.pass_at_k:
