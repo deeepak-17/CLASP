@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CLASP Edge</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --ink: #1d2433; --muted: #5d6676; --line: #dfe3ea;
+  --accent: #2557d6; --accent-ink: #ffffff; --good: #18794e; --good-bg: #e6f4ec;
+  --bad: #b42318; --bad-bg: #fdecea; --warn: #9a6700; --warn-bg: #fff4d6; --mono-bg: #f0f2f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --card: #1a1f27; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2b323d;
+    --accent: #6b8cff; --accent-ink: #0b0f17; --good: #4cc38a; --good-bg: #133222;
+    --bad: #ff7b72; --bad-bg: #3b1714; --warn: #e3b341; --warn-bg: #3a2f10; --mono-bg: #11151b;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { padding: 18px 24px; border-bottom: 1px solid var(--line); background: var(--card);
+         display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
+header h1 { margin: 0; font-size: 20px; }
+header .who { font-size: 20px; font-weight: 600; color: var(--accent); }
+header .where { color: var(--muted); font-size: 13px; }
+main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.steps { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.steps b { color: var(--ink); }
+.row { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; }
+.big { font-size: 28px; font-weight: 650; }
+.pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line); margin: 2px 4px 2px 0; }
+.pill.done { background: var(--good-bg); color: var(--good); border-color: transparent; }
+.pill.me { outline: 2px solid var(--accent); }
+.badge { padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.ok { background: var(--good-bg); color: var(--good); }
+.bad { background: var(--bad-bg); color: var(--bad); }
+.warn { background: var(--warn-bg); color: var(--warn); }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+tr.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+tr[data-id] { cursor: pointer; }
+button { font: inherit; border-radius: 8px; padding: 10px 18px; border: 1px solid var(--line);
+         background: var(--card); color: var(--ink); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; font-size: 16px; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+label { font-size: 14px; }
+input[type=text], input[type=number] { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
+         background: var(--bg); color: var(--ink); }
+.log { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--mono-bg);
+       border-radius: 8px; padding: 10px 12px; height: 240px; overflow: auto; white-space: pre-wrap; }
+.muted { color: var(--muted); font-size: 13px; }
+.result { margin-top: 10px; padding: 10px 12px; border-radius: 8px; display: none; }
+details summary { cursor: pointer; font-weight: 600; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 18px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CLASP Edge</h1>
+  <span class="who" id="who">…</span>
+  <span class="where" id="where"></span>
+</header>
+
+<main>
+  <section class="card">
+    <div class="steps">
+      <span><b>1</b> Train a LoRA adapter on this laptop's own code (done beforehand, or below)</span>·
+      <span><b>2</b> Upload it to the cluster on laptop A</span>·
+      <span><b>3</b> Laptop A aggregates the cluster's uploads and publishes the result</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Cluster round</h2>
+    <div id="cluster">checking…</div>
+  </section>
+
+  <section class="card">
+    <h2>Adapters on this laptop</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>Set</th><th>Client</th><th>Cluster</th><th>Weight (blocks)</th><th>DP ε</th><th>D3 α</th><th>Size</th><th>Trained</th></tr></thead>
+        <tbody id="adapters"><tr><td colspan="9" class="muted">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="primary" id="upload" disabled>Upload to cluster</button>
+      <span class="muted" id="picked">Pick an adapter.</span>
+    </div>
+    <div class="result" id="result"></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Short fine-tune on this laptop (needs an NVIDIA GPU)</summary>
+      <p class="muted">Runs <code>python -m edge.train_client</code> on this laptop's client partition. The new adapter appears above under <code>live/</code>, ready to upload.</p>
+      <div class="grid2">
+        <label>Client <input type="text" id="t-client" placeholder="web/client-flask" /></label>
+        <label>Steps <input type="number" id="t-steps" value="50" min="1" max="2000" /></label>
+        <label><input type="checkbox" id="t-dp" /> DP-SGD (ε ≤ 8, D7)</label>
+        <label>Frozen cluster adapter (D3, optional) <input type="text" id="t-cluster" placeholder="path to adapter dir" /></label>
+      </div>
+      <div style="margin-top:12px"><button id="train">Start training</button></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Log</h2>
+    <div class="log" id="log">ready.</div>
+  </section>
+</main>
+
+<script>
+let picked = null, me = null, lastLines = 0;
+
+async function get(path) { const r = await fetch(path); return r.json(); }
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { ok: r.ok, body: await r.json().catch(() => ({})) };
+}
+const esc = (s) => String(s ?? "—").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function refreshStatus() {
+  const s = await get("/api/status");
+  me = s.client_id;
+  document.getElementById("who").textContent = s.client_id || "all clients";
+  document.getElementById("where").innerHTML =
+    `cluster ${esc(s.cluster_url)} · ${s.secure ? '<span class="badge ok">mTLS</span>' : '<span class="badge warn">plain HTTP</span>'}`;
+  const el = document.getElementById("cluster");
+  if (!s.reachable) {
+    el.innerHTML = `<span class="badge bad">unreachable</span> ${esc(s.error)}<div class="muted">${esc(s.hint)}</div>`;
+    return;
+  }
+  // the service always has an empty 'cluster-default'; show clusters someone is using
+  const used = (c) => (c.members || []).length || c.uploaded_clients.length || c.aggregated_round_id !== null;
+  const ids = Object.keys(s.clusters).filter(cid => used(s.clusters[cid]));
+  if (!ids.length) { el.innerHTML = `<span class="badge warn">no clusters registered yet</span> <span class="muted">Laptop A registers them from its demo panel.</span>`; return; }
+  const show = s.my_cluster ? [s.my_cluster] : ids;
+  el.innerHTML = show.map(cid => {
+    const c = s.clusters[cid];
+    const people = [...new Set([...(c.members || []), ...(c.uploaded_clients || [])])].sort();
+    const pills = people.map(p => `<span class="pill ${c.uploaded_clients.includes(p) ? "done" : ""} ${p === me ? "me" : ""}">${c.uploaded_clients.includes(p) ? "✓ " : ""}${esc(p)}</span>`).join("") || '<span class="muted">no members</span>';
+    const agg = c.aggregated_round_id !== null ? `<div class="muted">last aggregate: round ${c.aggregated_round_id} from ${esc(c.aggregated_clients.join(", "))}</div>` : "";
+    return `<div class="row"><div><div class="muted">cluster</div><div class="big">${esc(cid)}</div></div>
+      <div><div class="muted">round</div><div class="big">${c.round_id}</div></div>
+      <div><div class="muted">uploaded</div><div class="big">${c.uploaded_clients.length}/${(c.members || []).length || "?"}</div></div></div>
+      <div style="margin-top:8px">${pills}</div>${agg}`;
+  }).join("<hr style='border:none;border-top:1px solid var(--line)'>");
+}
+
+async function loadAdapters() {
+  const { adapters } = await get("/api/adapters");
+  const tb = document.getElementById("adapters");
+  if (!adapters.length) { tb.innerHTML = `<tr><td colspan="9" class="muted">No trained adapters found for this client. Copy the setup bundle, or train one below.</td></tr>`; return; }
+  tb.innerHTML = adapters.map(a => `<tr data-id="${esc(a.id)}" class="${a.id === picked ? "sel" : ""}">
+    <td><input type="radio" name="a" ${a.id === picked ? "checked" : ""}></td><td>${esc(a.set)}</td><td>${esc(a.client_id)}</td><td>${esc(a.cluster)}</td>
+    <td>${esc(a.num_examples)}</td><td>${a.epsilon == null ? '<span class="muted">off</span>' : a.epsilon.toFixed(2)}</td><td>${esc(a.d3_alpha)}</td>
+    <td>${a.size_mb} MB</td><td class="muted">${esc((a.trained_utc || "").slice(0, 16).replace("T", " "))}</td></tr>`).join("");
+  tb.querySelectorAll("tr[data-id]").forEach(tr => tr.onclick = () => {
+    picked = tr.dataset.id; document.getElementById("picked").textContent = `Selected: ${picked}`; loadAdapters(); syncButtons();
+  });
+  if (!picked && adapters.length === 1) { picked = adapters[0].id; document.getElementById("picked").textContent = `Selected: ${picked}`; loadAdapters(); }
+}
+
+let jobRunning = false;
+function syncButtons() {
+  document.getElementById("upload").disabled = jobRunning || !picked;
+  document.getElementById("train").disabled = jobRunning;
+}
+
+async function refreshJob() {
+  const j = await get("/api/job");
+  jobRunning = j.running; syncButtons();
+  const log = document.getElementById("log");
+  if (j.lines.length !== lastLines) { log.textContent = j.lines.join("\n") || "ready."; log.scrollTop = log.scrollHeight; lastLines = j.lines.length; }
+  const res = document.getElementById("result");
+  if (!j.running && j.kind === "upload" && (j.result || j.error)) {
+    res.style.display = "block";
+    res.className = "result " + (j.result ? "ok" : "bad");
+    res.textContent = j.result
+      ? `Accepted by cluster '${j.result.cluster_id}' for round ${j.result.round_id} in ${j.result.seconds}s — ${j.result.response.pending_uploads} upload(s) now waiting to be aggregated.`
+      : j.error;
+  }
+  if (!j.running && j.kind === "train" && j.result) loadAdapters();
+}
+
+document.getElementById("upload").onclick = async () => {
+  const r = await post("/api/upload", { adapter: picked });
+  if (!r.ok) alertBox(r.body.detail);
+  refreshJob();
+};
+document.getElementById("train").onclick = async () => {
+  const r = await post("/api/train", {
+    client: document.getElementById("t-client").value.trim(),
+    max_steps: Number(document.getElementById("t-steps").value),
+    dp: document.getElementById("t-dp").checked,
+    cluster_adapter: document.getElementById("t-cluster").value.trim() || null,
+  });
+  if (!r.ok) alertBox(r.body.detail);
+  refreshJob();
+};
+function alertBox(msg) {
+  const res = document.getElementById("result");
+  res.style.display = "block"; res.className = "result bad"; res.textContent = msg;
+}
+
+refreshStatus(); loadAdapters(); refreshJob();
+setInterval(refreshStatus, 3000);
+setInterval(refreshJob, 1000);
+</script>
+</body>
+</html>

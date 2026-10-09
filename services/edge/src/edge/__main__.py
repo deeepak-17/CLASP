@@ -13,6 +13,8 @@ ENTRY_POINTS = (
     ("edge.completion_eval", "in-project next-line completion metric (D5)"),
     ("edge.ttft", "TTFT / adapter-swap benchmark (D11)"),
     ("edge.aggregate", "D2 aggregation, computed by P2's cluster package"),
+    ("edge.upload", "upload a trained adapter to a (remote) cluster (seam A)"),
+    ("edge.webui", "this edge laptop's page: pick, train, upload (:8020)"),
 )
 
 
