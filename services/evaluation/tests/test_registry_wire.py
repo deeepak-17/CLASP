@@ -104,6 +104,7 @@ class TestInProjectWire:
 
 class TestEvalResultWire:
     def _wire(self, **kw):
+        kw.setdefault("baseline_noise_band", 0.0)
         return eval_result_wire(
             CLUSTER,
             in_project_wire(_metrics(), perplexity=2.665),
@@ -127,6 +128,10 @@ class TestEvalResultWire:
         assert parsed.guard[0].pass_at_k == {1: 0.31}
         assert parsed.baseline_in_project.edit_similarity == 0.5337
         assert parsed.contracts_version == "1.0.0"
+
+    def test_noise_band_cannot_be_omitted(self) -> None:
+        with pytest.raises(TypeError, match="baseline_noise_band"):
+            eval_result_wire(CLUSTER, in_project_wire(_metrics(), perplexity=2.665))
 
     def test_negative_band_refused(self) -> None:
         with pytest.raises(ContractViolationError):

@@ -126,14 +126,16 @@ def eval_result_wire(
     *,
     guard: Sequence[Mapping[str, Any]] = (),
     baseline_in_project: Mapping[str, Any] | None = None,
-    baseline_noise_band: float = 0.0,
+    baseline_noise_band: float,
     seed: int = 0,
 ) -> dict[str, Any]:
     """The ``contracts.EvalResult`` JSON body (the ``eval`` field of a promote call).
 
     Same keys as ``edge.promote.build_eval_result``. ``in_project`` /
     ``baseline_in_project`` are :func:`in_project_wire` dicts; ``guard`` is
-    :func:`guard_metrics` output.
+    :func:`guard_metrics` output. ``baseline_noise_band`` has no default: every
+    result that feeds promotion must carry the band measured from repeated
+    baseline evaluations (D5), so a caller cannot send one by omission.
     """
     if baseline_noise_band < 0.0 or math.isnan(baseline_noise_band):
         raise ContractViolationError(f"baseline_noise_band must be >= 0, got {baseline_noise_band}")
