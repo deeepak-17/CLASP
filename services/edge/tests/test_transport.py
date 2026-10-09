@@ -1,14 +1,17 @@
 """Edge transport: plain HTTP, and mTLS built on P3's security library (D7).
 
-The mTLS tests stand up a real TLS 1.3 server with a certificate from P3's
-``security.CertificateAuthority`` and P3's server SSL context, then talk to it
-through ``edge.transport.mtls_session``. They skip themselves when the installed
-``security`` package does not provide the mTLS API yet (it lives on P3's branch
-until it is integrated) — the plain-HTTP behaviour is tested regardless.
+The mTLS tests stand up a real TLS 1.3 server with a CA and certificates from
+P3's API (``security.create_ca``, ``generate_service_cert``,
+``generate_client_cert``) and P3's ``server_ssl_context``, then talk to it
+through ``edge.transport.mtls_session``. They skip only when the installed
+``security`` package has none of that API; when it is present they make the
+edge's exact calls, so a signature change on P3's side fails here instead of
+skipping. The plain-HTTP behaviour is tested regardless.
 """
 from __future__ import annotations
 
 import json
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -73,23 +76,40 @@ def test_post_upload_raises_with_the_clusters_message(plain_server):
 # --------------------------------------------------------------------------- #
 # mTLS — needs P3's security library
 # --------------------------------------------------------------------------- #
+MTLS_API = ("create_ca", "generate_service_cert", "generate_client_cert",
+            "server_ssl_context", "client_ssl_context")
+
+
+def _new_ca(security, certs_dir):
+    """A CA on disk via P3's API: (ca_key, ca_cert, ca_cert_path)."""
+    from security.mtls.ca import save_pem
+
+    ca_key, ca_cert = security.create_ca(key_size=2048)
+    _, ca_cert_path = save_pem(ca_key, ca_cert, certs_dir, name="ca")
+    return ca_key, ca_cert, ca_cert_path
+
+
 @pytest.fixture
 def pki(tmp_path):
     security = pytest.importorskip("security")
-    if not all(hasattr(security, n) for n in ("CertificateAuthority",
-                                              "create_server_ssl_context",
-                                              "create_client_ssl_context")):
+    if not all(hasattr(security, n) for n in MTLS_API):
         pytest.skip("installed security package has no mTLS API yet (P3 branch not integrated)")
-    ca = security.CertificateAuthority(certs_dir=tmp_path / "certs")
-    server_cert, server_key = ca.issue_server_cert(san_dns=("localhost",), san_ips=("127.0.0.1",))
-    client_cert, client_key = ca.issue_client_cert(cn="clasp-edge-test")
-    return security, ca.ca_cert_path, (server_cert, server_key), (client_cert, client_key)
+    from security.mtls.ca import save_pem
+
+    certs = tmp_path / "certs"
+    ca_key, ca_cert, ca_cert_path = _new_ca(security, certs)
+    server_key, server_crt = security.generate_service_cert(ca_key, ca_cert, "cluster")
+    server_key_path, server_cert_path = save_pem(server_key, server_crt, certs, name="cluster")
+    client_key, client_crt = security.generate_client_cert(ca_key, ca_cert, "clasp-edge-test")
+    client_key_path, client_cert_path = save_pem(client_key, client_crt, certs, name="edge")
+    return (security, ca_cert_path, (server_cert_path, server_key_path),
+            (client_cert_path, client_key_path))
 
 
 @pytest.fixture
 def mtls_server(pki):
     security, ca_cert, (server_cert, server_key), _ = pki
-    ctx = security.create_server_ssl_context(server_cert, server_key, ca_cert)
+    ctx = security.server_ssl_context(server_cert, server_key, ca_cert)
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
     _serve(server)
@@ -126,7 +146,26 @@ def test_edge_refuses_a_server_outside_the_clasp_ca(pki, mtls_server, tmp_path):
     """And the other direction: a server certificate from a different CA is
     rejected by the edge before any request is sent."""
     security, _, _, (client_cert, client_key) = pki
-    other_ca = security.CertificateAuthority(certs_dir=tmp_path / "other")
-    http = transport.mtls_session(client_cert, client_key, other_ca.ca_cert_path)
+    _, _, other_ca_cert = _new_ca(security, tmp_path / "other")
+    http = transport.mtls_session(client_cert, client_key, other_ca_cert)
     with pytest.raises(requests.exceptions.SSLError):
         http.get(f"{mtls_server}/healthz", timeout=10)
+
+
+def test_edge_checks_the_server_hostname(pki, mtls_server):
+    """The server certificate names localhost and "cluster"; asking for any
+    other name is refused, and server_hostname can name the expected one."""
+    _, ca_cert, _, (client_cert, client_key) = pki
+    port = mtls_server.rsplit(":", 1)[1]
+    wrong = transport.mtls_session(client_cert, client_key, ca_cert, server_hostname="registry")
+    with pytest.raises(requests.exceptions.SSLError):
+        wrong.get(f"https://localhost:{port}/healthz", timeout=10)
+    by_name = transport.mtls_session(client_cert, client_key, ca_cert, server_hostname="cluster")
+    assert by_name.get(f"https://127.0.0.1:{port}/healthz", timeout=10).status_code == 200
+
+
+def test_edge_requires_tls_1_3(pki, mtls_server):
+    _, ca_cert, _, (client_cert, client_key) = pki
+    http = transport.mtls_session(client_cert, client_key, ca_cert)
+    adapter = http.get_adapter("https://localhost")
+    assert adapter.ssl_context.minimum_version == ssl.TLSVersion.TLSv1_3
