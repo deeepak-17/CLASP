@@ -1,0 +1,52 @@
+{
+  "manifest_version": "1.0.0",
+  "strategy": "project_level",
+  "seed": 20260616,
+  "created_at": "2026-08-13T17:30:56Z",
+  "corpus_path": "datasets/processed/corpus_scientific.jsonl",
+  "corpus_sha256": "5901ae1ae5c8327f853f707bcd002411bf8b0b5811565cf61b540a0b472333ed",
+  "num_clients": 3,
+  "num_clusters": 3,
+  "total_files": 733,
+  "cluster_ids": [
+    "numpy",
+    "pandas",
+    "scikit-learn"
+  ],
+  "shards": [
+    {
+      "client_id": "client-numpy",
+      "cluster_id": "numpy",
+      "project_label": "NumPy",
+      "num_files": 221,
+      "num_lines": 133941,
+      "num_code_lines": 106425,
+      "total_bytes": 4400666,
+      "files_path": "datasets/partitions/scientific/client-numpy.jsonl",
+      "content_sha256": "5e0859f5726edf9514a43b308f3ceedc799001e78625f363d978cd1f27bea1e8"
+    },
+    {
+      "client_id": "client-pandas",
+      "cluster_id": "pandas",
+      "project_label": "pandas",
+      "num_files": 265,
+      "num_lines": 191273,
+      "num_code_lines": 151447,
+      "total_bytes": 6187594,
+      "files_path": "datasets/partitions/scientific/client-pandas.jsonl",
+      "content_sha256": "505d00e26d1a3e85c387526e0a304355197335c9e4bcc418c5449f9ac6eae2d3"
+    },
+    {
+      "client_id": "client-scikit-learn",
+      "cluster_id": "scikit-learn",
+      "project_label": "scikit-learn",
+      "num_files": 247,
+      "num_lines": 185585,
+      "num_code_lines": 145803,
+      "total_bytes": 6651057,
+      "files_path": "datasets/partitions/scientific/client-scikit-learn.jsonl",
+      "content_sha256": "676cf527086f185b6261783fde0bd31f6ffc725ec8c049b4f44f2380de49460d"
+    }
+  ],
+  "contract_version": "0.2.0"
+}

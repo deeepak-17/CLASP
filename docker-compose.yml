@@ -1,5 +1,15 @@
 # CLASP — single-command reproducible stack.
 # Security (P3) is a library imported by edge & cluster, so it is NOT a service here.
+#
+#   docker compose up -d                    registry + cluster (the live seams)
+#   docker compose --profile demo up        + panel demo UI on :8010, the evaluation
+#                                             dashboard on :8005, and a one-shot
+#                                             demo-seed job that drives the registry
+#                                             end to end (report -> demo-reports volume)
+#   docker compose --profile train up edge  + the GPU federated round (needs NVIDIA
+#                                             runtime, trained adapters + corpus mounted)
+#
+# mTLS for the registry (D7): add -f docker-compose.mtls.yml (see that file).
 services:
   registry:
     build:
@@ -9,20 +19,25 @@ services:
     # Registry is STATEFUL: versioned safetensors + metadata must survive restarts.
     environment:
       CLASP_REGISTRY_DATA: /data/registry
+      CLASP_REGISTRY_KEEP_LAST: "5"
     volumes:
       - registry-data:/data/registry
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8004/healthz').status==200 else sys.exit(1)"]
+      # TLS-aware: probes over mTLS when CLASP_TLS_* is set.
+      test: ["CMD", "python", "-m", "registry.healthcheck"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 5
+      start_period: 5s
+    restart: unless-stopped
 
   cluster:
     build:
       context: .
       dockerfile: services/cluster/Dockerfile
     ports: ["8002:8002"]
-    depends_on: [registry]
+    depends_on:
+      registry: {condition: service_healthy}
     # Seam B target. On the compose network the registry answers to its service
     # name; on the host it is localhost:8004 (cluster.server's own default).
     environment:
@@ -32,19 +47,93 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 5s
+    restart: unless-stopped
 
+  # ---- profile: demo ------------------------------------------------------ #
+  demo-seed:
+    profiles: [demo]
+    build:
+      context: .
+      dockerfile: services/registry/Dockerfile
+    depends_on:
+      registry: {condition: service_healthy}
+    command: ["python", "-m", "registry.demo", "--url", "http://registry:8004",
+              "--report", "/reports/registry-demo.json"]
+    volumes:
+      - demo-reports:/reports
+    restart: "no"
+
+  demo-ui:
+    profiles: [demo]
+    build:
+      context: .
+      dockerfile: demo_ui/Dockerfile
+    ports: ["8010:8010"]
+    depends_on:
+      registry: {condition: service_healthy}
+      cluster: {condition: service_healthy}
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
+      CLASP_CLUSTER_URL: http://cluster:8002
+      CLASP_EDGE_ARTIFACTS: /artifacts
+    volumes:
+      # Committed edge manifests (numbers shown on the panel pages), read-only.
+      - ./services/edge/artifacts:/artifacts:ro
+
+  # P5 evaluation dashboard (static React build behind nginx). Results are baked
+  # in at build time from services/evaluation/results/; rebuild after
+  # re-exporting them (services/evaluation/scripts/rebuild_results.py).
+  dashboard:
+    profiles: [demo]
+    build:
+      context: .
+      dockerfile: services/evaluation/dashboard/Dockerfile
+    ports: ["8005:80"]
+
+  # ---- profile: train ----------------------------------------------------- #
   edge:
+    profiles: [train]
     build:
       context: .
       dockerfile: services/edge/Dockerfile
-    depends_on: [cluster, registry]
+    depends_on:
+      registry: {condition: service_healthy}
+      cluster: {condition: service_healthy}
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
+      CLASP_CLUSTER_URL: http://cluster:8002
+    # The adapter set and round number are configurable: round 1 uses clients
+    # trained on the bare base; D3's round 2 needs clients retrained on frozen
+    # (base + alpha*cluster) -- point CLASP_EDGE_ADAPTERS at that set and set
+    # CLASP_EDGE_ROUND=2. The corpus (datasets/materialized, gitignored) is
+    # mounted read-only; CLASP_CORPUS_DIR overrides where it lives on the host.
+    command: ["python", "-m", "edge.round",
+              "--adapters", "/artifacts/${CLASP_EDGE_ADAPTERS:-round1}",
+              "--corpus-root", "/corpus",
+              "--round", "${CLASP_EDGE_ROUND:-1}",
+              "--out", "/artifacts/${CLASP_EDGE_ADAPTERS:-round1}_out"]
+    volumes:
+      - ./services/edge/artifacts:/artifacts
+      - ${CLASP_CORPUS_DIR:-./datasets/materialized}:/corpus:ro
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
 
   evaluation:
+    profiles: [train]
     build:
       context: .
       dockerfile: services/evaluation/Dockerfile
-    depends_on: [registry]
+    # `python -m evaluation` checks the registry is reachable when this is set.
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
+    depends_on:
+      registry: {condition: service_healthy}
 
-# Named volume so adapter versions persist across `compose down`/`up` (D9).
+# Named volumes: adapter versions persist across `compose down`/`up` (D9);
+# demo reports survive the one-shot seed container.
 volumes:
   registry-data:
+  demo-reports:

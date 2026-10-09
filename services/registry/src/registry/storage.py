@@ -27,7 +27,6 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import asdict
 from pathlib import Path
 
 from contracts import (
@@ -35,15 +34,20 @@ from contracts import (
     AdapterMetadata,
     AdapterRef,
     AggregationMethod,
+    CompositeProvenance,
     LoRAHyperParams,
     PrivacySpec,
-    PromotionAction,
     PromotionDecision,
     utcnow_iso,
 )
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_ST_MAGIC_MAX_HEADER = 100_000_000  # sanity bound on safetensors header length
+#: Header size bound. A real 24-layer adapter's header is ~30 KB; parsing a
+#: hostile 100 MB header would cost hundreds of MB of RAM.
+_ST_MAX_HEADER = 8 * 1024 * 1024
+_ST_DTYPE_BYTES = {"BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1, "I16": 2,
+                   "U16": 2, "F16": 2, "BF16": 2, "I32": 4, "U32": 4, "F32": 4, "I64": 8,
+                   "U64": 8, "F64": 8}
 
 
 class StorageError(Exception):
@@ -54,28 +58,63 @@ class AdapterNotFound(StorageError):
     pass
 
 
+class KindMismatch(StorageError):
+    """A name's versions all share one AdapterKind; a save tried to change it."""
+
+
+class InvalidAdapterName(StorageError):
+    """Name fails the path-safe pattern — a client error, never a 500."""
+
+
 class VersionExists(StorageError):
     """Refused to overwrite an existing immutable version (D9)."""
 
 
 def _validate_name(name: str) -> str:
-    if not _NAME_RE.match(name or ""):
-        raise StorageError(f"invalid adapter name: {name!r}")
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        raise InvalidAdapterName(f"invalid adapter name: {name!r}")
     return name
 
 
+def _tensor_span(entry: object) -> tuple[int, int] | None:
+    """(begin, end) of a well-formed header entry, else None."""
+    if not isinstance(entry, dict):
+        return None
+    dtype, shape, offsets = entry.get("dtype"), entry.get("shape"), entry.get("data_offsets")
+    if dtype not in _ST_DTYPE_BYTES or not isinstance(shape, list) or not isinstance(offsets, list):
+        return None
+    if len(offsets) != 2 or not all(isinstance(x, int) and x >= 0 for x in [*shape, *offsets]):
+        return None
+    count = 1
+    for dim in shape:
+        count *= dim
+    begin, end = offsets
+    return (begin, end) if end - begin == count * _ST_DTYPE_BYTES[dtype] else None
+
+
 def is_safetensors(payload: bytes) -> bool:
-    """Cheap structural check: 8-byte LE header length + valid JSON header."""
+    """Structural check without numpy: bounded JSON header whose tensors tile the
+    data section exactly (contiguous, in bounds, sized by dtype x shape)."""
     if len(payload) < 8:
         return False
     header_len = int.from_bytes(payload[:8], "little")
-    if header_len <= 0 or header_len > _ST_MAGIC_MAX_HEADER or 8 + header_len > len(payload):
+    if header_len <= 0 or header_len > _ST_MAX_HEADER or 8 + header_len > len(payload):
         return False
     try:
-        json.loads(payload[8 : 8 + header_len].decode("utf-8"))
+        header = json.loads(payload[8 : 8 + header_len].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return False
-    return True
+    if not isinstance(header, dict):
+        return False
+    spans = [_tensor_span(v) for k, v in header.items() if k != "__metadata__"]
+    if any(span is None for span in spans):
+        return False
+    cursor = 0
+    for begin, end in sorted(spans):
+        if begin != cursor:
+            return False
+        cursor = end
+    return cursor == len(payload) - 8 - header_len
 
 
 class RegistryStore:
@@ -144,6 +183,19 @@ class RegistryStore:
         tmp.write_text(str(version))
         os.replace(tmp, target)
 
+    def check_kind(self, name: str, kind: AdapterKind) -> None:
+        """Raise KindMismatch if ``name`` already holds versions of another kind."""
+        if name not in self.list_adapters():
+            return
+        versions = self.list_versions(name)
+        if not versions:
+            return
+        existing = self.get_metadata(name, versions[-1]).ref.kind
+        if existing is not kind:
+            raise KindMismatch(
+                f"{name} holds kind {existing.value!r}; refusing to add a {kind.value!r} version"
+            )
+
     def previous_version(self, name: str, version: int) -> int | None:
         """The version immediately before ``version`` in this adapter's history.
 
@@ -155,11 +207,14 @@ class RegistryStore:
         return max(earlier) if earlier else None
 
     # -- promotion audit trail (D5/D9) --------------------------------------- #
+    def append_log(self, name: str, log_name: str, line: str) -> None:
+        """Append one JSON line to an adapter's append-only log."""
+        with (self._adapter_dir(name) / log_name).open("a") as f:
+            f.write(line + "\n")
+
     def record_promotion(self, name: str, decision: PromotionDecision) -> None:
         """Append a PromotionDecision to this adapter's audit log (never rewritten)."""
-        log = self._adapter_dir(name) / "promotions.jsonl"
-        with log.open("a") as f:
-            f.write(json.dumps(_promotion_decision_to_dict(decision)) + "\n")
+        self.append_log(name, "promotions.jsonl", json.dumps(_promotion_decision_to_dict(decision)))
 
     def list_promotions(self, name: str) -> list[PromotionDecision]:
         log = self._adapter_dir(name) / "promotions.jsonl"
@@ -172,6 +227,21 @@ class RegistryStore:
         ]
 
     # -- mutation ----------------------------------------------------------- #
+    def delete_version(self, name: str, version: int) -> None:
+        """Remove one version — retention/GC only; refuses the active version.
+
+        The directory is renamed to a hidden trash name first (atomic), so
+        ``list_versions`` never sees a half-deleted version, then removed.
+        """
+        vdir = self._version_dir(name, version)
+        if not vdir.exists():
+            raise AdapterNotFound(f"{name} v{version}")
+        if self.get_active(name) == version:
+            raise StorageError(f"refusing to delete the active version {name} v{version}")
+        trash = Path(tempfile.mkdtemp(prefix=f".trash-v{version}-", dir=self._adapter_dir(name)))
+        os.replace(vdir, trash / "v")
+        shutil.rmtree(trash, ignore_errors=True)
+
     def save(
         self,
         name: str,
@@ -186,11 +256,17 @@ class RegistryStore:
         cluster_id: str | None = None,
         source_clients: tuple[str, ...] = (),
         set_active: bool = True,
+        composed_from: CompositeProvenance | None = None,
     ) -> AdapterMetadata:
         """Write a new immutable version. Assigns the next version number."""
         _validate_name(name)
         if not is_safetensors(payload):
             raise StorageError("payload is not a valid safetensors blob")
+        if (kind is AdapterKind.COMPOSITE) != (composed_from is not None):
+            raise StorageError(
+                "composed_from is required for composite adapters and only allowed on them"
+            )
+        self.check_kind(name, kind)
 
         adapter_dir = self._adapter_dir(name)
         adapter_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +291,7 @@ class RegistryStore:
                 num_bytes=len(payload),
                 source_clients=tuple(source_clients),
                 created_at=utcnow_iso(),
+                composed_from=composed_from,
             )
             (staging / "metadata.json").write_text(json.dumps(_metadata_to_dict(meta), indent=2))
         except BaseException:
@@ -234,65 +311,20 @@ class RegistryStore:
 
 
 # --------------------------------------------------------------------------- #
-# (de)serialization helpers — dataclasses <-> JSON-safe dicts
+# (de)serialization helpers — thin wrappers over the contracts' own JSON codecs
+# (contracts v1.1), kept as module functions so tests can fault-inject them.
 # --------------------------------------------------------------------------- #
 def _metadata_to_dict(meta: AdapterMetadata) -> dict:
-    d = asdict(meta)
-    d["ref"]["kind"] = meta.ref.kind.value
-    d["aggregation"] = meta.aggregation.value if meta.aggregation else None
-    # tuples -> lists for JSON
-    d["hparams"]["target_modules"] = list(meta.hparams.target_modules)
-    d["source_clients"] = list(meta.source_clients)
-    return d
+    return meta.to_json()
 
 
 def _metadata_from_dict(d: dict) -> AdapterMetadata:
-    ref = d["ref"]
-    return AdapterMetadata(
-        ref=AdapterRef(
-            name=ref["name"],
-            version=ref["version"],
-            kind=AdapterKind(ref["kind"]),
-            cluster_id=ref.get("cluster_id"),
-        ),
-        hparams=LoRAHyperParams(
-            rank=d["hparams"]["rank"],
-            lora_alpha=d["hparams"]["lora_alpha"],
-            dropout=d["hparams"]["dropout"],
-            target_modules=tuple(d["hparams"]["target_modules"]),
-            alpha=d["hparams"]["alpha"],
-            beta=d["hparams"]["beta"],
-        ),
-        privacy=PrivacySpec(**d["privacy"]),
-        aggregation=AggregationMethod(d["aggregation"]) if d.get("aggregation") else None,
-        round=d.get("round"),
-        seed=d["seed"],
-        sha256=d["sha256"],
-        num_bytes=d["num_bytes"],
-        source_clients=tuple(d.get("source_clients", ())),
-        created_at=d["created_at"],
-        contracts_version=d.get("contracts_version", "1.0.0"),
-    )
+    return AdapterMetadata.from_json(d)
 
 
 def _promotion_decision_to_dict(decision: PromotionDecision) -> dict:
-    d = asdict(decision)
-    d["action"] = decision.action.value
-    d["adapter"]["kind"] = decision.adapter.kind.value
-    return d
+    return decision.to_json()
 
 
 def _promotion_decision_from_dict(d: dict) -> PromotionDecision:
-    ref = d["adapter"]
-    return PromotionDecision(
-        adapter=AdapterRef(
-            name=ref["name"],
-            version=ref["version"],
-            kind=AdapterKind(ref["kind"]),
-            cluster_id=ref.get("cluster_id"),
-        ),
-        action=PromotionAction(d["action"]),
-        active_version_after=d["active_version_after"],
-        reason=d["reason"],
-        timestamp=d["timestamp"],
-    )
+    return PromotionDecision.from_json(d)

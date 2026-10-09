@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import socket
 import struct
+import threading
+import time
 
 import pytest
 
@@ -51,3 +54,41 @@ def client(tmp_path, monkeypatch):
 
     appmod._store = None  # force re-read of CLASP_REGISTRY_DATA
     return TestClient(appmod.app)
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def running(tmp_path, monkeypatch):
+    """Start the registry via build_config in a thread; yield its port."""
+    import uvicorn
+    from registry.serve import build_config
+
+    servers = []
+
+    def start(env: dict[str, str]):
+        monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "data"))
+        import registry.app as appmod
+
+        appmod._store = None
+        port = free_port()
+        config = build_config({**env, "CLASP_REGISTRY_HOST": "127.0.0.1",
+                               "CLASP_REGISTRY_PORT": str(port)})
+        server = uvicorn.Server(config)
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        deadline = time.time() + 10
+        while not server.started and time.time() < deadline:
+            time.sleep(0.05)
+        assert server.started, "registry did not start"
+        servers.append((server, thread))
+        return port
+
+    yield start
+    for server, thread in servers:
+        server.should_exit = True
+        thread.join(timeout=5)

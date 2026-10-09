@@ -1,0 +1,165 @@
+{
+  "metadata_version": "1.0.0",
+  "created_at": "2026-08-10T06:55:27Z",
+  "strategy": "project_level",
+  "seed": 20260616,
+  "manifest_path": "datasets/partitions/manifest.json",
+  "corpus_path": "datasets/processed/corpus.jsonl",
+  "corpus_sha256": "1d2d6f6eae8eb65bb1b4ce0c22cc6f4fa7f86b2782b259025f03e77e3e2f3dac",
+  "num_clients": 6,
+  "num_clusters": 6,
+  "total_files": 135,
+  "total_lines": 60555,
+  "total_code_lines": 45922,
+  "total_bytes": 2081540,
+  "balance": {
+    "num_shards": 6,
+    "min_files": 5,
+    "max_files": 49,
+    "mean_files": 22.5,
+    "median_files": 20.5,
+    "imbalance_ratio": 9.8,
+    "gini": 0.307407,
+    "coefficient_of_variation": 0.594488,
+    "min_client": "client-colorama",
+    "max_client": "client-werkzeug"
+  },
+  "clusters": [
+    {
+      "cluster_id": "click",
+      "project_label": "Click",
+      "client_ids": [
+        "client-click"
+      ],
+      "num_files": 16,
+      "num_lines": 10124,
+      "num_code_lines": 7683,
+      "total_bytes": 347533,
+      "mean_code_lines_per_file": 480.188,
+      "median_code_lines_per_file": 402.0,
+      "max_code_lines_in_file": 2309,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "874ca2bc1c30d93a4ac6e36a15ed685eafe89097"
+      ],
+      "share_of_corpus_files": 0.118519,
+      "share_of_corpus_code_lines": 0.167305
+    },
+    {
+      "cluster_id": "colorama",
+      "project_label": "Colorama",
+      "client_ids": [
+        "client-colorama"
+      ],
+      "num_files": 5,
+      "num_lines": 875,
+      "num_code_lines": 658,
+      "total_bytes": 30290,
+      "mean_code_lines_per_file": 131.6,
+      "median_code_lines_per_file": 143.0,
+      "max_code_lines_in_file": 209,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "3de9f013df4b470069d03d250224062e8cf15c49"
+      ],
+      "share_of_corpus_files": 0.037037,
+      "share_of_corpus_code_lines": 0.014329
+    },
+    {
+      "cluster_id": "flask",
+      "project_label": "Flask",
+      "client_ids": [
+        "client-flask"
+      ],
+      "num_files": 23,
+      "num_lines": 9021,
+      "num_code_lines": 6594,
+      "total_bytes": 329778,
+      "mean_code_lines_per_file": 286.696,
+      "median_code_lines_per_file": 172.0,
+      "max_code_lines_in_file": 1148,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "c12a5d874c5a014495eb2db8a73f40037bc813ac"
+      ],
+      "share_of_corpus_files": 0.17037,
+      "share_of_corpus_code_lines": 0.143591
+    },
+    {
+      "cluster_id": "jinja",
+      "project_label": "Jinja2",
+      "client_ids": [
+        "client-jinja"
+      ],
+      "num_files": 24,
+      "num_lines": 14304,
+      "num_code_lines": 11025,
+      "total_bytes": 482671,
+      "mean_code_lines_per_file": 459.375,
+      "median_code_lines_per_file": 275.0,
+      "max_code_lines_in_file": 1535,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "dd4a8b5466d8790540c181590b14db4d4d889d57"
+      ],
+      "share_of_corpus_files": 0.177778,
+      "share_of_corpus_code_lines": 0.240081
+    },
+    {
+      "cluster_id": "requests",
+      "project_label": "Requests",
+      "client_ids": [
+        "client-requests"
+      ],
+      "num_files": 18,
+      "num_lines": 5642,
+      "num_code_lines": 4123,
+      "total_bytes": 188462,
+      "mean_code_lines_per_file": 229.056,
+      "median_code_lines_per_file": 112.0,
+      "max_code_lines_in_file": 776,
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "source_refs": [
+        "0e322af87745eff34caffe4df68456ebc20d9068"
+      ],
+      "share_of_corpus_files": 0.133333,
+      "share_of_corpus_code_lines": 0.089783
+    },
+    {
+      "cluster_id": "werkzeug",
+      "project_label": "Werkzeug",
+      "client_ids": [
+        "client-werkzeug"
+      ],
+      "num_files": 49,
+      "num_lines": 20589,
+      "num_code_lines": 15839,
+      "total_bytes": 702806,
+      "mean_code_lines_per_file": 323.245,
+      "median_code_lines_per_file": 222.0,
+      "max_code_lines_in_file": 1177,
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "source_refs": [
+        "f9995e967979eb694d6b31536cc65314fd7e9c8c"
+      ],
+      "share_of_corpus_files": 0.362963,
+      "share_of_corpus_code_lines": 0.344911
+    }
+  ],
+  "license_summary": {
+    "Apache-2.0": 18,
+    "BSD-3-Clause": 117
+  }
+}

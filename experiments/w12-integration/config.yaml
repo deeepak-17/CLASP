@@ -8,6 +8,9 @@ depends_on: w4w5-g2-g3-round      # reuses its six trained client adapters, unre
 base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile; 6.7B does not fit in 4 GB
 device_profile: dev
 seed: 0
+# D8: GPU-hours per run. Back-filled from the recorded run, not estimated in advance:
+# worst recorded wall clock 17.94 min (RESULTS.md; 14.00 / 14.33 / 17.94 min over three runs).
+gpu_hours_estimate: 0.30
 
 # --- what runs where ---
 services:

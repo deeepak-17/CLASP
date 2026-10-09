@@ -1,0 +1,28 @@
+# Phase III ablation — LoRA rank (cheapest informative dimension; fixes rank for the rest).
+# Scaffold: parameters and GPU-hours are set; the training command is the owner's.
+name: rank-sweep
+owner: P2 Prasanth (runs) · P1 (latency per rank) · P5 (quality curve) · P4 (orchestration)
+base_model: deepseek-ai/deepseek-coder-1.3b-base   # re-estimate if moved to 6.7B
+seed: 0
+seeds: [0, 1, 2]
+# One full federated round (6 clients train + aggregate + compose + eval) per point.
+# Measured on the dev GPU: training 55.8 min + round 27.8 min = 83.6 min (w4w5-g2-g3-round).
+gpu_hours_estimate: 1.4
+gpus: 1
+budget:
+  gpu_hours_total: 17          # 4 ranks x 3 seeds x 1.4 = 16.8
+clients: 6
+rank: 16
+seq_len: 1024
+max_steps: 200
+rounds: 1
+sweep:
+  rank: [4, 8, 16, 32]
+caps_override:
+  rank: 32
+  justification: >-
+    One point above the D8 rank cap so the sweep can show where quality stops
+    improving; every other experiment stays at the chosen rank <= 16.
+# python -m registry.runs run experiments/rank-sweep/config.yaml -- \
+#   <round command> --rank {rank} --seed {seed} --out {outputs_dir}
+notes: ""

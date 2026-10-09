@@ -1,0 +1,86 @@
+{
+  "corpus_name": "D1-scientific",
+  "corpus_version": "1.0.0",
+  "created_at": "2026-08-13T17:30:14Z",
+  "acquisition_mode": "git",
+  "synthetic": false,
+  "corpus_path": "datasets/processed/corpus_scientific.jsonl",
+  "corpus_sha256": "5901ae1ae5c8327f853f707bcd002411bf8b0b5811565cf61b540a0b472333ed",
+  "total_files": 733,
+  "total_lines": 510799,
+  "total_code_lines": 403675,
+  "total_bytes": 17239317,
+  "num_clusters": 3,
+  "include_content": true,
+  "sources": [
+    {
+      "cluster_id": "numpy",
+      "project_label": "NumPy",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/numpy/numpy.git",
+      "resolved_ref": "98464cc0cbc1f211482a0756ded305bed1599f18",
+      "files_discovered": 503,
+      "files_kept": 221,
+      "files_skipped": {
+        "too_few_code_lines": 29,
+        "empty": 3,
+        "excluded_glob": 249,
+        "too_large": 1
+      },
+      "num_lines": 133941,
+      "num_code_lines": 106425,
+      "num_bytes": 4400666
+    },
+    {
+      "cluster_id": "pandas",
+      "project_label": "pandas",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/pandas-dev/pandas.git",
+      "resolved_ref": "0691c5cf90477d3503834d983f69350f250a6ff7",
+      "files_discovered": 1410,
+      "files_kept": 265,
+      "files_skipped": {
+        "empty": 11,
+        "excluded_glob": 1119,
+        "too_few_code_lines": 12,
+        "too_large": 3
+      },
+      "num_lines": 191273,
+      "num_code_lines": 151447,
+      "num_bytes": 6187594
+    },
+    {
+      "cluster_id": "scikit-learn",
+      "project_label": "scikit-learn",
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/scikit-learn/scikit-learn.git",
+      "resolved_ref": "156ef141f3b270edb06c8ae9af37c55253c0aabe",
+      "files_discovered": 565,
+      "files_kept": 247,
+      "files_skipped": {
+        "too_few_code_lines": 11,
+        "excluded_glob": 298,
+        "empty": 9
+      },
+      "num_lines": 185585,
+      "num_code_lines": 145803,
+      "num_bytes": 6651057
+    }
+  ],
+  "duplicates_dropped": 0,
+  "filter_summary": {
+    "include_globs": [
+      "**/*.py"
+    ],
+    "exclude_glob_count": 22,
+    "min_code_lines": 10,
+    "max_file_bytes": 262144,
+    "drop_duplicate_content": true,
+    "skipped_by_reason": {
+      "too_few_code_lines": 52,
+      "empty": 23,
+      "excluded_glob": 1666,
+      "too_large": 4
+    }
+  }
+}
