@@ -59,12 +59,14 @@ class TestBudgetExhaustion:
     """Budget enforcement: BudgetExhaustedError when ε exceeds target."""
 
     def test_exhaustion_raises(self) -> None:
-        # Very tight budget with high sample_rate should exhaust quickly.
-        cfg = DPConfig(noise_multiplier=0.1, max_grad_norm=1.0,
-                       target_epsilon=0.01, delta=1e-5)
-        acc = PrivacyAccountant(cfg, sample_rate=1.0)
+        # A tight budget over many steps exhausts quickly. (sigma=0.1 at q=1.0
+        # is outside what the PRV accountant can discretise in memory; these
+        # settings are realistic and still overshoot the target ~60x.)
+        cfg = DPConfig(noise_multiplier=0.8, max_grad_norm=1.0,
+                       target_epsilon=1.0, delta=1e-5)
+        acc = PrivacyAccountant(cfg, sample_rate=0.1)
         with pytest.raises(BudgetExhaustedError):
-            acc.step(num_steps=10000)
+            acc.step(num_steps=2000)
 
 
 class TestPrivacySpecConversion:

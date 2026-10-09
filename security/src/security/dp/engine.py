@@ -23,22 +23,43 @@ except ImportError:
     ModuleValidator = None
     OPACUS_AVAILABLE = False
 
+from .accountant import DEFAULT_ACCOUNTANT
 from .config import DPConfig
 
 logger = logging.getLogger(__name__)
 
 
-def _rebuild_optimizer(optimizer: Optimizer, new_model: nn.Module) -> Optimizer:
-    """Recreate an optimizer for *new_model* preserving the original hyper-params.
+def _rebuild_optimizer(optimizer: Optimizer, old_model: nn.Module,
+                       new_model: nn.Module) -> Optimizer:
+    """Recreate *optimizer* for *new_model*, keeping its param groups.
 
-    After ``ModuleValidator.fix()`` the returned model is a deep-copy, so the
-    old optimizer's param references are stale.  We create a fresh optimizer of
-    the same class with matching hyper-parameters.
+    After ``ModuleValidator.fix()`` the returned model is a deep copy, so the
+    old optimizer's param references are stale. Each group is rebuilt with the
+    same hyper-parameters (per-group lr, weight decay, ...) over the matching
+    parameters of the copy, matched by name. Parameters the original optimizer
+    did not hold (e.g. frozen layers) stay out of it. Optimizer state such as
+    momentum is not carried over; this runs before training starts.
+
+    Raises:
+        ValueError: if a parameter cannot be matched by name in the fixed model
+            (``fix()`` replaced the module that held it).
     """
-    # optimizer.defaults contains lr, momentum, weight_decay, etc.
-    opt_cls = type(optimizer)
-    defaults = {k: v for k, v in optimizer.defaults.items()}
-    return opt_cls(new_model.parameters(), **defaults)
+    old_names = {id(p): name for name, p in old_model.named_parameters()}
+    new_params = dict(new_model.named_parameters())
+    groups = []
+    for group in optimizer.param_groups:
+        params = []
+        for p in group["params"]:
+            name = old_names.get(id(p))
+            if name is None or name not in new_params:
+                raise ValueError(
+                    f"cannot rebuild the optimizer after ModuleValidator.fix(): parameter "
+                    f"{name or '<not in model>'!r} has no counterpart in the fixed model; "
+                    "fix the model before creating the optimizer"
+                )
+            params.append(new_params[name])
+        groups.append({**{k: v for k, v in group.items() if k != "params"}, "params": params})
+    return type(optimizer)(groups, **optimizer.defaults)
 
 
 def make_private(
@@ -92,12 +113,16 @@ def make_private(
     errors = ModuleValidator.validate(model, strict=False)
     if errors:
         logger.info("Found Opacus-incompatible modules, attempting to fix them...")
-        model = ModuleValidator.fix(model)
+        fixed = ModuleValidator.fix(model)
         # fix() returns a deep copy — the old optimizer holds stale references.
-        optimizer = _rebuild_optimizer(optimizer, model)
+        optimizer = _rebuild_optimizer(optimizer, model, fixed)
+        model = fixed
         logger.info("Optimizer recreated for the fixed model.")
 
-    privacy_engine = opacus.PrivacyEngine(secure_mode=config.secure_mode)
+    # Pinned (not left to Opacus's default) so PrivacyAccountant and this engine
+    # always calibrate and report with the same accountant.
+    privacy_engine = opacus.PrivacyEngine(accountant=DEFAULT_ACCOUNTANT,
+                                          secure_mode=config.secure_mode)
 
     if epochs is not None and epochs > 0:
         # ── Auto-calibrate σ to enforce ε ≤ target_epsilon (D7) ──────────
