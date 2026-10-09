@@ -96,10 +96,17 @@ Two consequences, both now in the pipeline:
 * A guard drop above the tolerance but inside the noise floor is reported as
   `within_noise` — not evidence of a regression and not a pass — rather than
   silently acted on (`configs/guard_thresholds.yaml`).
+* **D5's in-project noise band** is defined as the spread of 3 repeated
+  baseline evaluations. The integration round was run three times end to
+  end with every metric identical, so the band is **0.0** for both clusters:
+  with greedy decoding, repeats of the same adapter are deterministic. A zero
+  band makes "improved" mean "improved by any amount"; it captures decode
+  noise only, not variation between independently trained adapters.
 * The in-project difference in §4 is one example in exact match (0.0167),
-  below the exact-match noise floor at 60 paired examples (≈ 0.08). The
-  edit-similarity band needs per-example scores from both versions; the
-  bootstrap that computes it is implemented and waits on those rows.
+  below the exact-match noise floor at 60 paired examples (≈ 0.08). A
+  supplementary edit-similarity band (paired bootstrap over the same
+  examples) needs per-example scores from both versions; the bootstrap is
+  implemented and waits on those rows.
 
 ## 6. Reproducing
 

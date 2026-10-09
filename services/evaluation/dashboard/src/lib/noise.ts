@@ -30,6 +30,8 @@ export interface NoiseReport {
   };
   in_project: {
     n_examples: number;
+    /** D5's band: spread of 3 repeated baseline evaluations. */
+    d5_noise_band: { definition: string; value: number; degenerate: boolean };
     exact_match_paired_noise_floor: number;
     edit_similarity_band: number | null;
     edit_similarity_band_status: string;
@@ -58,6 +60,7 @@ export function isNoiseReport(x: unknown): x is NoiseReport {
     !!t &&
     Array.isArray(t.statements) &&
     !!ip &&
-    Array.isArray(ip.rows)
+    Array.isArray(ip.rows) &&
+    typeof (ip.d5_noise_band as Record<string, unknown> | undefined)?.value === "number"
   );
 }

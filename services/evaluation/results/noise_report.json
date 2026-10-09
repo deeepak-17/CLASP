@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-08T07:39:53Z",
+  "generated_at": "2026-10-09T05:30:09Z",
   "sources": {
     "baseline_anchor": "results/humaneval_guard/base_anchor.json",
     "config": "configs/guard_thresholds.yaml"
@@ -42,6 +42,7 @@
     "noise_floor_at_scored_n": 0.1386,
     "noise_floor_full_benchmark": 0.0484,
     "statements": [
+      "D5 in-project noise band = spread of 3 repeated baseline evaluations (computed with evaluation.completion.noise_band); see the in-project section for its value.",
       "D5 tolerance stays 0.02 (registry-owned); P5 does not loosen it.",
       "Guard noise floor at the scored 20 tasks (assumed discordance 0.1): 0.1386. A drop above the tolerance but below this is reported `within_noise`, not a pass.",
       "On the full 164-task benchmark the floor falls to 0.0484 — still above the tolerance, so a 2-point regression is not resolvable from one greedy sample per task on HumanEval alone.",
@@ -51,10 +52,35 @@
   "in_project": {
     "source": "results/in_project_metric.json",
     "n_examples": 60,
+    "d5_noise_band": {
+      "definition": "spread of 3 repeated baseline evaluations (D5)",
+      "value": 0.0,
+      "per_client": {
+        "web/client-werkzeug": {
+          "repeats": [
+            0.5337,
+            0.5337,
+            0.5337
+          ],
+          "band": 0.0,
+          "note": "spread of 3 repeated baseline evaluations (0.533700..0.533700); greedy decoding is deterministic, so this is decode-level noise only and NOT the training-seed band D5 wants"
+        },
+        "scientific/client-scikit-learn": {
+          "repeats": [
+            0.4837,
+            0.4837,
+            0.4837
+          ],
+          "band": 0.0,
+          "note": "spread of 3 repeated baseline evaluations (0.483700..0.483700); greedy decoding is deterministic, so this is decode-level noise only and NOT the training-seed band D5 wants"
+        }
+      },
+      "degenerate": true
+    },
     "exact_match_paired_noise_floor": 0.08,
     "exact_match_assumed_discordance": 0.1,
     "edit_similarity_band": null,
-    "edit_similarity_band_status": "not measurable from the recorded round: it needs per-example rows (evaluation.completion.per_example_rows) for both versions; evaluation.eval_harness.noise.paired_bootstrap_diff_ci computes it from them",
+    "edit_similarity_band_status": "supplementary bootstrap band not measurable from the recorded round: it needs per-example rows (evaluation.completion.per_example_rows) for both versions; evaluation.eval_harness.noise.paired_bootstrap_diff_ci computes it from them",
     "rows": [
       {
         "client": "werkzeug",

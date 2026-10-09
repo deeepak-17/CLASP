@@ -27,6 +27,7 @@ from typing import Any
 import _bootstrap  # noqa: F401
 
 from _cli import EXIT_OK, base_parser, emit, report_line, run_cli, setup_logging
+from evaluation.completion import noise_band as d5_noise_band
 from evaluation.eval_harness.noise import (
     binomial_standard_error,
     classify_guard_drop,
@@ -96,15 +97,25 @@ def _in_project_block(paths, cfg: dict[str, Any]) -> dict[str, Any]:
                 "exact_match_standard_error": round(binomial_standard_error(em, n), 4),
             }
         )
+    bands = {}
+    for client, values in cfg["d5_baseline_repeats"].items():
+        band, note = d5_noise_band([{"edit_similarity": float(v)} for v in values])
+        bands[client] = {"repeats": [float(v) for v in values], "band": round(band, 6), "note": note}
     return {
         "source": IN_PROJECT_SOURCE,
         "n_examples": n,
+        "d5_noise_band": {
+            "definition": "spread of 3 repeated baseline evaluations (D5)",
+            "value": max(b["band"] for b in bands.values()),
+            "per_client": bands,
+            "degenerate": all(b["band"] == 0.0 for b in bands.values()),
+        },
         "exact_match_paired_noise_floor": round(paired_min_detectable_drop(d, n), 4),
         "exact_match_assumed_discordance": d,
         "edit_similarity_band": None,
         "edit_similarity_band_status": (
-            "not measurable from the recorded round: it needs per-example rows "
-            "(evaluation.completion.per_example_rows) for both versions; "
+            "supplementary bootstrap band not measurable from the recorded round: it needs "
+            "per-example rows (evaluation.completion.per_example_rows) for both versions; "
             "evaluation.eval_harness.noise.paired_bootstrap_diff_ci computes it from them"
         ),
         "rows": rows,
@@ -152,6 +163,17 @@ def _report(result: dict[str, Any], path: Path) -> Path:
         report.key_values(c)
     ip = result["in_project"]
     report.heading("In-project completion")
+    band = ip["d5_noise_band"]
+    report.paragraph(
+        f"**D5 noise band** ({band['definition']}): **{band['value']}**. "
+        + (
+            "Greedy decoding is deterministic, so three repeats of the same baseline are identical and "
+            "the band is zero: under it, any positive gain counts as an improvement. It measures decode "
+            "noise only, not the variation between independently trained adapters."
+            if band["degenerate"]
+            else "Measured from the repeats listed in configs/guard_thresholds.yaml."
+        )
+    )
     report.table(
         ["client", "version", "edit similarity", "exact match", "exact-match SE"],
         [[r["client"], r["version"], r["edit_similarity"], r["exact_match"], r["exact_match_standard_error"]]
@@ -183,6 +205,8 @@ def main(args: argparse.Namespace) -> int:
     floor_now = paired_min_detectable_drop(assumed, guard["n_tasks"])
     floor_full = paired_min_detectable_drop(assumed, guard["full_benchmark_size"])
     statements = [
+        "D5 in-project noise band = spread of 3 repeated baseline evaluations (computed with "
+        "evaluation.completion.noise_band); see the in-project section for its value.",
         f"D5 tolerance stays {guard['tolerance']} (registry-owned); P5 does not loosen it.",
         f"Guard noise floor at the scored {guard['n_tasks']} tasks (assumed discordance {assumed}): "
         f"{floor_now:.4f}. A drop above the tolerance but below this is reported `within_noise`, not a pass.",

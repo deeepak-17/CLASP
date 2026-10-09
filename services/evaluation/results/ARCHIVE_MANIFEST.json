@@ -1,6 +1,6 @@
 {
   "label": "phase-2 final",
-  "created_at": "2026-10-08T07:39:53Z",
+  "created_at": "2026-10-09T05:30:09Z",
   "directories": [
     "results",
     "reports",
@@ -10,7 +10,7 @@
     "configs"
   ],
   "n_files": 93,
-  "total_bytes": 24245100,
+  "total_bytes": 24248085,
   "files": {
     "configs/dataset.yaml": {
       "sha256": "7cec9c079882f026fb6813b288dcea915b610f534389219c7912406c3a06e3fc",
@@ -29,16 +29,16 @@
       "bytes": 3982
     },
     "configs/guard_thresholds.yaml": {
-      "sha256": "b38b969ffc29bd36b0efd5926e2bd254842fb9e6ce67edc9a7d39f44bb0964c8",
-      "bytes": 1580
+      "sha256": "38ea558e8b3b57201eb1777db0681836194edf12319f6792236b78c23930ef43",
+      "bytes": 2238
     },
     "configs/logging.yaml": {
       "sha256": "6d02962455d61102e4a174638de5e3c1b3e82782eae013464e1f27593d00c210",
       "bytes": 599
     },
     "configs/materialize_client.yaml": {
-      "sha256": "1b42c14c995fde3ae99edc9060aff6232650dfa9c8c8dfd518d39be033941052",
-      "bytes": 1534
+      "sha256": "8914daf41013afb9dbeadd33d5174fe0a0264c0ad3f0dad7e71304403e84d78e",
+      "bytes": 1764
     },
     "configs/partition.yaml": {
       "sha256": "4c5cb83947f9c65908a2b28f8a671e5517d60943f660f72a9465c126ed71778a",
@@ -205,8 +205,8 @@
       "bytes": 2645
     },
     "docs/report/eval_section.md": {
-      "sha256": "be8a28189dcb50ed90a7a22783ff2711c54aaf8e622435bcfa7457eb1ae832b7",
-      "bytes": 6774
+      "sha256": "ab37b73867456abd70d217432362bb00fd223d944a02701ab4ca0e2a5fc23dce",
+      "bytes": 7255
     },
     "docs/report/figures/fig_aggregation_error.svg": {
       "sha256": "eff4a774ed57ec9c51cbbaf7f3d10277b9f245fff00272adf1a153ad41042b13",
@@ -229,11 +229,11 @@
       "bytes": 4754
     },
     "docs/report/results_tables.md": {
-      "sha256": "459febe8cb8b6e7f7d549120b4246380f3f68dc2749bea4ec9a11c73641231a2",
+      "sha256": "28d92ee4f14814b0fc76859337f93f6f41fddc8efb5ec5028da02f14cf544bcf",
       "bytes": 2767
     },
     "docs/report/slides_data.md": {
-      "sha256": "4f5686d624234f273fa6f9bd51bc7c5a5b1add2796237a2f4c89e028ea9bd945",
+      "sha256": "d455e74599618a7f2492630c87bb2de20121da252658ff371e2ae495a16c2887",
       "bytes": 1414
     },
     "reports/baseline_eval_report.md": {
@@ -269,8 +269,8 @@
       "bytes": 1899
     },
     "reports/eval_noise_report.md": {
-      "sha256": "224d64a5dd108eb24da46885ebeb55f01b5ab77bdcea6855dd0200000610756f",
-      "bytes": 2112
+      "sha256": "6d3d634b48d363caca018c50eaba97dcc9a5b2e2c57e8a59ccb613d5aa81f478",
+      "bytes": 2633
     },
     "reports/in_project_eval_report.md": {
       "sha256": "68867786d37c48cdff2e3b6ff6f9e9df44a73bdd783cc772800a35cb01fff3a6",
@@ -305,7 +305,7 @@
       "bytes": 3407
     },
     "reports/personalization_report.md": {
-      "sha256": "fc82ca36609a6663d324ad25a37eb7ced211f7cb82f00f85af8721b3ad08b0a8",
+      "sha256": "8c3fe926b82669017af615990f18d8e2b00a2a272ea1dcb399ff0e9e329e1a99",
       "bytes": 3970
     },
     "reports/project_vs_developer_comparison.md": {
@@ -325,7 +325,7 @@
       "bytes": 13932
     },
     "results/humaneval_guard/base_anchor.json": {
-      "sha256": "c9253a646d6e1aff9ffb3375a9a186debc7a47dc37e4927d7dc154941809890e",
+      "sha256": "775d46bd9d97b5c2642224d5ddfc78d25de6b4cf4223188e2698dba591e861f5",
       "bytes": 8451
     },
     "results/humaneval_guard/base_samples.jsonl": {
@@ -341,12 +341,12 @@
       "bytes": 1868
     },
     "results/lineage.json": {
-      "sha256": "dce63ad3198babaf4e51966409a6e65ea6470cb308506cf00ac56e8b5e5f0a34",
+      "sha256": "e165c69501ac7065fff9739a9ae930346de741623c445b08e17de51faa958f0e",
       "bytes": 12668
     },
     "results/noise_report.json": {
-      "sha256": "c6882091de1732cc61836ed397c7ea57d6f90e4736374f619cf8dd7a97a1738e",
-      "bytes": 2657
+      "sha256": "13521a7e09f77bbd75b447b00f2e0d79d48978905df5d61cc08c02bc367a8ef1",
+      "bytes": 3752
     },
     "results/p5-20260805T194656Z.json": {
       "sha256": "dab34357e32da45c48e6da1aed9510a675ad40f55a430f4ff3425396159b1400",
@@ -373,7 +373,7 @@
       "bytes": 3709
     },
     "results/personalization.json": {
-      "sha256": "6857c077eecfca0cd3c6e707c3bd0350947e0723ef7febbf7134757cb825556c",
+      "sha256": "829409d822d7c433177a4482d9307c606e685e47eeeed7506562210f49e31b64",
       "bytes": 10987
     },
     "results/results.json": {
@@ -381,7 +381,7 @@
       "bytes": 4113
     },
     "results/slides_data.json": {
-      "sha256": "4e8ef52f4c27d24cfa0aabdea2898d6b0a6a5cef9e72ca2ea53142adc1e0906f",
+      "sha256": "0abc7ca9b4793e1deb423072340cfe5f4711d85a19185bcc16c6c5a81028502f",
       "bytes": 1796
     }
   }

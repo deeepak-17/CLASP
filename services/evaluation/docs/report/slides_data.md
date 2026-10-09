@@ -1,7 +1,7 @@
 # Slides data
 
 _Headline numbers for the demo and deck, read from committed results_  
-**Generated:** 2026-10-08T07:39:53Z
+**Generated:** 2026-10-09T05:30:09Z
 
 | headline | value | claim | source |
 | --- | --- | --- | --- |

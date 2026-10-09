@@ -132,9 +132,16 @@ export function Noise() {
               ))}
             </tbody>
           </table>
+          <p style={{ fontSize: 13, marginTop: 10 }}>
+            <strong>D5 noise band</strong> ({r.in_project.d5_noise_band.definition}):{" "}
+            <strong>{r.in_project.d5_noise_band.value.toFixed(4)}</strong>.{" "}
+            {r.in_project.d5_noise_band.degenerate
+              ? "Greedy decoding is deterministic, so the three repeats are identical and the band is zero — any positive gain counts as an improvement. It reflects decode noise only, not variation between independently trained adapters."
+              : null}
+          </p>
           <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 10 }}>
             An exact-match change below {r.in_project.exact_match_paired_noise_floor.toFixed(3)} is inside noise.
-            Edit-similarity band: {r.in_project.edit_similarity_band_status}.
+            Supplementary edit-similarity band: {r.in_project.edit_similarity_band_status}.
           </p>
         </div>
       </div>

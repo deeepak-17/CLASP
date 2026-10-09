@@ -20,9 +20,19 @@ humaneval_guard:
   classification: "regression if drop > max(tolerance, paired noise floor at scored n)"
 
 in_project:
-  # D5's noise band for edit similarity: the 95% paired-bootstrap interval of
-  # (candidate - baseline) over the same held-out examples. Requires per-example
-  # rows (evaluation.completion.per_example_rows) from the edge run.
+  # D5 (MASTER_PLAN): "promote iff in-project metric improves beyond the noise
+  # band (measured from 3 repeated baseline evals)". These are those repeats:
+  # baseline (v1) edit similarity of each cluster's representative client from
+  # the integration round, run three times end to end with every metric
+  # identical (experiments/w12-integration/RESULTS.md; 60 examples, greedy).
+  # The band is computed by evaluation.completion.noise_band, the function the
+  # edge lane uses for the value it sends the registry.
+  d5_baseline_repeats:
+    web/client-werkzeug: [0.5337, 0.5337, 0.5337]
+    scientific/client-scikit-learn: [0.4837, 0.4837, 0.4837]
+  # Supplementary band (does not replace D5's): the 95% paired-bootstrap
+  # interval of (candidate - baseline) over the same held-out examples. Needs
+  # per-example rows (evaluation.completion.per_example_rows) from the edge run.
   method: "paired bootstrap, 95%, 10000 resamples, seed 0"
   n_examples: 60
   # Exact match is a proportion, so its band has a closed form at this n.
