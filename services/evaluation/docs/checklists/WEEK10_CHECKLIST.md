@@ -8,6 +8,7 @@
 - [x] `reports/personalization_report.md`
 
 ## Tue: Guard thresholds locked from noise data
+- [x] D5 in-project noise band reported as D5 defines it — spread of 3 repeated baseline evals (0.0: greedy repeats are identical), computed with `evaluation.completion.noise_band`
 - [x] `configs/guard_thresholds.yaml` + `results/noise_report.json`: paired noise floor 13.9 pts at 20 tasks, 4.8 pts at 164; D5's 2-pt tolerance is below it, so drops inside the floor are reported `within_noise` (`eval_harness/noise.py::classify_guard_drop`)
 
 ## Wed: Report v1 review with team

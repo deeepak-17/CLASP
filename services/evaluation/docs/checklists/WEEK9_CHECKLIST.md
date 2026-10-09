@@ -9,7 +9,8 @@
 
 ## Wed: Eval-noise write-up; dashboard shows live round
 - [x] `reports/eval_noise_report.md` (from `scripts/build_noise_report.py`)
-- [x] Federated Rounds page renders `rounds.json` from a round manifest
+- [x] Federated Rounds page and `scripts/export_round_feed.py` built and contract-tested against `scripts/demo_round.py`'s manifest shape
+- [ ] A live round actually shown — the round manifests `demo_round.py` writes are gitignored, so no `rounds.json` is committed and the page shows its empty state
 
 ## Thu: Personalization chart on dashboard
 - [x] Personalization page: perplexity reduction per client, both rounds; cluster-layer effect before/after D3
