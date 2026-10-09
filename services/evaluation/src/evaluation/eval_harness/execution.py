@@ -13,16 +13,26 @@ pass/fail. Two isolation backends, chosen by ``scoring.sandbox``:
     wall-clock limit and the container is force-removed if the client is
     stuck. See :func:`docker_command`.
 
-``process`` — the fallback where Docker is unavailable. A subprocess in a
-    throwaway temp directory with a wall-clock timeout, a stripped environment
-    and best-effort POSIX resource limits. It stops runaway loops and fork
-    bombs from hanging the harness but does **not** stop a deliberately
-    malicious program from reading files or opening sockets.
+``process`` — the fallback where Docker is unavailable. A subprocess in its
+    own session (process group) in a throwaway temp directory, with a
+    wall-clock timeout, a stripped environment and best-effort POSIX resource
+    limits; at the timeout, and after a normal exit, the whole group is
+    killed, so a child it spawned cannot outlive the run. It is **not a
+    sandbox for hostile code**: no process-count limit, output is buffered
+    before it is truncated, and nothing stops the program from reading files
+    or opening sockets.
 
 ``auto`` (the configured default) uses ``docker`` when a Docker daemon
 answers and ``process`` otherwise, and every outcome records which backend
 actually ran (:attr:`ExecutionOutcome.isolation`), so a result can always be
 traced to the isolation it was produced under.
+
+**What counts as a pass.** Exit status 0 is not enough: generated code could
+call ``sys.exit(0)`` before the tests run. :func:`execute_program` appends a
+line printing a random per-run sentinel after the program, and a run passes
+only if it exits 0 *and* stdout ends with that sentinel — i.e. control really
+reached the end of the tests. The sentinel is unguessable, so the program
+cannot print it itself.
 
 ``scoring.execution_enabled`` still defaults to ``false`` and must be turned
 on deliberately.
@@ -31,7 +41,9 @@ on deliberately.
 from __future__ import annotations
 
 import functools
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -211,40 +223,53 @@ def execute_program(source: str, *, timeout_seconds: float = 10.0, sandbox: str 
     """
     # Pick the isolation once per call: 'docker' (no network) or 'process' (fallback).
     backend = resolve_sandbox(sandbox)
+    # Random per-run sentinel printed after the tests: only a program that really
+    # reaches the end passes (an early sys.exit(0) never prints it).
+    sentinel = f"__CLASP_PASSED_{uuid.uuid4().hex}__"
     with tempfile.TemporaryDirectory(prefix="clasp-p5-exec-") as tmpdir:
         script_path = Path(tmpdir) / "candidate.py"
-        script_path.write_text(source, encoding="utf-8")
+        body = source if source.endswith("\n") else source + "\n"
+        script_path.write_text(f"{body}\nprint({sentinel!r}, flush=True)\n", encoding="utf-8")
         if backend == "docker":
             # The container runs as user 'nobody', so the mounted program must be world-readable.
             script_path.chmod(0o644)
             Path(tmpdir).chmod(0o755)
-            return _run_docker(tmpdir, timeout_seconds)
-        return _run_process(script_path, tmpdir, timeout_seconds)
+            return _run_docker(tmpdir, timeout_seconds, sentinel)
+        return _run_process(script_path, tmpdir, timeout_seconds, sentinel)
 
 
-def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float) -> ExecutionOutcome:
+def _reached_end(returncode: int | None, stdout: str, sentinel: str) -> bool:
+    """Passed = clean exit AND the sentinel is the last thing the program printed."""
+    return returncode == 0 and stdout.rstrip().endswith(sentinel)
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Kill the program and anything it spawned (it runs in its own session)."""
+    if hasattr(os, "killpg"):
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    else:  # pragma: no cover - Windows has no process groups here
+        proc.kill()
+
+
+def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float, sentinel: str) -> ExecutionOutcome:
     # Restricted environment: no inherited API keys/tokens, minimal PATH
     # so the candidate cannot invoke arbitrary tools found via a broad PATH.
     env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
     start = time.perf_counter()
     try:
-        completed = subprocess.run(
+        # Own session = own process group, so a child it spawns can be killed with it.
+        proc = subprocess.Popen(
             [sys.executable, str(script_path)],
             cwd=tmpdir,
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            start_new_session=True,
             preexec_fn=_preexec_fn_for_platform(),
-        )
-    except subprocess.TimeoutExpired as exc:
-        stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
-        return ExecutionOutcome(
-            passed=False,
-            timed_out=True,
-            exit_code=None,
-            duration_seconds=round(time.perf_counter() - start, 6),
-            stderr_tail=_truncate(stderr or f"execution exceeded {timeout_seconds}s"),
         )
     except OSError as exc:  # interpreter missing, permission error, etc.
         return ExecutionOutcome(
@@ -254,16 +279,30 @@ def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float) -> Exec
             duration_seconds=round(time.perf_counter() - start, 6),
             stderr_tail=_truncate(f"{type(exc).__name__}: {exc}"),
         )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        _, stderr = proc.communicate()
+        return ExecutionOutcome(
+            passed=False,
+            timed_out=True,
+            exit_code=None,
+            duration_seconds=round(time.perf_counter() - start, 6),
+            stderr_tail=_truncate(stderr or f"execution exceeded {timeout_seconds}s"),
+        )
+    # The program finished, but a background child it started may still be alive.
+    _kill_group(proc)
     return ExecutionOutcome(
-        passed=completed.returncode == 0,
+        passed=_reached_end(proc.returncode, stdout, sentinel),
         timed_out=False,
-        exit_code=completed.returncode,
+        exit_code=proc.returncode,
         duration_seconds=round(time.perf_counter() - start, 6),
-        stderr_tail=_truncate(completed.stderr),
+        stderr_tail=_truncate(stderr),
     )
 
 
-def _run_docker(tmpdir: str, timeout_seconds: float) -> ExecutionOutcome:
+def _run_docker(tmpdir: str, timeout_seconds: float, sentinel: str) -> ExecutionOutcome:
     name = f"clasp-p5-exec-{uuid.uuid4().hex[:12]}"
     start = time.perf_counter()
     try:
@@ -302,7 +341,7 @@ def _run_docker(tmpdir: str, timeout_seconds: float) -> ExecutionOutcome:
     if killed:
         note = f"execution exceeded {timeout_seconds}s" if timed_out else "killed (memory limit)"
     return ExecutionOutcome(
-        passed=completed.returncode == 0,
+        passed=_reached_end(completed.returncode, completed.stdout, sentinel),
         timed_out=timed_out,
         exit_code=completed.returncode,
         duration_seconds=duration,

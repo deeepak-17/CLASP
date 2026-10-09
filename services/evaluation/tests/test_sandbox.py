@@ -41,7 +41,7 @@ def test_docker_mode_refuses_to_fall_back(monkeypatch) -> None:
 
 
 def test_process_backend_records_its_isolation() -> None:
-    outcome = execute_program("raise SystemExit(0)\n", sandbox="process")
+    outcome = execute_program("assert 1 + 1 == 2\n", sandbox="process")
     assert outcome.passed and outcome.isolation == "process"
     assert outcome.to_dict()["isolation"] == "process"
 
@@ -58,3 +58,45 @@ def test_anchor_states_the_isolation_actually_used() -> None:
     assert _isolation_summary(outcomes).startswith("docker container per program: no network")
     mixed = outcomes + [SampleOutcome("t3", True, False, True, isolation="process")]
     assert "no network confinement" in _isolation_summary(mixed)
+
+
+# --- what counts as a pass (review on #22: sys.exit(0) must not pass) ---
+_HUMANEVAL_SHAPED = """
+def f(x):
+{body}
+
+def check(candidate):
+    assert candidate(2) == 4
+
+check(f)
+"""
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("    return x * 2", True),                                   # correct
+        ("    return None", False),                                   # wrong answer
+        ("    import sys; sys.exit(0)", False),                       # exits 0 before the tests finish
+        ("    import os; os._exit(0)", False),                        # hard exit, same idea
+        ("    print('__CLASP_PASSED_x__'); import sys; sys.exit(0)", False),  # guessed sentinel
+    ],
+)
+def test_pass_requires_reaching_the_end_of_the_tests(body: str, expected: bool) -> None:
+    outcome = execute_program(_HUMANEVAL_SHAPED.format(body=body), sandbox="process")
+    assert outcome.passed is expected
+
+
+def test_spawned_child_does_not_outlive_the_timeout(tmp_path) -> None:
+    marker = tmp_path / "alive"
+    program = (
+        "import subprocess, time\n"
+        f"subprocess.Popen(['/bin/sh', '-c', 'sleep 2; echo alive > {marker}'])\n"
+        "time.sleep(30)\n"
+    )
+    outcome = execute_program(program, timeout_seconds=1, sandbox="process")
+    assert outcome.timed_out
+    import time
+
+    time.sleep(2.5)
+    assert not marker.exists()
