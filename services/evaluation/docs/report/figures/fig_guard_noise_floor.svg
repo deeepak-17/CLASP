@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="Smallest HumanEval pass@1 drop distinguishable from noise">
+<rect width="760" height="380" fill="#ffffff"/>
+<text x="16.0" y="26.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Smallest HumanEval pass@1 drop distinguishable from noise</text>
+<text x="16.0" y="46.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Paired comparison on the same tasks, 95% two-sided. Dashed: the D5 tolerance.</text>
+<rect x="64.0" y="57.0" width="10" height="10" rx="2" fill="#2a78d6"/>
+<text x="79.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">discordance 0.05</text>
+<rect x="206.0" y="57.0" width="10" height="10" rx="2" fill="#eb6834"/>
+<text x="221.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">discordance 0.1</text>
+<rect x="341.0" y="57.0" width="10" height="10" rx="2" fill="#1c9e77"/>
+<text x="356.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">discordance 0.2</text>
+<line x1="64" x2="744" y1="328.0" y2="328.0" stroke="#e1e0d9"/>
+<text x="56.0" y="332.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0</text>
+<line x1="64" x2="744" y1="266.0" y2="266.0" stroke="#e1e0d9"/>
+<text x="56.0" y="270.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">5</text>
+<line x1="64" x2="744" y1="204.0" y2="204.0" stroke="#e1e0d9"/>
+<text x="56.0" y="208.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">10</text>
+<line x1="64" x2="744" y1="142.0" y2="142.0" stroke="#e1e0d9"/>
+<text x="56.0" y="146.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">15</text>
+<line x1="64" x2="744" y1="80.0" y2="80.0" stroke="#e1e0d9"/>
+<text x="56.0" y="84.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">20</text>
+<text x="64.0" y="346.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">20</text>
+<text x="223.3" y="346.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">50</text>
+<text x="343.8" y="346.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">100</text>
+<text x="429.7" y="346.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">164</text>
+<text x="503.0" y="346.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">250</text>
+<text x="623.5" y="346.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">500</text>
+<text x="744.0" y="346.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">1000</text>
+<text x="404.0" y="370.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">tasks scored (log scale)</text>
+<text transform="translate(14 204.0) rotate(-90)" font-size="11" fill="#898781" text-anchor="middle">pass@1 points</text>
+<line x1="64" x2="744" y1="303.2" y2="303.2" stroke="#52514e" stroke-dasharray="4 3"/>
+<text x="70.0" y="297.2" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">D5 tolerance 2 pts</text>
+<path d="M64.0,206.5 L223.3,251.1 L343.8,273.7 L429.7,285.6 L503.0,293.6 L623.5,303.7 L744.0,310.8" fill="none" stroke="#2a78d6" stroke-width="2"/>
+<circle cx="64.0" cy="206.5" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>discordance 0.05 · 20: 10</title></circle>
+<circle cx="223.3" cy="251.1" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>discordance 0.05 · 50: 6</title></circle>
+<circle cx="343.8" cy="273.7" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>discordance 0.05 · 100: 4</title></circle>
+<circle cx="429.7" cy="285.6" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>discordance 0.05 · 164: 3</title></circle>
+<circle cx="503.0" cy="293.6" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>discordance 0.05 · 250: 3</title></circle>
+<circle cx="623.5" cy="303.7" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>discordance 0.05 · 500: 2</title></circle>
+<circle cx="744.0" cy="310.8" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>discordance 0.05 · 1000: 1</title></circle>
+<path d="M64.0,156.1 L223.3,219.3 L343.8,251.1 L429.7,268.0 L503.0,279.4 L623.5,293.6 L744.0,303.7" fill="none" stroke="#eb6834" stroke-width="2"/>
+<circle cx="64.0" cy="156.1" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>discordance 0.1 · 20: 14</title></circle>
+<circle cx="223.3" cy="219.3" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>discordance 0.1 · 50: 9</title></circle>
+<circle cx="343.8" cy="251.1" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>discordance 0.1 · 100: 6</title></circle>
+<circle cx="429.7" cy="268.0" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>discordance 0.1 · 164: 5</title></circle>
+<circle cx="503.0" cy="279.4" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>discordance 0.1 · 250: 4</title></circle>
+<circle cx="623.5" cy="293.6" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>discordance 0.1 · 500: 3</title></circle>
+<circle cx="744.0" cy="303.7" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>discordance 0.1 · 1000: 2</title></circle>
+<path d="M64.0,85.0 L223.3,174.3 L343.8,219.3 L429.7,243.1 L503.0,259.3 L623.5,279.4 L744.0,293.6" fill="none" stroke="#1c9e77" stroke-width="2"/>
+<circle cx="64.0" cy="85.0" r="4" fill="#1c9e77" stroke="#ffffff" stroke-width="2"><title>discordance 0.2 · 20: 20</title></circle>
+<circle cx="223.3" cy="174.3" r="4" fill="#1c9e77" stroke="#ffffff" stroke-width="2"><title>discordance 0.2 · 50: 12</title></circle>
+<circle cx="343.8" cy="219.3" r="4" fill="#1c9e77" stroke="#ffffff" stroke-width="2"><title>discordance 0.2 · 100: 9</title></circle>
+<circle cx="429.7" cy="243.1" r="4" fill="#1c9e77" stroke="#ffffff" stroke-width="2"><title>discordance 0.2 · 164: 7</title></circle>
+<circle cx="503.0" cy="259.3" r="4" fill="#1c9e77" stroke="#ffffff" stroke-width="2"><title>discordance 0.2 · 250: 6</title></circle>
+<circle cx="623.5" cy="279.4" r="4" fill="#1c9e77" stroke="#ffffff" stroke-width="2"><title>discordance 0.2 · 500: 4</title></circle>
+<circle cx="744.0" cy="293.6" r="4" fill="#1c9e77" stroke="#ffffff" stroke-width="2"><title>discordance 0.2 · 1000: 3</title></circle>
+<line x1="64" x2="744" y1="328.0" y2="328.0" stroke="#c3c2b7"/>
+</svg>

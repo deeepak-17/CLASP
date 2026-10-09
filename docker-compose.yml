@@ -2,7 +2,8 @@
 # Security (P3) is a library imported by edge & cluster, so it is NOT a service here.
 #
 #   docker compose up -d                    registry + cluster (the live seams)
-#   docker compose --profile demo up        + panel demo UI on :8010 and a one-shot
+#   docker compose --profile demo up        + panel demo UI on :8010, the evaluation
+#                                             dashboard on :8005, and a one-shot
 #                                             demo-seed job that drives the registry
 #                                             end to end (report -> demo-reports volume)
 #   docker compose --profile train up edge  + the GPU federated round (needs NVIDIA
@@ -80,6 +81,16 @@ services:
       # Committed edge manifests (numbers shown on the panel pages), read-only.
       - ./services/edge/artifacts:/artifacts:ro
 
+  # P5 evaluation dashboard (static React build behind nginx). Results are baked
+  # in at build time from services/evaluation/results/; rebuild after
+  # re-exporting them (services/evaluation/scripts/rebuild_results.py).
+  dashboard:
+    profiles: [demo]
+    build:
+      context: .
+      dockerfile: services/evaluation/dashboard/Dockerfile
+    ports: ["8005:80"]
+
   # ---- profile: train ----------------------------------------------------- #
   edge:
     profiles: [train]
@@ -115,6 +126,9 @@ services:
     build:
       context: .
       dockerfile: services/evaluation/Dockerfile
+    # `python -m evaluation` checks the registry is reachable when this is set.
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
     depends_on:
       registry: {condition: service_healthy}
 

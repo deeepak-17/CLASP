@@ -1,0 +1,328 @@
+{
+  "run_id": "p5-inproj-20260906T170243Z",
+  "created_at": "2026-09-06T17:02:43Z",
+  "kind": "in_project_eval",
+  "version": "1.0.0",
+  "backend": "mock",
+  "provenance": "DEMO_TEST",
+  "provenance_note": "DEMO/TEST — P1's merged DeepSeek-Coder model is not available here (no GPU, no downloaded weights, no LoRA adapter). Completions come from MockEdgeInferenceClient, which emits a deterministic placeholder line, so edit_similarity is low, exact_match is ~0, and baseline_noise_band is 0.0 (every repeat is identical). These are the CORRECT outputs of a working metric given a generator that never produces real code, NOT a measurement of any model. Run with --backend edge against P1's client for a real number.",
+  "manifest_path": "datasets/partitions/manifest.json",
+  "config": {
+    "seed": 20260616,
+    "held_out_fraction": 0.1,
+    "max_examples_per_client": 60,
+    "min_prefix_lines": 3,
+    "max_new_tokens": 48,
+    "temperature": 0.0,
+    "repeats": 3
+  },
+  "jsonschema_validation": "enabled",
+  "clients": [
+    {
+      "client_id": "client-click",
+      "cluster_id": "click",
+      "repeats": 3,
+      "edit_similarity_repeats": [
+        0.177963,
+        0.177963,
+        0.177963
+      ],
+      "baseline_noise_band": 0.0,
+      "in_project": {
+        "client_id": "client-click",
+        "cluster_id": "click",
+        "edit_similarity": 0.177963,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "n_held_out_files": 2,
+        "generation_errors": 0,
+        "perplexity": null,
+        "seed": 20260616,
+        "examples": []
+      },
+      "metrics": {
+        "edit_similarity": 0.177963392928378,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "perplexity": null
+      },
+      "eval_result": {
+        "adapter": {
+          "name": "client-click",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "HumanEval",
+        "pass_at_k": {},
+        "num_tasks": 60,
+        "num_samples_per_task": 1,
+        "created_at": "2026-09-06T17:02:43Z",
+        "run_id": "p5-inproj-20260906T170243Z",
+        "in_project": {
+          "edit_similarity": 0.177963392928378,
+          "exact_match": 0.0,
+          "n_examples": 60,
+          "perplexity": null
+        },
+        "baseline_noise_band": 0.0,
+        "contract_version": "0.3.0"
+      }
+    },
+    {
+      "client_id": "client-colorama",
+      "cluster_id": "colorama",
+      "repeats": 3,
+      "edit_similarity_repeats": [
+        0.18675,
+        0.18675,
+        0.18675
+      ],
+      "baseline_noise_band": 0.0,
+      "in_project": {
+        "client_id": "client-colorama",
+        "cluster_id": "colorama",
+        "edit_similarity": 0.18675,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "n_held_out_files": 1,
+        "generation_errors": 0,
+        "perplexity": null,
+        "seed": 20260616,
+        "examples": []
+      },
+      "metrics": {
+        "edit_similarity": 0.18675008482597208,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "perplexity": null
+      },
+      "eval_result": {
+        "adapter": {
+          "name": "client-colorama",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "HumanEval",
+        "pass_at_k": {},
+        "num_tasks": 60,
+        "num_samples_per_task": 1,
+        "created_at": "2026-09-06T17:02:43Z",
+        "run_id": "p5-inproj-20260906T170243Z",
+        "in_project": {
+          "edit_similarity": 0.18675008482597208,
+          "exact_match": 0.0,
+          "n_examples": 60,
+          "perplexity": null
+        },
+        "baseline_noise_band": 0.0,
+        "contract_version": "0.3.0"
+      }
+    },
+    {
+      "client_id": "client-flask",
+      "cluster_id": "flask",
+      "repeats": 3,
+      "edit_similarity_repeats": [
+        0.181652,
+        0.181652,
+        0.181652
+      ],
+      "baseline_noise_band": 0.0,
+      "in_project": {
+        "client_id": "client-flask",
+        "cluster_id": "flask",
+        "edit_similarity": 0.181652,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "n_held_out_files": 2,
+        "generation_errors": 0,
+        "perplexity": null,
+        "seed": 20260616,
+        "examples": []
+      },
+      "metrics": {
+        "edit_similarity": 0.18165159116698534,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "perplexity": null
+      },
+      "eval_result": {
+        "adapter": {
+          "name": "client-flask",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "HumanEval",
+        "pass_at_k": {},
+        "num_tasks": 60,
+        "num_samples_per_task": 1,
+        "created_at": "2026-09-06T17:02:43Z",
+        "run_id": "p5-inproj-20260906T170243Z",
+        "in_project": {
+          "edit_similarity": 0.18165159116698534,
+          "exact_match": 0.0,
+          "n_examples": 60,
+          "perplexity": null
+        },
+        "baseline_noise_band": 0.0,
+        "contract_version": "0.3.0"
+      }
+    },
+    {
+      "client_id": "client-jinja",
+      "cluster_id": "jinja",
+      "repeats": 3,
+      "edit_similarity_repeats": [
+        0.17727,
+        0.17727,
+        0.17727
+      ],
+      "baseline_noise_band": 0.0,
+      "in_project": {
+        "client_id": "client-jinja",
+        "cluster_id": "jinja",
+        "edit_similarity": 0.17727,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "n_held_out_files": 2,
+        "generation_errors": 0,
+        "perplexity": null,
+        "seed": 20260616,
+        "examples": []
+      },
+      "metrics": {
+        "edit_similarity": 0.1772695229389179,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "perplexity": null
+      },
+      "eval_result": {
+        "adapter": {
+          "name": "client-jinja",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "HumanEval",
+        "pass_at_k": {},
+        "num_tasks": 60,
+        "num_samples_per_task": 1,
+        "created_at": "2026-09-06T17:02:43Z",
+        "run_id": "p5-inproj-20260906T170243Z",
+        "in_project": {
+          "edit_similarity": 0.1772695229389179,
+          "exact_match": 0.0,
+          "n_examples": 60,
+          "perplexity": null
+        },
+        "baseline_noise_band": 2.7755575615628914e-17,
+        "contract_version": "0.3.0"
+      }
+    },
+    {
+      "client_id": "client-requests",
+      "cluster_id": "requests",
+      "repeats": 3,
+      "edit_similarity_repeats": [
+        0.161112,
+        0.161112,
+        0.161112
+      ],
+      "baseline_noise_band": 0.0,
+      "in_project": {
+        "client_id": "client-requests",
+        "cluster_id": "requests",
+        "edit_similarity": 0.161112,
+        "exact_match": 0.0,
+        "n_examples": 31,
+        "n_held_out_files": 2,
+        "generation_errors": 0,
+        "perplexity": null,
+        "seed": 20260616,
+        "examples": []
+      },
+      "metrics": {
+        "edit_similarity": 0.16111207757827925,
+        "exact_match": 0.0,
+        "n_examples": 31,
+        "perplexity": null
+      },
+      "eval_result": {
+        "adapter": {
+          "name": "client-requests",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "HumanEval",
+        "pass_at_k": {},
+        "num_tasks": 31,
+        "num_samples_per_task": 1,
+        "created_at": "2026-09-06T17:02:43Z",
+        "run_id": "p5-inproj-20260906T170243Z",
+        "in_project": {
+          "edit_similarity": 0.16111207757827925,
+          "exact_match": 0.0,
+          "n_examples": 31,
+          "perplexity": null
+        },
+        "baseline_noise_band": 0.0,
+        "contract_version": "0.3.0"
+      }
+    },
+    {
+      "client_id": "client-werkzeug",
+      "cluster_id": "werkzeug",
+      "repeats": 3,
+      "edit_similarity_repeats": [
+        0.190458,
+        0.190458,
+        0.190458
+      ],
+      "baseline_noise_band": 0.0,
+      "in_project": {
+        "client_id": "client-werkzeug",
+        "cluster_id": "werkzeug",
+        "edit_similarity": 0.190458,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "n_held_out_files": 5,
+        "generation_errors": 0,
+        "perplexity": null,
+        "seed": 20260616,
+        "examples": []
+      },
+      "metrics": {
+        "edit_similarity": 0.1904577925988562,
+        "exact_match": 0.0,
+        "n_examples": 60,
+        "perplexity": null
+      },
+      "eval_result": {
+        "adapter": {
+          "name": "client-werkzeug",
+          "version": 0,
+          "kind": "client",
+          "cluster_id": null
+        },
+        "benchmark": "HumanEval",
+        "pass_at_k": {},
+        "num_tasks": 60,
+        "num_samples_per_task": 1,
+        "created_at": "2026-09-06T17:02:43Z",
+        "run_id": "p5-inproj-20260906T170243Z",
+        "in_project": {
+          "edit_similarity": 0.1904577925988562,
+          "exact_match": 0.0,
+          "n_examples": 60,
+          "perplexity": null
+        },
+        "baseline_noise_band": 0.0,
+        "contract_version": "0.3.0"
+      }
+    }
+  ]
+}

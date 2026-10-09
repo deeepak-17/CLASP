@@ -1,0 +1,143 @@
+# =============================================================================
+# CLASP-P5 · Week 1 · Tuesday
+# "Decide dataset sourcing approach; start collection script"
+#
+# Declarative definition of the D1 corpus. corpus/collector.py reads this file
+# and nothing else; adding a project to the federation is a config change, not
+# a code change.
+#
+# Run:  python scripts/collect_dataset.py --config configs/dataset.yaml
+# =============================================================================
+corpus:
+  name: "D1"
+  version: "1.0.0"
+  description: "Six permissively licensed OSS Python libraries acting as simulated enterprise projects."
+
+  # ---------------------------------------------------------------------
+  # Where artefacts land. Relative paths resolve against the repository root.
+  # ---------------------------------------------------------------------
+  output:
+    raw_dir: "datasets/raw"
+    corpus_path: "datasets/processed/corpus.jsonl"
+    manifest_path: "datasets/metadata/corpus_manifest.json"
+    # Embed file contents in corpus.jsonl. Set false for an index-only corpus
+    # that references datasets/raw instead (smaller, but not self-contained).
+    include_content: true
+
+  # ---------------------------------------------------------------------
+  # Sourcing approach.
+  #
+  #   git       - shallow-clone each repository at the pinned ref (default).
+  #   local     - read from an already-present checkout under raw_dir.
+  #               Use in air-gapped or CI environments.
+  #   synthetic - generate a deterministic stand-in corpus. Development and
+  #               test only; the manifest is stamped synthetic: true and the
+  #               partition validator refuses to certify it for training.
+  # ---------------------------------------------------------------------
+  acquisition:
+    mode: "${CLASP_P5_ACQUISITION_MODE:git}"
+    git_depth: 1
+    timeout_seconds: 600
+    # Refuse to proceed on a dirty/failed clone rather than silently
+    # collecting a partial corpus.
+    fail_fast: true
+
+  # ---------------------------------------------------------------------
+  # File selection. Applied per source, in this order:
+  #   include_globs -> exclude_globs -> size bounds -> decodability
+  #   -> min_code_lines -> content deduplication
+  # ---------------------------------------------------------------------
+  filters:
+    include_globs:
+      - "**/*.py"
+    exclude_globs:
+      - "**/tests/**"
+      - "**/test/**"
+      - "**/test_*.py"
+      - "**/*_test.py"
+      - "**/conftest.py"
+      - "**/setup.py"
+      - "**/docs/**"
+      - "**/examples/**"
+      - "**/benchmarks/**"
+      - "**/scripts/**"
+      - "**/.tox/**"
+      - "**/.venv/**"
+      - "**/venv/**"
+      - "**/build/**"
+      - "**/dist/**"
+      - "**/__pycache__/**"
+      - "**/migrations/**"
+      - "**/_version.py"
+    # Files below this many code lines carry too little signal to be worth a
+    # training step (mostly __init__ re-export shims).
+    min_code_lines: 10
+    # Guards against vendored blobs and generated parser tables.
+    max_file_bytes: 262144
+    # Drop byte-identical files. Vendored copies across projects would
+    # otherwise leak content between clusters and corrupt the isolation claim.
+    drop_duplicate_content: true
+
+  # ---------------------------------------------------------------------
+  # The federation. One entry == one cluster == one project.
+  #
+  # `ref` pins an exact commit or tag. Branch names are accepted but warned
+  # about, because they make the corpus irreproducible across time.
+  # `subpaths` restricts collection to the library source tree, excluding
+  # repo-level tooling that would otherwise dilute the project's style.
+  # ---------------------------------------------------------------------
+  sources:
+    - cluster_id: "flask"
+      project_label: "Flask"
+      repo_url: "https://github.com/pallets/flask.git"
+      ref: "3.0.3"
+      license: "BSD-3-Clause"
+      subpaths: ["src/flask"]
+      rationale: "Web micro-framework. Dense decorator patterns and app/blueprint class hierarchies."
+
+    - cluster_id: "requests"
+      project_label: "Requests"
+      repo_url: "https://github.com/psf/requests.git"
+      ref: "v2.32.3"
+      license: "Apache-2.0"
+      subpaths: ["src/requests"]
+      rationale: "HTTP client. Session state management and a deliberately small public API surface."
+
+    - cluster_id: "click"
+      project_label: "Click"
+      repo_url: "https://github.com/pallets/click.git"
+      ref: "8.1.7"
+      license: "BSD-3-Clause"
+      subpaths: ["src/click"]
+      rationale: "CLI toolkit. Heavy decorator wrapping and strong type annotation usage."
+
+    - cluster_id: "colorama"
+      project_label: "Colorama"
+      repo_url: "https://github.com/tartley/colorama.git"
+      ref: "0.4.6"
+      license: "BSD-3-Clause"
+      subpaths: ["colorama"]
+      rationale: "Terminal colouring. Smallest cluster; the fast-iteration and imbalance test case."
+
+    - cluster_id: "werkzeug"
+      project_label: "Werkzeug"
+      repo_url: "https://github.com/pallets/werkzeug.git"
+      ref: "3.0.3"
+      license: "BSD-3-Clause"
+      subpaths: ["src/werkzeug"]
+      rationale: "WSGI utilities. Complex HTTP parsing, routing and custom data structures."
+
+    - cluster_id: "jinja"
+      project_label: "Jinja2"
+      repo_url: "https://github.com/pallets/jinja.git"
+      ref: "3.1.4"
+      license: "BSD-3-Clause"
+      subpaths: ["src/jinja2"]
+      rationale: "Template engine. Lexer/parser/compiler pipeline; the most distinctive idiom in D1."
+
+  # ---------------------------------------------------------------------
+  # Only used when acquisition.mode == synthetic.
+  # ---------------------------------------------------------------------
+  synthetic:
+    files_per_source: 12
+    seed: 20260616

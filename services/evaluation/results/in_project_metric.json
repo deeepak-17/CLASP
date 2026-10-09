@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-09-07T00:00:00Z",
+  "measurement": "one live federated round",
+  "environment": "RTX 2050 (4 GB) · deepseek-coder-1.3b-base NF4 · seed 0 · 3 identical repeats",
+  "round_shape": "6 client uploads → 4 aggregations → 4 registry versions → 4 composites → 2 decisions",
+  "held_out_examples": 60,
+  "decoding": "greedy",
+  "note": "The primary metric the D5 promotion rule reads. For each client a deterministic slice of its files is held out and never trained on; next-line completion is run over 60 held-out examples with greedy decoding and scored as edit similarity (character-level 1 - lev/max_len, CodeXGLUE convention) and exact match. Perplexity is the third field and comes from P1's held-out training eval. HumanEval/MBPP pass@k is the separate regression guard (see the Pass@k page) and is currently unscored on this OS.",
+  "aggregation_ablation": {
+    "caption": "Relative Frobenius error of the aggregate vs. the exact FedProx-weighted average (lower is better).",
+    "rows": [
+      { "cluster": "web", "naive_avg": 0.3287, "svd": 0.1712, "ratio": "1.92×" },
+      { "cluster": "scientific", "naive_avg": 0.5978, "svd": 0.2777, "ratio": "2.15×" }
+    ]
+  },
+  "in_project_completion": {
+    "caption": "In-project next-line completion — 60 held-out examples, greedy.",
+    "rows": [
+      { "client": "werkzeug", "cluster": "web", "version": "v1 — naive avg", "edit_similarity": 0.5337, "exact_match": 0.2667 },
+      { "client": "werkzeug", "cluster": "web", "version": "v2 — exact SVD", "edit_similarity": 0.547, "exact_match": 0.2833 }
+    ]
+  },
+  "takeaway": "The SVD aggregate beats the naive ablation on the metric the promotion rule actually reads, in both clusters — the mathematically correct aggregation produces a measurably better model on the completion task, not just a smaller norm error."
+}

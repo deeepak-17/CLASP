@@ -1,0 +1,494 @@
+{
+  "feed_version": "1.0.0",
+  "generated_at": "2026-10-09T06:21:52Z",
+  "rounds": [
+    1,
+    2
+  ],
+  "nodes": [
+    {
+      "id": "r1:scientific/client-numpy",
+      "kind": "client",
+      "label": "numpy r1",
+      "cluster": "scientific",
+      "round": 1,
+      "trained_on": "base"
+    },
+    {
+      "id": "r1:scientific/client-pandas",
+      "kind": "client",
+      "label": "pandas r1",
+      "cluster": "scientific",
+      "round": 1,
+      "trained_on": "base"
+    },
+    {
+      "id": "r1:scientific/client-scikit-learn",
+      "kind": "client",
+      "label": "scikit-learn r1",
+      "cluster": "scientific",
+      "round": 1,
+      "trained_on": "base"
+    },
+    {
+      "id": "r1:web/client-flask",
+      "kind": "client",
+      "label": "flask r1",
+      "cluster": "web",
+      "round": 1,
+      "trained_on": "base"
+    },
+    {
+      "id": "r1:web/client-requests",
+      "kind": "client",
+      "label": "requests r1",
+      "cluster": "web",
+      "round": 1,
+      "trained_on": "base"
+    },
+    {
+      "id": "r1:web/client-werkzeug",
+      "kind": "client",
+      "label": "werkzeug r1",
+      "cluster": "web",
+      "round": 1,
+      "trained_on": "base"
+    },
+    {
+      "id": "r1:cluster-scientific",
+      "kind": "cluster",
+      "label": "cluster-scientific r1",
+      "cluster": "scientific",
+      "round": 1,
+      "aggregation": "svd (edge-local)",
+      "rel_err_vs_exact": 0.278619,
+      "source": "edge"
+    },
+    {
+      "id": "r1:cluster-web",
+      "kind": "cluster",
+      "label": "cluster-web r1",
+      "cluster": "web",
+      "round": 1,
+      "aggregation": "svd (edge-local)",
+      "rel_err_vs_exact": 0.172242,
+      "source": "edge"
+    },
+    {
+      "id": "registry:cluster-scientific@v2",
+      "kind": "cluster",
+      "label": "cluster-scientific v2",
+      "cluster": "scientific",
+      "round": 1,
+      "aggregation": "svd_exact",
+      "sha256": "139a801adebb31b554024395f63f5d728d5ed25c771f69d9fa7ea9a04a5fa03f",
+      "source": "registry"
+    },
+    {
+      "id": "registry:cluster-web@v2",
+      "kind": "cluster",
+      "label": "cluster-web v2",
+      "cluster": "web",
+      "round": 1,
+      "aggregation": "svd_exact",
+      "sha256": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279",
+      "source": "registry"
+    },
+    {
+      "id": "r1:composite:scientific/client-numpy",
+      "kind": "composite",
+      "label": "numpy composite r1",
+      "cluster": "scientific",
+      "round": 1,
+      "alpha": 0.0,
+      "beta": 1.0,
+      "composite_ppl": 2.653,
+      "base_ppl": 2.736
+    },
+    {
+      "id": "r1:composite:scientific/client-pandas",
+      "kind": "composite",
+      "label": "pandas composite r1",
+      "cluster": "scientific",
+      "round": 1,
+      "alpha": 0.0,
+      "beta": 1.0,
+      "composite_ppl": 2.718,
+      "base_ppl": 2.91
+    },
+    {
+      "id": "r1:composite:scientific/client-scikit-learn",
+      "kind": "composite",
+      "label": "scikit-learn composite r1",
+      "cluster": "scientific",
+      "round": 1,
+      "alpha": 0.0,
+      "beta": 1.0,
+      "composite_ppl": 2.371,
+      "base_ppl": 2.584
+    },
+    {
+      "id": "r1:composite:web/client-flask",
+      "kind": "composite",
+      "label": "flask composite r1",
+      "cluster": "web",
+      "round": 1,
+      "alpha": 0.0,
+      "beta": 1.0,
+      "composite_ppl": 2.269,
+      "base_ppl": 2.452
+    },
+    {
+      "id": "r1:composite:web/client-requests",
+      "kind": "composite",
+      "label": "requests composite r1",
+      "cluster": "web",
+      "round": 1,
+      "alpha": 0.0,
+      "beta": 1.0,
+      "composite_ppl": 3.26,
+      "base_ppl": 3.463
+    },
+    {
+      "id": "r1:composite:web/client-werkzeug",
+      "kind": "composite",
+      "label": "werkzeug composite r1",
+      "cluster": "web",
+      "round": 1,
+      "alpha": 0.0,
+      "beta": 1.0,
+      "composite_ppl": 2.653,
+      "base_ppl": 2.828
+    },
+    {
+      "id": "r2:scientific/client-numpy",
+      "kind": "client",
+      "label": "numpy r2",
+      "cluster": "scientific",
+      "round": 2,
+      "trained_on": "base + 0.5·cluster-scientific v2"
+    },
+    {
+      "id": "r2:scientific/client-pandas",
+      "kind": "client",
+      "label": "pandas r2",
+      "cluster": "scientific",
+      "round": 2,
+      "trained_on": "base + 0.5·cluster-scientific v2"
+    },
+    {
+      "id": "r2:scientific/client-scikit-learn",
+      "kind": "client",
+      "label": "scikit-learn r2",
+      "cluster": "scientific",
+      "round": 2,
+      "trained_on": "base + 0.5·cluster-scientific v2"
+    },
+    {
+      "id": "r2:web/client-flask",
+      "kind": "client",
+      "label": "flask r2",
+      "cluster": "web",
+      "round": 2,
+      "trained_on": "base + 0.5·cluster-web v2"
+    },
+    {
+      "id": "r2:web/client-requests",
+      "kind": "client",
+      "label": "requests r2",
+      "cluster": "web",
+      "round": 2,
+      "trained_on": "base + 0.5·cluster-web v2"
+    },
+    {
+      "id": "r2:web/client-werkzeug",
+      "kind": "client",
+      "label": "werkzeug r2",
+      "cluster": "web",
+      "round": 2,
+      "trained_on": "base + 0.5·cluster-web v2"
+    },
+    {
+      "id": "r2:composite:scientific/client-numpy",
+      "kind": "composite",
+      "label": "numpy composite r2",
+      "cluster": "scientific",
+      "round": 2,
+      "alpha": 0.5,
+      "beta": 1.0,
+      "composite_ppl": 2.651,
+      "base_ppl": 2.736
+    },
+    {
+      "id": "r2:composite:scientific/client-pandas",
+      "kind": "composite",
+      "label": "pandas composite r2",
+      "cluster": "scientific",
+      "round": 2,
+      "alpha": 0.5,
+      "beta": 1.0,
+      "composite_ppl": 2.714,
+      "base_ppl": 2.91
+    },
+    {
+      "id": "r2:composite:scientific/client-scikit-learn",
+      "kind": "composite",
+      "label": "scikit-learn composite r2",
+      "cluster": "scientific",
+      "round": 2,
+      "alpha": 0.5,
+      "beta": 1.0,
+      "composite_ppl": 2.367,
+      "base_ppl": 2.584
+    },
+    {
+      "id": "r2:composite:web/client-flask",
+      "kind": "composite",
+      "label": "flask composite r2",
+      "cluster": "web",
+      "round": 2,
+      "alpha": 0.5,
+      "beta": 1.0,
+      "composite_ppl": 2.264,
+      "base_ppl": 2.452
+    },
+    {
+      "id": "r2:composite:web/client-requests",
+      "kind": "composite",
+      "label": "requests composite r2",
+      "cluster": "web",
+      "round": 2,
+      "alpha": 0.5,
+      "beta": 1.0,
+      "composite_ppl": 3.259,
+      "base_ppl": 3.463
+    },
+    {
+      "id": "r2:composite:web/client-werkzeug",
+      "kind": "composite",
+      "label": "werkzeug composite r2",
+      "cluster": "web",
+      "round": 2,
+      "alpha": 0.5,
+      "beta": 1.0,
+      "composite_ppl": 2.648,
+      "base_ppl": 2.828
+    }
+  ],
+  "edges": [
+    {
+      "source": "r1:scientific/client-numpy",
+      "target": "r1:cluster-scientific",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:scientific/client-pandas",
+      "target": "r1:cluster-scientific",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:scientific/client-scikit-learn",
+      "target": "r1:cluster-scientific",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:web/client-flask",
+      "target": "r1:cluster-web",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:web/client-requests",
+      "target": "r1:cluster-web",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:web/client-werkzeug",
+      "target": "r1:cluster-web",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:scientific/client-numpy",
+      "target": "r1:composite:scientific/client-numpy",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:cluster-scientific",
+      "target": "r1:composite:scientific/client-numpy",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:scientific/client-pandas",
+      "target": "r1:composite:scientific/client-pandas",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:cluster-scientific",
+      "target": "r1:composite:scientific/client-pandas",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:scientific/client-scikit-learn",
+      "target": "r1:composite:scientific/client-scikit-learn",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:cluster-scientific",
+      "target": "r1:composite:scientific/client-scikit-learn",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:web/client-flask",
+      "target": "r1:composite:web/client-flask",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:cluster-web",
+      "target": "r1:composite:web/client-flask",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:web/client-requests",
+      "target": "r1:composite:web/client-requests",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:cluster-web",
+      "target": "r1:composite:web/client-requests",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:web/client-werkzeug",
+      "target": "r1:composite:web/client-werkzeug",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:cluster-web",
+      "target": "r1:composite:web/client-werkzeug",
+      "kind": "composed_into"
+    },
+    {
+      "source": "r1:scientific/client-numpy",
+      "target": "registry:cluster-scientific@v2",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:scientific/client-pandas",
+      "target": "registry:cluster-scientific@v2",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:scientific/client-scikit-learn",
+      "target": "registry:cluster-scientific@v2",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:web/client-flask",
+      "target": "registry:cluster-web@v2",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:web/client-requests",
+      "target": "registry:cluster-web@v2",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "r1:web/client-werkzeug",
+      "target": "registry:cluster-web@v2",
+      "kind": "aggregated_into"
+    },
+    {
+      "source": "registry:cluster-scientific@v2",
+      "target": "r2:scientific/client-numpy",
+      "kind": "trained_on"
+    },
+    {
+      "source": "r2:scientific/client-numpy",
+      "target": "r2:composite:scientific/client-numpy",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-scientific@v2",
+      "target": "r2:composite:scientific/client-numpy",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-scientific@v2",
+      "target": "r2:scientific/client-pandas",
+      "kind": "trained_on"
+    },
+    {
+      "source": "r2:scientific/client-pandas",
+      "target": "r2:composite:scientific/client-pandas",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-scientific@v2",
+      "target": "r2:composite:scientific/client-pandas",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-scientific@v2",
+      "target": "r2:scientific/client-scikit-learn",
+      "kind": "trained_on"
+    },
+    {
+      "source": "r2:scientific/client-scikit-learn",
+      "target": "r2:composite:scientific/client-scikit-learn",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-scientific@v2",
+      "target": "r2:composite:scientific/client-scikit-learn",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-web@v2",
+      "target": "r2:web/client-flask",
+      "kind": "trained_on"
+    },
+    {
+      "source": "r2:web/client-flask",
+      "target": "r2:composite:web/client-flask",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-web@v2",
+      "target": "r2:composite:web/client-flask",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-web@v2",
+      "target": "r2:web/client-requests",
+      "kind": "trained_on"
+    },
+    {
+      "source": "r2:web/client-requests",
+      "target": "r2:composite:web/client-requests",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-web@v2",
+      "target": "r2:composite:web/client-requests",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-web@v2",
+      "target": "r2:web/client-werkzeug",
+      "kind": "trained_on"
+    },
+    {
+      "source": "r2:web/client-werkzeug",
+      "target": "r2:composite:web/client-werkzeug",
+      "kind": "composed_into"
+    },
+    {
+      "source": "registry:cluster-web@v2",
+      "target": "r2:composite:web/client-werkzeug",
+      "kind": "composed_into"
+    }
+  ],
+  "sources": [
+    "results/edge_rounds/round1_manifest.json",
+    "results/edge_rounds/round2_d3_manifest.json"
+  ]
+}

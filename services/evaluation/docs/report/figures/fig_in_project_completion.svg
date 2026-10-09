@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="In-project next-line completion by aggregate">
+<rect width="760" height="380" fill="#ffffff"/>
+<text x="16.0" y="26.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">In-project next-line completion by aggregate</text>
+<text x="16.0" y="46.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">60 held-out examples, greedy decoding. Higher is better.</text>
+<rect x="64.0" y="57.0" width="10" height="10" rx="2" fill="#2a78d6"/>
+<text x="79.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">werkzeug · v1 — naive avg</text>
+<rect x="269.0" y="57.0" width="10" height="10" rx="2" fill="#eb6834"/>
+<text x="284.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">werkzeug · v2 — exact SVD</text>
+<line x1="64" x2="744" y1="336.0" y2="336.0" stroke="#e1e0d9"/>
+<text x="56.0" y="340.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.00</text>
+<line x1="64" x2="744" y1="250.7" y2="250.7" stroke="#e1e0d9"/>
+<text x="56.0" y="254.7" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.20</text>
+<line x1="64" x2="744" y1="165.3" y2="165.3" stroke="#e1e0d9"/>
+<text x="56.0" y="169.3" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.40</text>
+<line x1="64" x2="744" y1="80.0" y2="80.0" stroke="#e1e0d9"/>
+<text x="56.0" y="84.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.60</text>
+<path d="M205.0,336.0 V112.3 Q205.0,108.3 209.0,108.3 H229.0 Q233.0,108.3 233.0,112.3 V336.0 Z" fill="#2a78d6"><title>edit similarity · werkzeug · v1 — naive avg: 0.53</title></path>
+<path d="M235.0,336.0 V106.6 Q235.0,102.6 239.0,102.6 H259.0 Q263.0,102.6 263.0,106.6 V336.0 Z" fill="#eb6834"><title>edit similarity · werkzeug · v2 — exact SVD: 0.55</title></path>
+<text x="234.0" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">edit similarity</text>
+<path d="M545.0,336.0 V226.2 Q545.0,222.2 549.0,222.2 H569.0 Q573.0,222.2 573.0,226.2 V336.0 Z" fill="#2a78d6"><title>exact match · werkzeug · v1 — naive avg: 0.27</title></path>
+<path d="M575.0,336.0 V219.1 Q575.0,215.1 579.0,215.1 H599.0 Q603.0,215.1 603.0,219.1 V336.0 Z" fill="#eb6834"><title>exact match · werkzeug · v2 — exact SVD: 0.28</title></path>
+<text x="574.0" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">exact match</text>
+<line x1="64" x2="744" y1="336.0" y2="336.0" stroke="#c3c2b7"/>
+</svg>
