@@ -52,7 +52,8 @@ from evaluation.interfaces.contracts import (
 from evaluation.interfaces.registry_client import SnapshotNotFoundError
 from evaluation.utils.errors import ClaspP5Error, ContractViolationError
 
-#: The frozen contracts version this module writes and reads.
+#: The contracts version of the payloads this module writes. The edge lane sends the
+#: same v1.0 shape; contracts v1.1 (additive) parses it unchanged.
 WIRE_CONTRACTS_VERSION = "1.0.0"
 
 #: The benchmark the D5 guard reads (``registry.promotion._guard_holds``).
@@ -163,41 +164,16 @@ def promote_body(
 
 
 def to_contracts_eval_result(wire: Mapping[str, Any]):
-    """Parse a wire dict into the real ``contracts.EvalResult``, field by field.
+    """Parse a wire dict into the real ``contracts.EvalResult``.
 
-    Mirrors ``registry.app._eval_result_from`` so a payload that passes here
-    parses there. Needs the ``contracts`` package (``pip install -e contracts``,
-    which ``clasp-evaluation`` depends on).
+    Uses ``contracts.EvalResult.from_json`` — exactly what ``registry.app``
+    calls on ``POST /promote`` (contracts v1.1, which accepts v1.0 payloads
+    unchanged) — so a payload that parses here parses there. Needs the
+    ``contracts`` package, which ``clasp-evaluation`` depends on.
     """
     import contracts as c
 
-    def _in_project(d: Mapping[str, Any] | None):
-        if d is None:
-            return None
-        return c.InProjectMetrics(
-            edit_similarity=d["edit_similarity"],
-            exact_match=d["exact_match"],
-            perplexity=d["perplexity"],
-            n_examples=d["n_examples"],
-        )
-
-    ref = wire["adapter"]
-    return c.EvalResult(
-        adapter=c.AdapterRef(
-            name=ref["name"],
-            version=ref["version"],
-            kind=c.AdapterKind(ref.get("kind", "client")),
-            cluster_id=ref.get("cluster_id"),
-        ),
-        in_project=_in_project(wire["in_project"]),
-        guard=tuple(
-            c.GuardMetrics(benchmark=g["benchmark"], pass_at_k={int(k): v for k, v in g["pass_at_k"].items()})
-            for g in wire.get("guard", ())
-        ),
-        baseline_in_project=_in_project(wire.get("baseline_in_project")),
-        baseline_noise_band=wire.get("baseline_noise_band", 0.0),
-        seed=wire.get("seed", 0),
-    )
+    return c.EvalResult.from_json(dict(wire))
 
 
 # ---------------------------------------------------------------------------
