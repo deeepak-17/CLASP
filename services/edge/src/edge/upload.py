@@ -190,10 +190,10 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
     detail = _http_error(r)
     hints = {
         404: "the cluster was not registered; press 'Register clusters' in demo_ui on laptop A",
-        409: ("the cluster moved to a new round (an aggregate ran) — run this again to upload "
+        409: ("the cluster moved to a new round (an aggregate ran) - run this again to upload "
               "into the current round" if "round_id" in detail else
               "this adapter was trained from another cluster's adapter; pull the current one"),
-        403: ("this edge's certificate is for a different client — use --client-id matching "
+        403: ("this edge's certificate is for a different client - use --client-id matching "
               "the certificate's CN" if "authenticated identity" in detail else
               "this client is assigned to another cluster"),
         401: "the cluster requires a client certificate: pass --mtls-dir",
