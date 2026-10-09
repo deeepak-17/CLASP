@@ -4,195 +4,240 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>CLASP Edge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700;800&display=swap" />
 <style>
+/* Same system as demo_ui's live round: cool paper, ink, one colour per cluster. */
 :root {
-  --bg: #f6f7f9; --card: #ffffff; --ink: #1d2433; --muted: #5d6676; --line: #dfe3ea;
-  --accent: #2557d6; --accent-ink: #ffffff; --good: #18794e; --good-bg: #e6f4ec;
-  --bad: #b42318; --bad-bg: #fdecea; --warn: #9a6700; --warn-bg: #fff4d6; --mono-bg: #f0f2f5;
+  --paper: #e8edf1; --sheet: #f7f9fa; --ink: #172434; --ink-2: #4a5868; --rule: #c9d3db;
+  --web: #0b7285; --scientific: #6741b0; --ok: #23784a; --alert: #b42318;
+  --lane: var(--ink);
+  --font: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12151b; --card: #1a1f27; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2b323d;
-    --accent: #6b8cff; --accent-ink: #0b0f17; --good: #4cc38a; --good-bg: #133222;
-    --bad: #ff7b72; --bad-bg: #3b1714; --warn: #e3b341; --warn-bg: #3a2f10; --mono-bg: #11151b;
-  }
-}
+body.web { --lane: var(--web); }
+body.scientific { --lane: var(--scientific); }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink);
-       font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-header { padding: 18px 24px; border-bottom: 1px solid var(--line); background: var(--card);
-         display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
-header h1 { margin: 0; font-size: 20px; }
-header .who { font-size: 20px; font-weight: 600; color: var(--accent); }
-header .where { color: var(--muted); font-size: 13px; }
-main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 16px; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
-.card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.steps { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
-.steps b { color: var(--ink); }
-.row { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; }
-.big { font-size: 28px; font-weight: 650; }
-.pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line); margin: 2px 4px 2px 0; }
-.pill.done { background: var(--good-bg); color: var(--good); border-color: transparent; }
-.pill.me { outline: 2px solid var(--accent); }
-.badge { padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
-.ok { background: var(--good-bg); color: var(--good); }
-.bad { background: var(--bad-bg); color: var(--bad); }
-.warn { background: var(--warn-bg); color: var(--warn); }
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-tr.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-tr[data-id] { cursor: pointer; }
-button { font: inherit; border-radius: 8px; padding: 10px 18px; border: 1px solid var(--line);
-         background: var(--card); color: var(--ink); cursor: pointer; }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; font-size: 16px; }
-button:disabled { opacity: .5; cursor: not-allowed; }
-label { font-size: 14px; }
-input[type=text], input[type=number] { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
-         background: var(--bg); color: var(--ink); }
-.log { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--mono-bg);
-       border-radius: 8px; padding: 10px 12px; height: 240px; overflow: auto; white-space: pre-wrap; }
-.muted { color: var(--muted); font-size: 13px; }
-.result { margin-top: 10px; padding: 10px 12px; border-radius: 8px; display: none; }
-details summary { cursor: pointer; font-weight: 600; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 18px; margin-top: 12px; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 400 17px/1.5 var(--font); font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 3px solid var(--lane); outline-offset: 2px; }
+
+header { padding: 28px 40px 20px; border-bottom: 1px solid var(--rule); border-top: 8px solid var(--lane); }
+header h1 { margin: 0; font-size: 36.6px; line-height: 1.1; font-weight: 800; color: var(--lane); overflow-wrap: anywhere; }
+header p { margin: 6px 0 0; color: var(--ink-2); font-size: 18.75px; }
+header .link { font-size: 15px; margin-top: 10px; }
+header .link b { color: var(--ink); }
+header .link.down { color: var(--alert); }
+
+main { max-width: 1120px; padding: 24px 40px 40px; display: grid; gap: 28px; }
+h2 { margin: 0 0 4px; font-size: 23.4px; font-weight: 800; }
+.sub { margin: 0 0 14px; color: var(--ink-2); max-width: 64ch; }
+
+/* the parcel: what leaves this laptop */
+.parcels { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.parcel { position: relative; display: block; cursor: pointer; background: var(--sheet); border: 1.5px dashed var(--rule); border-radius: 10px; padding: 14px 16px 14px 44px; }
+.parcel input { position: absolute; left: 16px; top: 18px; width: 18px; height: 18px; accent-color: var(--lane); }
+.parcel .name { font-weight: 800; font-size: 18.75px; }
+.parcel .meta { font-size: 15px; color: var(--ink-2); }
+.parcel .seal { display: inline-block; margin-top: 6px; font-size: 14px; font-weight: 700; color: var(--lane); }
+.parcel .seal.off { color: var(--ink-2); font-weight: 400; }
+.parcel:has(input:checked) { border: 1.5px solid var(--lane); background: color-mix(in srgb, var(--lane) 10%, var(--sheet)); }
+.empty { background: var(--sheet); border-radius: 10px; padding: 16px; color: var(--ink-2); }
+
+.send { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin-top: 16px; }
+button { font: 700 17px/1.2 var(--font); color: var(--sheet); background: var(--ink); border: 0; border-radius: 6px; padding: 13px 22px; cursor: pointer; }
+button:hover:not(:disabled) { background: var(--lane); }
+button:disabled { background: var(--rule); color: var(--ink-2); cursor: not-allowed; }
+button.quiet { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); padding: 10px 16px; font-size: 16px; }
+button.quiet:hover:not(:disabled) { background: var(--ink); color: var(--sheet); }
+.verdict { font-size: 16px; max-width: 70ch; }
+.verdict.ok { color: var(--ok); font-weight: 700; }
+.verdict.bad { color: var(--alert); }
+
+/* tracking: a real sequence, so it is numbered */
+.track { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; counter-reset: step; }
+.track li { counter-increment: step; position: relative; padding: 38px 16px 0 0; border-top: 4px solid var(--rule); color: var(--ink-2); }
+.track li::before { content: counter(step); position: absolute; top: -16px; left: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--paper); border: 3px solid var(--rule); font-weight: 800; font-size: 14px; display: grid; place-items: center; color: var(--ink-2); }
+.track li.done { border-top-color: var(--lane); color: var(--ink); }
+.track li.done::before { background: var(--lane); border-color: var(--lane); color: var(--sheet); }
+.track li b { display: block; font-size: 18.75px; }
+.track li span { font-size: 15px; }
+
+.others { margin-top: 18px; font-size: 15px; color: var(--ink-2); }
+.others b { color: var(--ink); }
+
+details.train { background: var(--sheet); border-radius: 10px; padding: 14px 18px; }
+details.train summary { cursor: pointer; font-weight: 700; font-size: 18.75px; }
+details.train p { color: var(--ink-2); max-width: 64ch; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 20px; margin: 12px 0 14px; }
+.fields label { display: grid; gap: 4px; font-size: 15px; font-weight: 700; }
+.fields label.check { display: flex; align-items: center; gap: 8px; }
+input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--rule); background: var(--paper); color: var(--ink); }
+
+.log { background: var(--sheet); border-radius: 10px; padding: 12px 14px; max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: 14.5px; color: var(--ink-2); }
+
+@media (max-width: 760px) {
+  header { padding: 20px 16px 16px; }
+  main { padding: 16px; }
+  .track { grid-template-columns: 1fr; gap: 22px; }
+  .track li { border-top: 0; border-left: 4px solid var(--rule); padding: 0 0 0 26px; }
+  .track li.done { border-left-color: var(--lane); }
+  .track li::before { top: 0; left: -16px; }
+}
 </style>
 </head>
 <body>
 <header>
-  <h1>CLASP Edge</h1>
-  <span class="who" id="who">…</span>
-  <span class="where" id="where"></span>
+  <h1 id="who">This laptop</h1>
+  <p id="role">Trains on its own code and sends only the adapter.</p>
+  <div class="link" id="where">Checking the cluster…</div>
 </header>
 
 <main>
-  <section class="card">
-    <div class="steps">
-      <span><b>1</b> Train a LoRA adapter on this laptop's own code (done beforehand, or below)</span>·
-      <span><b>2</b> Upload it to the cluster on laptop A</span>·
-      <span><b>3</b> Laptop A aggregates the cluster's uploads and publishes the result</span>
+  <section>
+    <h2>Send an adapter</h2>
+    <p class="sub">Your source code never leaves this laptop. What travels is the adapter trained on it: a few million numbers that describe how to steer the shared model.</p>
+    <div id="adapters" class="parcels"><div class="empty">Looking for trained adapters…</div></div>
+    <div class="send">
+      <button id="upload" disabled>Send adapter to cluster</button>
+      <span class="verdict" id="result"></span>
     </div>
   </section>
 
-  <section class="card">
-    <h2>Cluster round</h2>
-    <div id="cluster">checking…</div>
+  <section>
+    <h2>Where it is now</h2>
+    <p class="sub" id="trackhint">Laptop A merges every laptop's adapter in the cluster, then publishes the result.</p>
+    <ol class="track" id="track"></ol>
+    <div class="others" id="others"></div>
   </section>
 
-  <section class="card">
-    <h2>Adapters on this laptop</h2>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th></th><th>Set</th><th>Client</th><th>Cluster</th><th>Weight (blocks)</th><th>DP ε</th><th>D3 α</th><th>Size</th><th>Trained</th></tr></thead>
-        <tbody id="adapters"><tr><td colspan="9" class="muted">loading…</td></tr></tbody>
-      </table>
+  <details class="train">
+    <summary>Train a new adapter here first</summary>
+    <p>Runs a short fine-tune on this laptop's own repository. It needs an NVIDIA GPU. The new adapter appears above, ready to send.</p>
+    <div class="fields">
+      <label>Repository<input type="text" id="t-client" placeholder="web/client-flask" /></label>
+      <label>Training steps<input type="number" id="t-steps" value="50" min="1" max="2000" /></label>
+      <label>Start from the cluster's adapter (optional)<input type="text" id="t-cluster" placeholder="folder of the cluster adapter" /></label>
+      <label class="check"><input type="checkbox" id="t-dp" /> Train with differential privacy (ε at most 8)</label>
     </div>
-    <div class="row" style="margin-top:14px">
-      <button class="primary" id="upload" disabled>Upload to cluster</button>
-      <span class="muted" id="picked">Pick an adapter.</span>
-    </div>
-    <div class="result" id="result"></div>
-  </section>
+    <button class="quiet" id="train">Start training</button>
+  </details>
 
-  <section class="card">
-    <details>
-      <summary>Short fine-tune on this laptop (needs an NVIDIA GPU)</summary>
-      <p class="muted">Runs <code>python -m edge.train_client</code> on this laptop's client partition. The new adapter appears above under <code>live/</code>, ready to upload.</p>
-      <div class="grid2">
-        <label>Client <input type="text" id="t-client" placeholder="web/client-flask" /></label>
-        <label>Steps <input type="number" id="t-steps" value="50" min="1" max="2000" /></label>
-        <label><input type="checkbox" id="t-dp" /> DP-SGD (ε ≤ 8, D7)</label>
-        <label>Frozen cluster adapter (D3, optional) <input type="text" id="t-cluster" placeholder="path to adapter dir" /></label>
-      </div>
-      <div style="margin-top:12px"><button id="train">Start training</button></div>
-    </details>
-  </section>
-
-  <section class="card">
-    <h2>Log</h2>
-    <div class="log" id="log">ready.</div>
+  <section>
+    <h2>Activity</h2>
+    <div class="log" id="log">Nothing yet.</div>
   </section>
 </main>
 
 <script>
-let picked = null, me = null, lastLines = 0;
+let picked = null, me = null, lastLines = 0, jobRunning = false, lastStatus = null, adapterList = [];
 
 async function get(path) { const r = await fetch(path); return r.json(); }
 async function post(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return { ok: r.ok, body: await r.json().catch(() => ({})) };
 }
-const esc = (s) => String(s ?? "—").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function myCluster() {
+  if (lastStatus && lastStatus.my_cluster) return lastStatus.my_cluster;
+  const a = adapterList.find(x => x.id === picked) || adapterList[0];
+  return a ? a.cluster : null;
+}
+
+function paintIdentity() {
+  const cl = myCluster();
+  document.body.className = ["web", "scientific"].includes(cl) ? cl : "";
+  document.getElementById("who").textContent = me || "This laptop";
+  document.getElementById("role").textContent = cl
+    ? `Edge laptop in the ${cl} cluster. It trains on its own code and sends only the adapter.`
+    : "Trains on its own code and sends only the adapter.";
+}
 
 async function refreshStatus() {
   const s = await get("/api/status");
-  me = s.client_id;
-  document.getElementById("who").textContent = s.client_id || "all clients";
-  document.getElementById("where").innerHTML =
-    `cluster ${esc(s.cluster_url)} · ${s.secure ? '<span class="badge ok">mTLS</span>' : '<span class="badge warn">plain HTTP</span>'}`;
-  const el = document.getElementById("cluster");
+  lastStatus = s; me = s.client_id;
+  const where = document.getElementById("where");
   if (!s.reachable) {
-    el.innerHTML = `<span class="badge bad">unreachable</span> ${esc(s.error)}<div class="muted">${esc(s.hint)}</div>`;
-    return;
+    where.className = "link down";
+    where.textContent = `Can't reach the cluster at ${s.cluster_url}. ${s.hint || ""}`;
+  } else {
+    where.className = "link";
+    where.innerHTML = `Connected to the cluster at <b>${esc(s.cluster_url)}</b>, ${s.secure ? "over mutual TLS with this laptop's certificate" : "over plain HTTP"}.`;
   }
-  // the service always has an empty 'cluster-default'; show clusters someone is using
-  const used = (c) => (c.members || []).length || c.uploaded_clients.length || c.aggregated_round_id !== null;
-  const ids = Object.keys(s.clusters).filter(cid => used(s.clusters[cid]));
-  if (!ids.length) { el.innerHTML = `<span class="badge warn">no clusters registered yet</span> <span class="muted">Laptop A registers them from its demo panel.</span>`; return; }
-  const show = s.my_cluster ? [s.my_cluster] : ids;
-  el.innerHTML = show.map(cid => {
-    const c = s.clusters[cid];
-    const people = [...new Set([...(c.members || []), ...(c.uploaded_clients || [])])].sort();
-    const pills = people.map(p => `<span class="pill ${c.uploaded_clients.includes(p) ? "done" : ""} ${p === me ? "me" : ""}">${c.uploaded_clients.includes(p) ? "✓ " : ""}${esc(p)}</span>`).join("") || '<span class="muted">no members</span>';
-    const agg = c.aggregated_round_id !== null ? `<div class="muted">last aggregate: round ${c.aggregated_round_id} from ${esc(c.aggregated_clients.join(", "))}</div>` : "";
-    return `<div class="row"><div><div class="muted">cluster</div><div class="big">${esc(cid)}</div></div>
-      <div><div class="muted">round</div><div class="big">${c.round_id}</div></div>
-      <div><div class="muted">uploaded</div><div class="big">${c.uploaded_clients.length}/${(c.members || []).length || "?"}</div></div></div>
-      <div style="margin-top:8px">${pills}</div>${agg}`;
-  }).join("<hr style='border:none;border-top:1px solid var(--line)'>");
+  paintIdentity();
+  renderTrack(s);
+}
+
+function renderTrack(s) {
+  const track = document.getElementById("track");
+  const others = document.getElementById("others");
+  const cid = s.my_cluster;
+  const c = s.reachable && cid ? s.clusters[cid] : null;
+  const hasAdapter = adapterList.length > 0;
+  const received = !!(c && c.uploaded_clients.includes(me));
+  const merged = !!(c && c.aggregated_clients.includes(me) && !received);
+  const steps = [
+    [hasAdapter, "Trained here", hasAdapter ? `${adapterList.length} adapter${adapterList.length === 1 ? "" : "s"} on this laptop` : "No adapter yet"],
+    [!!c, "Round open", c ? `Cluster ${esc(cid)} is collecting round ${c.round_id}` : (s.reachable ? "Waiting for laptop A to register this laptop" : "Cluster not reachable")],
+    [received || merged, "Received", received ? `In round ${c.round_id}, waiting to be merged` : (merged ? "Delivered" : "Not sent in this round")],
+    [merged, "Merged", merged ? `Part of round ${c.aggregated_round_id}'s cluster adapter` : "Laptop A merges once the cluster's adapters arrive"],
+  ];
+  track.innerHTML = steps.map(([done, title, text]) => `<li class="${done ? "done" : ""}"><b>${title}</b><span>${text}</span></li>`).join("");
+  if (c) {
+    const people = [...new Set([...(c.members || []), ...c.uploaded_clients])].filter(p => p !== me).sort();
+    others.innerHTML = people.length
+      ? "Other laptops in this cluster: " + people.map(p => `<b>${esc(p)}</b> ${c.uploaded_clients.includes(p) ? "has sent" : "has not sent"}`).join(", ") + "."
+      : "";
+  } else others.textContent = "";
 }
 
 async function loadAdapters() {
   const { adapters } = await get("/api/adapters");
-  const tb = document.getElementById("adapters");
-  if (!adapters.length) { tb.innerHTML = `<tr><td colspan="9" class="muted">No trained adapters found for this client. Copy the setup bundle, or train one below.</td></tr>`; return; }
-  tb.innerHTML = adapters.map(a => `<tr data-id="${esc(a.id)}" class="${a.id === picked ? "sel" : ""}">
-    <td><input type="radio" name="a" ${a.id === picked ? "checked" : ""}></td><td>${esc(a.set)}</td><td>${esc(a.client_id)}</td><td>${esc(a.cluster)}</td>
-    <td>${esc(a.num_examples)}</td><td>${a.epsilon == null ? '<span class="muted">off</span>' : a.epsilon.toFixed(2)}</td><td>${esc(a.d3_alpha)}</td>
-    <td>${a.size_mb} MB</td><td class="muted">${esc((a.trained_utc || "").slice(0, 16).replace("T", " "))}</td></tr>`).join("");
-  tb.querySelectorAll("tr[data-id]").forEach(tr => tr.onclick = () => {
-    picked = tr.dataset.id; document.getElementById("picked").textContent = `Selected: ${picked}`; loadAdapters(); syncButtons();
-  });
-  if (!picked && adapters.length === 1) { picked = adapters[0].id; document.getElementById("picked").textContent = `Selected: ${picked}`; loadAdapters(); }
+  adapterList = adapters;
+  const box = document.getElementById("adapters");
+  if (!adapters.length) {
+    box.innerHTML = `<div class="empty">No trained adapter for this laptop yet. Unzip the setup bundle into the repository, or train one below.</div>`;
+    paintIdentity(); syncButtons(); return;
+  }
+  if (!picked || !adapters.some(a => a.id === picked)) picked = adapters[adapters.length - 1].id;
+  box.innerHTML = adapters.map(a => `<label class="parcel">
+      <input type="radio" name="adapter" value="${esc(a.id)}" ${a.id === picked ? "checked" : ""} />
+      <div class="name">${esc(a.set)}</div>
+      <div class="meta">${esc(a.client_id)}, ${a.size_mb} MB, trained on ${esc(a.num_examples)} blocks${a.d3_alpha != null ? `, on top of the cluster adapter (α ${a.d3_alpha})` : ""}</div>
+      <div class="seal ${a.epsilon == null ? "off" : ""}">${a.epsilon == null ? "Trained without differential privacy" : `Differentially private, ε ${a.epsilon.toFixed(2)}`}</div>
+    </label>`).join("");
+  box.querySelectorAll("input[name=adapter]").forEach(i => i.onchange = () => { picked = i.value; paintIdentity(); syncButtons(); });
+  paintIdentity(); syncButtons();
 }
 
-let jobRunning = false;
 function syncButtons() {
   document.getElementById("upload").disabled = jobRunning || !picked;
   document.getElementById("train").disabled = jobRunning;
 }
 
+function showResult(text, kind) {
+  const el = document.getElementById("result");
+  el.className = "verdict " + (kind || "");
+  el.textContent = text;
+}
+
 async function refreshJob() {
   const j = await get("/api/job");
+  const wasRunning = jobRunning;
   jobRunning = j.running; syncButtons();
   const log = document.getElementById("log");
-  if (j.lines.length !== lastLines) { log.textContent = j.lines.join("\n") || "ready."; log.scrollTop = log.scrollHeight; lastLines = j.lines.length; }
-  const res = document.getElementById("result");
+  if (j.lines.length !== lastLines) { log.textContent = j.lines.join("\n") || "Nothing yet."; log.scrollTop = log.scrollHeight; lastLines = j.lines.length; }
+  if (j.running && j.kind === "upload") showResult("Sending…");
   if (!j.running && j.kind === "upload" && (j.result || j.error)) {
-    res.style.display = "block";
-    res.className = "result " + (j.result ? "ok" : "bad");
-    res.textContent = j.result
-      ? `Accepted by cluster '${j.result.cluster_id}' for round ${j.result.round_id} in ${j.result.seconds}s — ${j.result.response.pending_uploads} upload(s) now waiting to be aggregated.`
-      : j.error;
+    if (j.result) showResult(`Sent. The ${j.result.cluster_id} cluster has it for round ${j.result.round_id}; ${j.result.response.pending_uploads} adapter${j.result.response.pending_uploads === 1 ? " is" : "s are"} waiting to be merged.`, "ok");
+    else showResult(j.error, "bad");
   }
-  if (!j.running && j.kind === "train" && j.result) loadAdapters();
+  if (wasRunning && !j.running && j.kind === "train") { loadAdapters(); if (j.error) showResult(j.error, "bad"); }
 }
 
 document.getElementById("upload").onclick = async () => {
   const r = await post("/api/upload", { adapter: picked });
-  if (!r.ok) alertBox(r.body.detail);
+  if (!r.ok) showResult(r.body.detail, "bad");
   refreshJob();
 };
 document.getElementById("train").onclick = async () => {
@@ -202,15 +247,11 @@ document.getElementById("train").onclick = async () => {
     dp: document.getElementById("t-dp").checked,
     cluster_adapter: document.getElementById("t-cluster").value.trim() || null,
   });
-  if (!r.ok) alertBox(r.body.detail);
+  if (!r.ok) showResult(r.body.detail, "bad");
   refreshJob();
 };
-function alertBox(msg) {
-  const res = document.getElementById("result");
-  res.style.display = "block"; res.className = "result bad"; res.textContent = msg;
-}
 
-refreshStatus(); loadAdapters(); refreshJob();
+loadAdapters().then(refreshStatus); refreshJob();
 setInterval(refreshStatus, 3000);
 setInterval(refreshJob, 1000);
 </script>
