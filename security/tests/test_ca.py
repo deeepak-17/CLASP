@@ -16,12 +16,12 @@ class TestCreateCA:
     """CA creation produces a valid self-signed root certificate."""
 
     def test_creates_rsa_key(self) -> None:
-        ca_key, ca_cert = create_ca()
+        ca_key, _ca_cert = create_ca()
         assert isinstance(ca_key, rsa.RSAPrivateKey)
         assert ca_key.key_size == 4096
 
     def test_self_signed(self) -> None:
-        ca_key, ca_cert = create_ca()
+        _ca_key, ca_cert = create_ca()
         # Issuer == Subject for a self-signed cert.
         assert ca_cert.issuer == ca_cert.subject
 
@@ -75,7 +75,7 @@ class TestSignCSR:
     def test_signed_cert_issuer_matches_ca(self) -> None:
         ca_key, ca_cert = create_ca()
         # Generate a service cert (which internally creates a CSR).
-        svc_key, svc_cert = generate_service_cert(ca_key, ca_cert, "test-service")
+        _svc_key, svc_cert = generate_service_cert(ca_key, ca_cert, "test-service")
         assert svc_cert.issuer == ca_cert.subject
 
     def test_signed_cert_validity(self) -> None:

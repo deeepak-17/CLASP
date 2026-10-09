@@ -8,10 +8,10 @@ from .engine import get_privacy_engine, make_private
 EpsilonTracker = PrivacyAccountant
 
 __all__ = [
-    "DPConfig",
-    "make_private",
-    "PrivacyAccountant",
-    "EpsilonTracker",
     "BudgetExhaustedError",
+    "DPConfig",
+    "EpsilonTracker",
+    "PrivacyAccountant",
     "get_privacy_engine",
+    "make_private",
 ]

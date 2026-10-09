@@ -10,7 +10,6 @@ from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 
 class TokenError(Exception):
     """Custom exception raised for invalid or expired JWT tokens."""
-    pass
 
 
 @dataclass

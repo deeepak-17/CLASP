@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+
 class SecurityEvent(str, Enum):
     """Enumeration of security events for audit logging."""
     AUTH_SUCCESS = "AUTH_SUCCESS"

@@ -5,7 +5,7 @@ from typing import Any
 
 try:
     import torch
-    import torch.nn as nn
+    from torch import nn
     from torch.optim import Optimizer
     from torch.utils.data import DataLoader
 except ImportError:

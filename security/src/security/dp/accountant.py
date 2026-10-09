@@ -10,6 +10,7 @@ except ImportError:
     RDPAccountant = object
 
 from contracts.types import PrivacySpec
+
 from .config import DPConfig
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 class BudgetExhaustedError(Exception):
     """Raised when the privacy budget (epsilon) is exhausted."""
-    pass
 
 
 class PrivacyAccountant:
@@ -97,7 +97,7 @@ class PrivacyAccountant:
         """Returns the current spent epsilon."""
         try:
             return self._accountant.get_epsilon(delta=self.config.delta)
-        except Exception:
+        except (ValueError, IndexError):
             return 0.0
 
     def get_privacy_spec(self) -> PrivacySpec:

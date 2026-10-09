@@ -8,7 +8,12 @@ import pytest
 
 from security.mtls.ca import create_ca, save_pem
 from security.mtls.certs import generate_service_cert
-from security.mtls.rotation import CertStatus, check_all_certs, check_expiry, rotate_cert
+from security.mtls.rotation import (
+    CertStatus,
+    check_all_certs,
+    check_expiry,
+    rotate_cert,
+)
 
 
 @pytest.fixture()
@@ -67,7 +72,7 @@ class TestRotateCert:
     """rotate_cert re-issues a cert from the same CA."""
 
     def test_new_cert_is_valid(self, pki: dict) -> None:
-        new_key, new_cert = rotate_cert(
+        _new_key, new_cert = rotate_cert(
             pki["ca_key"], pki["ca_cert"],
             pki["dir"] / "test-service_cert.pem",
             "test-service",

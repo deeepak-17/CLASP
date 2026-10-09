@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import re
-import os
 import logging
+import os
+import re
 from typing import Any
 
 from fastapi import Request, Response
@@ -64,7 +64,7 @@ def sanitize_path(path: str) -> str:
     if ".." in path:
         raise ValidationError("path", "Path traversal detected.")
         
-    if os.path.isabs(path) or path.startswith("/") or path.startswith("\\"):
+    if os.path.isabs(path) or path.startswith(("/", "\\")):
         raise ValidationError("path", "Absolute paths are not allowed.")
         
     return path

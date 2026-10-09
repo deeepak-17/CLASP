@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from .certs import generate_service_cert
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -126,8 +129,9 @@ def check_all_certs(
         try:
             status = check_expiry(path, warn_days=warn_days)
             statuses.append(status)
-        except Exception:
+        except (ValueError, OSError) as exc:
             # Skip files that aren't valid certs
+            logger.debug("Skipping %s: %s", path, exc)
             continue
             
     return statuses

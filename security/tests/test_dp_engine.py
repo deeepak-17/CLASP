@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from security.dp.config import DPConfig
@@ -11,7 +11,7 @@ from security.dp.config import DPConfig
 # Guard: skip the entire module if opacus is not installed.
 opacus = pytest.importorskip("opacus", reason="opacus required for engine tests")
 
-from security.dp.engine import get_privacy_engine, make_private  # noqa: E402
+from security.dp.engine import get_privacy_engine, make_private
 
 
 def _tiny_model() -> nn.Module:

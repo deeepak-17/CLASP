@@ -21,13 +21,12 @@ from security.auth.hmac_signer import (
 # JWT tests require PyJWT
 jwt_mod = pytest.importorskip("jwt", reason="PyJWT required for JWT tests")
 
-from security.auth.jwt_handler import (  # noqa: E402
+from security.auth.jwt_handler import (
     JWTConfig,
     TokenError,
     create_token,
     verify_token,
 )
-
 
 # ── API Key ──────────────────────────────────────────────────────────────────
 

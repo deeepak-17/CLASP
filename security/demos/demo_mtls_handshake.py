@@ -69,7 +69,7 @@ def _run_server(srv_ctx: ssl.SSLContext, host: str, port: int,
                 tls.sendall(b"CLASP_OK")
                 result["ok"] = True
                 result["client_cn"] = cn
-        except Exception as exc:
+        except (ssl.SSLError, OSError) as exc:
             result["error"] = str(exc)
 
 
@@ -102,11 +102,11 @@ def _demo_handshake(d: Path, label: str, client_name: str,
     ready.wait(timeout=3.0)
 
     try:
-        with socket.create_connection((host, port), timeout=5.0) as sock:
-            with cli_ctx.wrap_socket(sock, server_hostname="localhost") as tls:
-                data = tls.recv(1024)
-                if data == b"CLASP_OK":
-                    result["received"] = True
+        with socket.create_connection((host, port), timeout=5.0) as sock, \
+             cli_ctx.wrap_socket(sock, server_hostname="localhost") as tls:
+            data = tls.recv(1024)
+            if data == b"CLASP_OK":
+                result["received"] = True
     except (ssl.SSLError, ssl.SSLCertVerificationError, ConnectionResetError, OSError) as exc:
         result["client_error"] = str(exc)
 

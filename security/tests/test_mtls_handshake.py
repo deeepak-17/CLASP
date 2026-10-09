@@ -85,7 +85,7 @@ class TestMutualHandshake:
                     result["client_cert_subject"] = (
                         tls.getpeercert().get("subject") if tls.getpeercert() else None
                     )
-            except Exception as exc:
+            except (ssl.SSLError, OSError) as exc:
                 result["server_error"] = str(exc)
 
     def test_successful_handshake(self, pki_dir: Path) -> None:
@@ -118,11 +118,11 @@ class TestMutualHandshake:
         srv_thread.start()
         ready.wait(timeout=3.0)
 
-        with socket.create_connection((host, port), timeout=5.0) as sock:
-            with cli_ctx.wrap_socket(sock, server_hostname="localhost") as tls:
-                data = tls.recv(1024)
-                assert data == b"CLASP_OK"
-                result["client_ok"] = True
+        with socket.create_connection((host, port), timeout=5.0) as sock, \
+             cli_ctx.wrap_socket(sock, server_hostname="localhost") as tls:
+            data = tls.recv(1024)
+            assert data == b"CLASP_OK"
+            result["client_ok"] = True
 
         srv_thread.join(timeout=5.0)
         assert result.get("server_ok") is True
@@ -158,10 +158,10 @@ class TestMutualHandshake:
         ready.wait(timeout=3.0)
 
         with pytest.raises((ssl.SSLError, ssl.SSLCertVerificationError, ConnectionResetError,
-                            OSError)):
-            with socket.create_connection((host, port), timeout=5.0) as sock:
-                with cli_ctx.wrap_socket(sock, server_hostname="localhost") as tls:
-                    tls.recv(1024)
+                            OSError)), \
+             socket.create_connection((host, port), timeout=5.0) as sock, \
+             cli_ctx.wrap_socket(sock, server_hostname="localhost") as tls:
+            tls.recv(1024)
 
         srv_thread.join(timeout=5.0)
         # Server should NOT have marked success.

@@ -6,15 +6,14 @@ import sys
 
 try:
     import torch
-    import torch.nn as nn
-    import torch.optim as optim
+    from torch import nn, optim
     from torch.utils.data import DataLoader, TensorDataset
 except ImportError:
     print("Error: PyTorch is required to run this script.", file=sys.stderr)
     sys.exit(1)
 
 from security.dp.config import DPConfig
-from security.dp.engine import make_private, get_privacy_engine
+from security.dp.engine import get_privacy_engine, make_private
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

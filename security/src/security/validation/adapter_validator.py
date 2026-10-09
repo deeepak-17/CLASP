@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+
 @dataclass
 class AdapterValidationConfig:
     """Configuration for validating LoRA adapters."""
@@ -57,7 +58,7 @@ def validate_adapter_integrity(state_dict: dict[str, Any], config: AdapterValida
                     arr = tensor.detach().cpu().numpy()
                 else:
                     arr = np.array(tensor)
-            except Exception:
+            except (TypeError, ValueError, RuntimeError):
                 errors.append(f"Tensor {key} could not be converted to numpy array")
                 continue
         else:

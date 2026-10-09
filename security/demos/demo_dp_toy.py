@@ -13,8 +13,8 @@ from __future__ import annotations
 import argparse
 
 import torch
-import torch.nn as nn
 from opacus import PrivacyEngine
+from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 

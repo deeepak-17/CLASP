@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+
 class ThreatActor(Enum):
     MALICIOUS_CLIENT = "malicious_client"        # A compromised or adversarial edge node
     COMPROMISED_SERVER = "compromised_server"    # Attacker with access to cluster server

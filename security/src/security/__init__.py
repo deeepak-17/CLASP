@@ -59,25 +59,25 @@ from security.mtls import (
 from security.threat_model import THREAT_MODEL, render_markdown
 
 __all__ = [
-    # DP
-    "DPConfig",
-    "make_private",
-    "PrivacyAccountant",
-    "EpsilonTracker",
-    "BudgetExhaustedError",
-    "get_privacy_engine",
-    # mTLS
-    "create_ca",
-    "generate_service_cert",
-    "generate_client_cert",
-    "setup_all_certs",
-    "verify_cert",
-    "server_ssl_context",
-    "client_ssl_context",
-    "create_client_ssl_context",
-    "check_expiry",
-    "CertStatus",
     # Threat Model
     "THREAT_MODEL",
+    "BudgetExhaustedError",
+    "CertStatus",
+    # DP
+    "DPConfig",
+    "EpsilonTracker",
+    "PrivacyAccountant",
+    "check_expiry",
+    "client_ssl_context",
+    # mTLS
+    "create_ca",
+    "create_client_ssl_context",
+    "generate_client_cert",
+    "generate_service_cert",
+    "get_privacy_engine",
+    "make_private",
     "render_markdown",
+    "server_ssl_context",
+    "setup_all_certs",
+    "verify_cert",
 ]

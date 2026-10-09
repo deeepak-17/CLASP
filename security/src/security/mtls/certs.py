@@ -4,11 +4,12 @@ import argparse
 import datetime
 from pathlib import Path
 
+import cryptography.exceptions
 from cryptography import x509
-from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from .ca import create_ca, save_pem
 
@@ -150,7 +151,7 @@ def verify_cert(
             cert.signature_hash_algorithm,
         )
         return True
-    except Exception:
+    except (ValueError, TypeError, cryptography.exceptions.InvalidSignature):
         return False
 
 
@@ -175,7 +176,7 @@ def setup_all_certs(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     ca_key, ca_cert = create_ca(validity_days=validity_days * 2)
-    ca_key_path, ca_cert_path = save_pem(ca_key, ca_cert, output_dir, name="ca")
+    _ca_key_path, ca_cert_path = save_pem(ca_key, ca_cert, output_dir, name="ca")
     
     paths = {"ca": ca_cert_path}
     

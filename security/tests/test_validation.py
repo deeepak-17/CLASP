@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from security.validation.adapter_validator import (
     AdapterValidationConfig,
-    AdapterValidationResult,
     compute_adapter_hash,
     detect_poisoning,
     validate_adapter_integrity,
