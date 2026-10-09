@@ -150,26 +150,36 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
         or missing-length requests, reads the body stream to enforce the limit.
         """
         content_length = request.headers.get("content-length")
-        if content_length:
+        if content_length is not None:
             try:
                 length = int(content_length)
-                if length > self.max_body_bytes:
-                    logger.warning(
-                        "Rejected request due to large Content-Length: %d bytes",
-                        length,
-                    )
-                    return Response("Payload Too Large", status_code=413)
             except ValueError:
-                pass
-        else:
-            # No Content-Length — request may be chunked.  Read the body and
-            # enforce the size limit so chunked transfers cannot bypass it.
-            body = await request.body()
-            if len(body) > self.max_body_bytes:
+                return Response("Invalid Content-Length", status_code=400)
+            if length < 0:
+                return Response("Invalid Content-Length", status_code=400)
+            if length > self.max_body_bytes:
                 logger.warning(
-                    "Rejected chunked request due to large body: %d bytes",
-                    len(body),
+                    "Rejected request due to large Content-Length: %d bytes",
+                    length,
                 )
                 return Response("Payload Too Large", status_code=413)
+        else:
+            # No Content-Length — request may be chunked. Count bytes while
+            # streaming and stop at the limit, so memory stays bounded by
+            # max_body_bytes instead of the client's upload size.
+            chunks: list[bytes] = []
+            received = 0
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > self.max_body_bytes:
+                    logger.warning(
+                        "Rejected chunked request: body exceeds %d bytes",
+                        self.max_body_bytes,
+                    )
+                    return Response("Payload Too Large", status_code=413)
+                chunks.append(chunk)
+            # Hand the already-read body to the endpoint (Starlette replays
+            # a cached body to the downstream app).
+            request._body = b"".join(chunks)
 
         return await call_next(request)

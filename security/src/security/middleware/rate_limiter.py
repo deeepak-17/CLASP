@@ -85,7 +85,9 @@ class RateLimiter:
         now = time.monotonic()
         stale = [
             cid for cid, bucket in self.buckets.items()
-            if (now - bucket.last_fill) > self.config.bucket_ttl_seconds
+            # >=, not >: on Windows time.monotonic() ticks every ~15.6 ms, so
+            # with a TTL of 0 the elapsed time is often exactly 0.0.
+            if (now - bucket.last_fill) >= self.config.bucket_ttl_seconds
         ]
         for cid in stale:
             del self.buckets[cid]
