@@ -20,6 +20,7 @@ module rule); nothing is added at the repository root.
 | `scripts/`, `configs/` | one-shot CLIs and their YAML; paths resolve against `services/evaluation` | — |
 | `results/`, `reports/`, `datasets/{partitions,metadata}/` | committed run outputs and the D1 partition definition | — |
 | `tests/` | the P5 suite, run by the `pytest (evaluation)` CI job | — |
+| `<repo>/datasets/materialized/` (not under this module) | per-client corpus + 10% held-out split written by `scripts/materialize_client_repo.py`; the shared location the edge lane and compose's train profile read | — |
 | `src/evaluation/eval_harness/{personalization,lineage,noise,archive}.py` | personalization from edge round manifests, adapter lineage, evaluation noise + guard thresholds, checksummed archive | `evaluation.eval_harness.*` |
 | `results/edge_rounds/`, `results/humaneval_guard/` | the real round manifests and base-model HumanEval samples every result is derived from | — |
 | `docs/report/` | evaluation section, figures, results tables, slides data | — |

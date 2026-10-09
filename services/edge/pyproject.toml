@@ -5,7 +5,10 @@ description = "CLASP Edge Layer — PEFT training, 4-bit inference, dynamic merg
 requires-python = ">=3.10"
 dependencies = [
     "clasp-contracts",
-     "peft",
+    # B5: the in-project completion metric core (pure python, P5-owned) lives in
+    # services/evaluation; the edge runs it against a real model.
+    "clasp-evaluation",
+    "peft",
     "transformers",
     "torch",
     "opacus",
