@@ -20,8 +20,8 @@ serves and benchmarks the composite, and talks to the other services. It does
 |---|---|---|
 | D2 SVD aggregation | `cluster.aggregation` (P2) | `edge.aggregate` (PEFT ⇄ `LoRAAdapter` bridge only) |
 | D5 promotion rule | `registry.promotion.decide` (P4) | `edge.promote.predict_decision` (manifest prediction) |
-| DP-SGD, ε accounting | `security.DPConfig`, `security.make_private`, `security.EpsilonTracker` (P3) | `edge.train_client --dp` |
-| mTLS client context | `security.create_client_ssl_context` (P3) | `edge.transport.mtls_session` |
+| DP-SGD, ε accounting | `security.DPConfig`, `security.make_private`, `security.get_privacy_engine`, `security.PrivacyAccountant` (P3) | `edge.train_client --dp` |
+| mTLS client context | `security.client_ssl_context` (P3; the edge raises the minimum to TLS 1.3) | `edge.transport.mtls_session` |
 | completion metric | `evaluation.completion` (P5) | `edge.completion_eval` |
 | wire types | `contracts` | `edge.wire.privacy_block`, `edge.promote` |
 

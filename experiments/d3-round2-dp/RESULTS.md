@@ -132,6 +132,30 @@ loss slope (+0.003/step) trips the divergence tolerance; held-out perplexity did
 get worse. This is one client on a one-block held-out split: a smoke test of the
 integration, not a privacy-utility curve (that is Phase III W7).
 
+### Re-run on P3's rewritten API (#19, `security` @ `5924cfc`)
+
+The `security` branch was rewritten after the run above: `DPConfig` lost the
+run-shape fields, `EpsilonTracker` became `PrivacyAccountant(config, sample_rate)`
+and `create_client_ssl_context` became `client_ssl_context`. The edge now calls the
+new API. `security.make_private(..., epochs=)`, the path meant to calibrate σ to the
+budget, crashes on Opacus 1.6 (`engine.py` reads `accountant.noise_multiplier`, which
+the default PRV accountant does not have), so the edge calibrates σ with Opacus's
+`get_noise_multiplier` over the engine's own accountant, sample rate and epochs (what
+`make_private_with_epsilon` computes) and hands it to `make_private` via `DPConfig`.
+Same command, same client, same seed (manifest not committed; weights not saved):
+
+| | |
+|---|---|
+| **ε spent (engine's PRV accountant, the one σ is calibrated for)** | **7.992** ✅ within budget |
+| ε, P3's `security.PrivacyAccountant` (RDP), same σ/q/steps | 9.399 |
+| σ (calibrated) / sample rate / logical steps | 0.6519 / 0.0769 / 26 |
+| peak VRAM / wall | 2.84 GB / 234 s |
+| held-out ppl: base → base+0.5·cluster → final | 3.46 → 3.37 → 3.36 (client −0.004) |
+
+The uploaded ε is now the engine's PRV figure. RDP is a looser bound and reads over 8
+for the same run, so it is recorded beside it, not used for the budget. Findings 1–3
+below describe the old API and no longer apply; finding 4 still does.
+
 ### Findings for P3 (not fixed here — P3's module)
 
 1. **`security.make_private` crashes in its default mode.** `DPConfig` defaults to
