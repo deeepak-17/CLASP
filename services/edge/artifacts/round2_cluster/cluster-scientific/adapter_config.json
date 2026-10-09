@@ -1,0 +1,24 @@
+{
+  "peft_type": "LORA",
+  "task_type": "CAUSAL_LM",
+  "use_rslora": false,
+  "use_dora": false,
+  "fan_in_fan_out": false,
+  "lora_bias": false,
+  "bias": "none",
+  "inference_mode": true,
+  "rank_pattern": {},
+  "alpha_pattern": {},
+  "modules_to_save": null,
+  "init_lora_weights": true,
+  "r": 16,
+  "lora_alpha": 16,
+  "lora_dropout": 0.0,
+  "target_modules": [
+    "k_proj",
+    "o_proj",
+    "q_proj",
+    "v_proj"
+  ],
+  "base_model_name_or_path": "deepseek-ai/deepseek-coder-1.3b-base"
+}

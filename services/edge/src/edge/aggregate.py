@@ -1,77 +1,82 @@
-"""Cluster adapter aggregation via SVD re-factorization (W4 · G2).
+"""Cluster adapter aggregation, delegated to P2's cluster package (D2).
 
-**Ownership note.** D2 assigns aggregation to P2 (cluster service, W5+). This is a
-LOCAL edge-side implementation of the same algorithm, written so the edge lane
-can produce real cluster adapters and close G2's 3-layer composition instead of
-merging against a stub. It is a stand-in for P2's service, not a replacement:
-when the real one lands, the edge should consume its output and this module
-becomes a test oracle.
+**Ownership.** D2 belongs to P2. This module used to carry its own copy of the
+SVD aggregation — a stand-in written in W4 so the edge lane could close G2
+before the cluster service existed, with the stated plan that "when the real
+one lands, the edge should consume its output". It has landed
+(``cluster.aggregation``), so the edge no longer does any D2 mathematics. What
+is left here is the part that genuinely belongs to the edge: getting a PEFT
+adapter directory's tensors into the cluster's ``LoRAAdapter`` and the result
+back out again under the same PEFT keys, so ``edge.merge`` can compose it.
 
-The algorithm (D2)
-------------------
-Naive averaging of A and B factors is wrong, and it is worth being precise about
-why. Averaging factors gives
+    PEFT state_dict (torch) --to_cluster_adapter--> cluster.LoRAAdapter
+        --cluster.aggregation.aggregate_svd_lowrank--> aggregated LoRAAdapter
+        --from_cluster_adapter--> PEFT state_dict (torch), same key names
 
-    (1/n Σ Bᵢ)·(1/n Σ Aᵢ)
+The one piece of arithmetic this module still does is folding PEFT's scaling
+``s = lora_alpha / r`` into ``lora_B`` on the way in. The cluster reconstructs
+an update as ``B @ A`` with no scaling (``LoRAAdapter.delta_w``), so an adapter
+whose ``s != 1`` would otherwise be mis-weighted in the average. Folding keeps
+``ΔW = s·B·A`` exact and lets the cluster's unscaled product mean what it says;
+it is the same convention ``edge.wire.upload_payload`` applies on seam A.
 
-which contains every cross term Bᵢ·Aⱼ for i≠j — products of one client's output
-projection with another's input projection. Those pairs are meaningless: the
-factorization of each adapter is only defined up to an invertible rank-r
-transform, so client i's B and client j's A do not live in a shared basis. The
-result is biased and does not approximate the average update.
-
-So instead:
-
-  1. Reconstruct each client's actual update, ΔWᵢ = sᵢ·Bᵢ·Aᵢ.
-  2. Average in ΔW space, weighted by sample count: ΔW̄ = Σ wᵢ·ΔWᵢ.
-     This is exact — no cross terms, because the sum happens after each product.
-  3. Re-factorize ΔW̄ back to rank r with truncated SVD, so the cluster adapter
-     is the same shape as a client one:
-         U, S, Vᵀ = svd(ΔW̄)
-         B = U_r·√S_r ,  A = √S_r·Vᵀ_r   =>  B·A = best rank-r approx of ΔW̄
-
-Step 3 is lossy by construction: three rank-16 adapters average to something of
-rank up to 48, and squeezing that back to 16 discards the tail. That loss is
-measured and reported per module (`reconstruction_error`) rather than assumed
-negligible — it is the price D2 pays to keep the cluster adapter servable at
-rank 16, and it should be visible in the record.
-
-Memory: everything streams module by module. A single ΔW is 2048x2048 fp32
-(16 MB); holding all 96 for three clients at once would be ~4.6 GB.
+``cluster`` is imported lazily, inside the functions that need it, so the rest
+of ``edge`` stays importable on a machine (or CI leg) that does not have the
+cluster package installed.
 
 Usage:
     python -m edge.aggregate --clients a/adapter b/adapter c/adapter \\
-        --weights 199 239 222 --out cluster_scientific/
+        --weights 199 239 222 --cluster-id scientific --out cluster_scientific/
 """
 import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
+import numpy as np
 import torch
 
 from edge.merge import (
-    _ab,
-    delta_weights,
     load_adapter,
-    module_prefixes,
     save_adapter,
     scaling_of,
     validate_compatibility,
 )
+from edge.wire import describe, parse_key
 
 DEFAULT_RANK = 16
-DEFAULT_NITER = 8      # svd_lowrank power iterations; more = closer to exact SVD
+
+#: Which of P2's aggregators the served SVD path uses. ``aggregate_svd_lowrank``
+#: is the exact D2 pipeline evaluated through the low-rank factors (P2 measured
+#: it identical to the dense ``aggregate_svd`` reference to six decimals on the
+#: real web cluster, 2.5 s against 865 s).
+SVD_AGGREGATOR = "cluster.aggregation.aggregate_svd_lowrank"
+NAIVE_AGGREGATOR = "cluster.aggregation.aggregate_naive"
+
+Adapter = Tuple[Dict[str, torch.Tensor], Dict]
+
+
+def _cluster_aggregation():
+    """Import P2's aggregation module, or say exactly what is missing."""
+    try:
+        from cluster import aggregation
+    except ImportError as exc:  # pragma: no cover - exercised only without cluster
+        raise ImportError(
+            "edge.aggregate delegates D2 aggregation to P2's cluster package, "
+            "which is not installed. Install it with "
+            "`pip install -e services/cluster`.") from exc
+    return aggregation
 
 
 def normalize_weights(weights: Sequence[float]) -> List[float]:
-    """FedAvg sample weighting: wᵢ = nᵢ / Σn.
+    """FedAvg sample weighting: wᵢ = nᵢ / Σn — recorded in the manifest.
 
-    Deliberately the CLIENT'S DATASET SIZE, not its training budget. The sqrt
-    step-budget policy changes how much local work each client does; it must not
-    also change how much that client counts in the average, or the size bias
-    gets applied twice (see `plan_budgets` in edge.chunking).
+    The cluster normalizes internally as well; this is kept so the manifest
+    states the weights that were in force. They are the clients' DATASET sizes,
+    not their training budgets: the sqrt step-budget policy changes how much
+    local work a client does, and must not also change how much it counts in
+    the average (see ``plan_budgets`` in edge.chunking).
     """
     total = float(sum(weights))
     if total <= 0:
@@ -79,148 +84,118 @@ def normalize_weights(weights: Sequence[float]) -> List[float]:
     return [w / total for w in weights]
 
 
-def refactorize(dw: torch.Tensor, rank: int, niter: int = DEFAULT_NITER
-                ) -> Tuple[torch.Tensor, torch.Tensor, float]:
-    """Best rank-`rank` factorization of ΔW, plus the relative error incurred.
+def to_cluster_adapter(sd: Dict[str, torch.Tensor], cfg: Dict):
+    """A PEFT adapter -> ``cluster.LoRAAdapter`` with its scaling folded into B.
 
-    Returns (A, B, rel_error) with A: (rank, in), B: (out, rank) so that B·A is
-    the rank-r approximation. Error is Frobenius-relative:
-    ||ΔW - B·A||_F / ||ΔW||_F — 0.0 means the truncation lost nothing.
+    Layer count, target modules and rank are read off the tensors
+    (``edge.wire.describe``), not trusted from the config, so a truncated or
+    mis-saved adapter fails here rather than inside the aggregator. The result
+    declares ``alpha == rank`` (scaling exactly 1.0), so its ``B @ A`` is the
+    adapter's true ΔW.
     """
-    dw = dw.float()
-    q = min(rank, min(dw.shape))
-    u, s, v = torch.svd_lowrank(dw, q=q, niter=niter)
-    sqrt_s = torch.sqrt(s)
-    b = u * sqrt_s.unsqueeze(0)          # (out, q)
-    a = (v * sqrt_s.unsqueeze(0)).T      # (q, in)
+    from cluster.adapter_format import LoRAAdapter
 
-    denom = torch.linalg.norm(dw)
-    rel = (torch.linalg.norm(dw - b @ a) / denom).item() if denom > 0 else 0.0
-
-    if q < rank:      # pad so every module reports the same rank
-        # device=/dtype= are load-bearing: b and a inherit dw's device, so an
-        # unqualified torch.zeros lands on the CPU and torch.cat raises on a
-        # CUDA dw. Unreachable on the real path (2048x2048 at rank 16 gives
-        # q == rank), but live from this module's CLI with --rank above a
-        # matrix dimension.
-        b = torch.cat([b, torch.zeros(b.shape[0], rank - q,
-                                      device=b.device, dtype=b.dtype)], dim=1)
-        a = torch.cat([a, torch.zeros(rank - q, a.shape[1],
-                                      device=a.device, dtype=a.dtype)], dim=0)
-    return a, b, rel
+    arrays = {k: v.detach().cpu().float().numpy() for k, v in sd.items()}
+    info = describe(arrays)
+    if info["rank"] != cfg["r"]:
+        raise ValueError(f"adapter_config r={cfg['r']} disagrees with the tensors' "
+                         f"rank {info['rank']}")
+    s = np.float32(scaling_of(cfg))
+    folded = {k: (a * s if parse_key(k)[2] == "lora_B" else a) for k, a in arrays.items()}
+    return LoRAAdapter.from_state_dict(
+        folded, rank=info["rank"], alpha=float(info["rank"]),
+        target_modules=tuple(info["target_modules"]), num_layers=info["num_layers"])
 
 
-def aggregate_svd(adapters: Sequence[Tuple[Dict[str, torch.Tensor], Dict]],
-                  weights: Sequence[float], rank: int = DEFAULT_RANK,
-                  niter: int = DEFAULT_NITER) -> Tuple[Dict, Dict, Dict]:
-    """D2 aggregation: exact weighted average in ΔW space, re-factorized to rank r.
+def _key_map(adapters: Sequence[Adapter]) -> Dict[Tuple[int, str, str], str]:
+    """(layer, module, part) -> the PEFT key name the clients used for it."""
+    out: Dict[Tuple[int, str, str], str] = {}
+    for sd, _ in adapters:
+        for key in sd:
+            out.setdefault(parse_key(key), key)
+    return out
 
-    Streams module by module — one ΔW per client alive at a time, not all 96.
-    """
-    w = normalize_weights(weights)
-    prefixes = sorted({p for sd, _ in adapters for p in module_prefixes(sd)})
 
-    out_sd: Dict[str, torch.Tensor] = {}
-    errors: Dict[str, float] = {}
-    for prefix in prefixes:
-        avg: Optional[torch.Tensor] = None
-        for (sd, cfg), wi in zip(adapters, w):
-            if f"{prefix}.lora_A.weight" not in sd:
-                continue
-            term = wi * delta_weights(sd, cfg, [prefix])[prefix]
-            avg = term if avg is None else avg + term
-            del term
-        if avg is None:
-            continue
-        a, b, rel = refactorize(avg, rank, niter)
-        out_sd[f"{prefix}.lora_A.weight"] = a
-        out_sd[f"{prefix}.lora_B.weight"] = b
-        errors[prefix] = rel
-        del avg
+def from_cluster_adapter(merged, key_map: Dict[Tuple[int, str, str], str]
+                         ) -> Dict[str, torch.Tensor]:
+    """An aggregated ``LoRAAdapter`` -> fp32 torch tensors under the clients' keys."""
+    sd: Dict[str, torch.Tensor] = {}
+    for layer in merged.layer_indices:
+        for module in merged.target_modules:
+            for part in ("lora_A", "lora_B"):
+                key = key_map[(layer, module, part)]
+                arr = np.ascontiguousarray(merged.modules[layer][module][part],
+                                           dtype=np.float32)
+                sd[key] = torch.from_numpy(arr)
+    return sd
 
-    cfg = dict(adapters[0][1])
+
+def _aggregated_cfg(reference_cfg: Dict, rank: int) -> Dict:
+    cfg = dict(reference_cfg)
     cfg.update({"r": rank, "lora_alpha": rank,   # scaling exactly 1.0
                 "use_rslora": False, "rank_pattern": {}, "alpha_pattern": {},
                 "inference_mode": True})
+    return cfg
 
+
+def aggregate_svd(adapters: Sequence[Adapter], weights: Sequence[float],
+                  rank: int = DEFAULT_RANK) -> Tuple[Dict, Dict, Dict]:
+    """D2 SVD aggregation, computed by ``cluster.aggregation.aggregate_svd_lowrank``.
+
+    Returns (state_dict, adapter_config, stats). The reconstruction errors in
+    ``stats`` are the cluster's own exact per-module truncation errors.
+    """
+    agg = _cluster_aggregation()
+    w = normalize_weights(weights)
+    merged, errors = agg.aggregate_svd_lowrank(
+        [to_cluster_adapter(sd, cfg) for sd, cfg in adapters], list(weights), rank=rank)
+    sd = from_cluster_adapter(merged, _key_map(adapters))
     vals = list(errors.values())
     stats = {
+        "aggregator": SVD_AGGREGATOR,
         "n_modules": len(errors),
         "reconstruction_error_mean": round(sum(vals) / len(vals), 6) if vals else 0.0,
         "reconstruction_error_max": round(max(vals), 6) if vals else 0.0,
         "reconstruction_error_min": round(min(vals), 6) if vals else 0.0,
         "rank": rank,
-        "svd_niter": niter,
         "weights_normalized": [round(x, 6) for x in w],
     }
-    return out_sd, cfg, stats
+    return sd, _aggregated_cfg(adapters[0][1], rank), stats
 
 
-def aggregate_naive(adapters: Sequence[Tuple[Dict[str, torch.Tensor], Dict]],
-                    weights: Sequence[float]) -> Tuple[Dict, Dict]:
-    """Naive per-factor averaging — the ABLATION BASELINE only (D2).
-
-    Averages A and B independently. Kept so the bias can be measured rather than
-    asserted; never use it to produce a served cluster adapter.
-    """
-    w = normalize_weights(weights)
-    prefixes = sorted({p for sd, _ in adapters for p in module_prefixes(sd)})
-    out_sd: Dict[str, torch.Tensor] = {}
-    for prefix in prefixes:
-        a_sum = b_sum = None
-        for (sd, cfg), wi in zip(adapters, w):
-            if f"{prefix}.lora_A.weight" not in sd:
-                continue
-            a, b = _ab(sd, prefix)
-            s = scaling_of(cfg)
-            a_t, b_t = wi * a.float(), s * b.float()
-            a_sum = a_t if a_sum is None else a_sum + a_t
-            b_sum = b_t if b_sum is None else b_sum + b_t
-        out_sd[f"{prefix}.lora_A.weight"] = a_sum
-        out_sd[f"{prefix}.lora_B.weight"] = b_sum
-    cfg = dict(adapters[0][1])
-    cfg.update({"lora_alpha": cfg["r"], "use_rslora": False, "inference_mode": True})
-    return out_sd, cfg
+def aggregate_naive(adapters: Sequence[Adapter], weights: Sequence[float]
+                    ) -> Tuple[Dict, Dict]:
+    """Naive per-factor averaging — D2's ABLATION BASELINE, computed by
+    ``cluster.aggregation.aggregate_naive``. Never serve its output."""
+    agg = _cluster_aggregation()
+    merged = agg.aggregate_naive(
+        [to_cluster_adapter(sd, cfg) for sd, cfg in adapters], list(weights))
+    sd = from_cluster_adapter(merged, _key_map(adapters))
+    return sd, _aggregated_cfg(adapters[0][1], merged.rank)
 
 
-def exact_average_error(adapters: Sequence[Tuple[Dict, Dict]], weights: Sequence[float],
+def exact_average_error(adapters: Sequence[Adapter], weights: Sequence[float],
                         sd: Dict[str, torch.Tensor], cfg: Dict) -> Dict[str, float]:
-    """How far an aggregate sits from the EXACT weighted average, per module.
+    """How far an aggregate sits from the EXACT weighted-average ΔW, per module.
 
-    The yardstick for D2's "unit-tested against the exact product average". Used
-    for both the SVD result (small error, from rank truncation) and the naive
-    baseline (large error, from cross terms).
+    Computed by ``cluster.aggregation.layerwise_exact_average_error`` — D2's
+    "unit-tested against the exact product average" yardstick. Small for the
+    SVD path (rank truncation only), large for the naive one (cross terms).
     """
-    w = normalize_weights(weights)
-    worst_rel, mean_rel, n = 0.0, 0.0, 0
-    for prefix in module_prefixes(sd):
-        exact = None
-        for (csd, ccfg), wi in zip(adapters, w):
-            if f"{prefix}.lora_A.weight" not in csd:
-                continue
-            term = wi * delta_weights(csd, ccfg, [prefix])[prefix]
-            exact = term if exact is None else exact + term
-        if exact is None:
-            continue
-        got = delta_weights(sd, cfg, [prefix])[prefix]
-        denom = torch.linalg.norm(exact)
-        rel = (torch.linalg.norm(got - exact) / denom).item() if denom > 0 else 0.0
-        worst_rel = max(worst_rel, rel)
-        mean_rel += rel
-        n += 1
-        del exact, got
-    return {"max_rel_err": round(worst_rel, 6),
-            "mean_rel_err": round(mean_rel / n, 6) if n else 0.0}
+    agg = _cluster_aggregation()
+    return agg.layerwise_exact_average_error(
+        [to_cluster_adapter(csd, ccfg) for csd, ccfg in adapters], list(weights),
+        to_cluster_adapter(sd, cfg))
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Aggregate client adapters into a cluster adapter (D2)")
+    ap = argparse.ArgumentParser(
+        description="Aggregate client adapters into a cluster adapter (D2, via P2's cluster package)")
     ap.add_argument("--clients", nargs="+", required=True, help="client adapter directories")
     ap.add_argument("--weights", nargs="+", type=float, required=True,
                     help="sample counts per client (train files or blocks)")
     ap.add_argument("--names", nargs="+", help="labels for the manifest")
     ap.add_argument("--rank", type=int, default=DEFAULT_RANK)
-    ap.add_argument("--niter", type=int, default=DEFAULT_NITER)
     ap.add_argument("--cluster-id", required=True)
     ap.add_argument("--compare-naive", action="store_true",
                     help="also measure the naive-averaging ablation baseline")
@@ -234,7 +209,7 @@ def main() -> None:
     adapters = [load_adapter(Path(c)) for c in args.clients]
     validate_compatibility([cfg for _, cfg in adapters], names)
 
-    sd, cfg, stats = aggregate_svd(adapters, args.weights, args.rank, args.niter)
+    sd, cfg, stats = aggregate_svd(adapters, args.weights, args.rank)
     svd_err = exact_average_error(adapters, args.weights, sd, cfg)
 
     naive_err = None
@@ -245,7 +220,7 @@ def main() -> None:
     save_adapter(Path(args.out), sd, cfg)
     meta = {
         "utc": datetime.now(timezone.utc).isoformat(),
-        "task": "W4/G2 cluster aggregation (D2, local stand-in for P2's service)",
+        "task": "cluster aggregation (D2), computed by P2's cluster package",
         "cluster_id": args.cluster_id,
         "clients": names,
         "client_paths": [str(c) for c in args.clients],
@@ -253,12 +228,11 @@ def main() -> None:
         **stats,
         "vs_exact_average": svd_err,
         "naive_baseline_vs_exact_average": naive_err,
-        "owner_note": ("D2 assigns this to P2 (W5+). Local implementation so the edge "
-                       "lane can close G2 with real cluster adapters."),
     }
     (Path(args.out) / "aggregate_manifest.json").write_text(json.dumps(meta, indent=2),
                                                             encoding="utf-8")
     print(f"cluster adapter '{args.cluster_id}' -> {Path(args.out).resolve()}")
+    print(f"  aggregator     : {stats['aggregator']}")
     print(f"  clients        : {', '.join(names)}")
     print(f"  weights        : {stats['weights_normalized']}")
     print(f"  rank           : {stats['rank']} ({stats['n_modules']} modules)")

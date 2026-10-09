@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="Perplexity reduction vs the frozen base, per client">
+<rect width="760" height="380" fill="#ffffff"/>
+<text x="16.0" y="26.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Perplexity reduction vs the frozen base, per client</text>
+<text x="16.0" y="46.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Held-out files never trained on; composite = base + α·cluster + β·client. Higher is better.</text>
+<rect x="64.0" y="57.0" width="10" height="10" rx="2" fill="#2a78d6"/>
+<text x="79.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Round 1</text>
+<rect x="143.0" y="57.0" width="10" height="10" rx="2" fill="#eb6834"/>
+<text x="158.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Round 2</text>
+<line x1="64" x2="744" y1="336.0" y2="336.0" stroke="#e1e0d9"/>
+<text x="56.0" y="340.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.00</text>
+<line x1="64" x2="744" y1="284.8" y2="284.8" stroke="#e1e0d9"/>
+<text x="56.0" y="288.8" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.05</text>
+<line x1="64" x2="744" y1="233.6" y2="233.6" stroke="#e1e0d9"/>
+<text x="56.0" y="237.6" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.10</text>
+<line x1="64" x2="744" y1="182.4" y2="182.4" stroke="#e1e0d9"/>
+<text x="56.0" y="186.4" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.15</text>
+<line x1="64" x2="744" y1="131.2" y2="131.2" stroke="#e1e0d9"/>
+<text x="56.0" y="135.2" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.20</text>
+<line x1="64" x2="744" y1="80.0" y2="80.0" stroke="#e1e0d9"/>
+<text x="56.0" y="84.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0.25</text>
+<text transform="translate(14 208.0) rotate(-90)" font-size="11" fill="#898781" text-anchor="middle">base − composite perplexity</text>
+<path d="M91.7,336.0 V255.0 Q91.7,251.0 95.7,251.0 H115.7 Q119.7,251.0 119.7,255.0 V336.0 Z" fill="#2a78d6"><title>numpy · Round 1: 0.08</title></path>
+<path d="M121.7,336.0 V253.0 Q121.7,249.0 125.7,249.0 H145.7 Q149.7,249.0 149.7,253.0 V336.0 Z" fill="#eb6834"><title>numpy · Round 2: 0.09</title></path>
+<text x="120.7" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">numpy</text>
+<path d="M205.0,336.0 V143.4 Q205.0,139.4 209.0,139.4 H229.0 Q233.0,139.4 233.0,143.4 V336.0 Z" fill="#2a78d6"><title>pandas · Round 1: 0.19</title></path>
+<path d="M235.0,336.0 V139.3 Q235.0,135.3 239.0,135.3 H259.0 Q263.0,135.3 263.0,139.3 V336.0 Z" fill="#eb6834"><title>pandas · Round 2: 0.20</title></path>
+<text x="234.0" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">pandas</text>
+<path d="M318.3,336.0 V121.9 Q318.3,117.9 322.3,117.9 H342.3 Q346.3,117.9 346.3,121.9 V336.0 Z" fill="#2a78d6"><title>scikit-learn · Round 1: 0.21</title></path>
+<path d="M348.3,336.0 V117.8 Q348.3,113.8 352.3,113.8 H372.3 Q376.3,113.8 376.3,117.8 V336.0 Z" fill="#eb6834"><title>scikit-learn · Round 2: 0.22</title></path>
+<text x="347.3" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">scikit-learn</text>
+<path d="M431.7,336.0 V152.6 Q431.7,148.6 435.7,148.6 H455.7 Q459.7,148.6 459.7,152.6 V336.0 Z" fill="#2a78d6"><title>flask · Round 1: 0.18</title></path>
+<path d="M461.7,336.0 V147.5 Q461.7,143.5 465.7,143.5 H485.7 Q489.7,143.5 489.7,147.5 V336.0 Z" fill="#eb6834"><title>flask · Round 2: 0.19</title></path>
+<text x="460.7" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">flask</text>
+<path d="M545.0,336.0 V132.1 Q545.0,128.1 549.0,128.1 H569.0 Q573.0,128.1 573.0,132.1 V336.0 Z" fill="#2a78d6"><title>requests · Round 1: 0.20</title></path>
+<path d="M575.0,336.0 V131.1 Q575.0,127.1 579.0,127.1 H599.0 Q603.0,127.1 603.0,131.1 V336.0 Z" fill="#eb6834"><title>requests · Round 2: 0.20</title></path>
+<text x="574.0" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">requests</text>
+<path d="M658.3,336.0 V160.8 Q658.3,156.8 662.3,156.8 H682.3 Q686.3,156.8 686.3,160.8 V336.0 Z" fill="#2a78d6"><title>werkzeug · Round 1: 0.17</title></path>
+<path d="M688.3,336.0 V155.7 Q688.3,151.7 692.3,151.7 H712.3 Q716.3,151.7 716.3,155.7 V336.0 Z" fill="#eb6834"><title>werkzeug · Round 2: 0.18</title></path>
+<text x="687.3" y="354.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">werkzeug</text>
+<line x1="64" x2="744" y1="336.0" y2="336.0" stroke="#c3c2b7"/>
+</svg>

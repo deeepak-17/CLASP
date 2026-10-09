@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clasp.team102/schemas/corpus_record.schema.json",
+  "title": "CLASP D1 Corpus Record",
+  "description": "One line of datasets/processed/corpus.jsonl. Internal to P5 (corpus -> partitions), but schema'd so partition shards can be validated independently of the code that wrote them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "file_id",
+    "cluster_id",
+    "project_label",
+    "relative_path",
+    "language",
+    "num_lines",
+    "num_code_lines",
+    "num_bytes",
+    "content_sha256",
+    "license"
+  ],
+  "properties": {
+    "file_id": {
+      "type": "string",
+      "description": "Stable identifier: '<cluster_id>:<relative_path>'.",
+      "minLength": 1
+    },
+    "cluster_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+    "project_label": { "type": "string", "minLength": 1 },
+    "relative_path": {
+      "type": "string",
+      "description": "Path within the source repository. POSIX separators.",
+      "minLength": 1
+    },
+    "language": { "type": "string", "enum": ["python"] },
+    "num_lines": { "type": "integer", "minimum": 0 },
+    "num_code_lines": { "type": "integer", "minimum": 0 },
+    "num_bytes": { "type": "integer", "minimum": 0 },
+    "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "license": { "type": "string", "minLength": 1 },
+    "source_url": { "type": ["string", "null"] },
+    "source_ref": {
+      "type": ["string", "null"],
+      "description": "Commit SHA or tag of the source repository, for provenance."
+    },
+    "content": {
+      "type": ["string", "null"],
+      "description": "Source text. Omitted when the corpus is written in index-only mode."
+    }
+  }
+}

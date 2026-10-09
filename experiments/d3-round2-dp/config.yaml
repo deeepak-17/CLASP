@@ -1,0 +1,73 @@
+# D3 round 2 (clients trained on frozen base + alpha*cluster) + D7 DP-SGD smoke run.
+# P1 Edge. Every run parameter lives here; the CLIs take each as a flag.
+name: d3-round2-dp
+owner: P1 Adithyaa
+depends_on: [w4w5-g2-g3-round, w12-integration]   # round-1 clients; registry cluster adapters
+
+base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile; 6.7B does not fit in 4 GB
+device_profile: dev
+seed: 0
+
+# GPU-hours (D9). Estimated at launch from round 1's MEASURED timings
+# (55.8 min training, 27.8 min round eval) plus one extra held-out pass per
+# client for the D3 starting point and ~5 min for the DP smoke run.
+gpu_hours_estimate: 1.6
+
+# --- clients (D1) — identical to round 1 ---
+corpus_root: datasets/materialized
+clusters:
+  web:        [client-flask, client-requests, client-werkzeug]
+  scientific: [client-numpy, client-pandas, client-scikit-learn]
+
+# --- cluster layer the clients train on (D3) ---
+# Produced by P2's cluster service from the six round-1 client uploads
+# (aggregate_svd_lowrank, svd_exact), published to the registry (seam B), and
+# pulled back by edge.registry_client (seam C1, sha256-verified).
+# Version 2 is pulled BY NUMBER: the registry's `active` tag points at v1, the
+# naive_avg ablation baseline, because D5 rolled back when the HumanEval guard
+# could not be scored. D2 forbids serving the naive aggregate, so it is not
+# what a client may train on.
+cluster_adapters:
+  web:        {registry_name: cluster-web,        version: 2, aggregation: svd_exact,
+               sha256: 9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279}
+  scientific: {registry_name: cluster-scientific, version: 2, aggregation: svd_exact,
+               sha256: 139a801adebb31b554024395f63f5d728d5ed25c771f69d9fa7ea9a04a5fa03f}
+train_alpha: 0.5             # alpha of the frozen cluster layer during client training
+
+# --- training — identical to round 1, so the only change is D3 ---
+seq_len: 1024
+lr: 1.0e-3
+lr_scheduler: cosine_with_warmup
+warmup_ratio: 0.03
+grad_clip: 1.0
+micro_batch: 1
+grad_accum: 1
+budget_plan: services/edge/budget_plan.json   # sqrt policy, 1200 blocks total
+lora: {r: 16, lora_alpha: 16, target_modules: [q_proj, k_proj, v_proj, o_proj], lora_dropout: 0.0}
+
+# --- evaluation (D5 primary metric: in-project held-out perplexity) ---
+alpha_grid: [0.0, 0.25, 0.5, 1.0]
+alpha_ref: 0.5
+beta: 1.0
+grid_max_blocks: 40
+noise_band: 0.0              # PLACEHOLDER — P5's measured band still outstanding
+
+# --- D7 DP-SGD smoke run (separate from the D3 comparison) ---
+dp_smoke:
+  client: web/client-requests
+  library: security.make_private (P3, security branch) over Opacus 1.6
+  target_epsilon: 8.0
+  delta: 1.0e-5
+  max_grad_norm: 1.0
+  logical_batch_size: 8
+  grad_sample_mode: hooks    # ghost crashes in security.make_private (4-tuple unpack)
+  gradient_checkpointing: false   # Opacus hooks + checkpointing: grad_sample never set
+  seq_len: 512               # 1024 without checkpointing does not fit in 4 GB
+  composition: D3 on cluster-web v2 at alpha 0.5
+
+notes: >
+  Round 2 changes exactly one thing relative to round 1: each client trains on
+  the frozen base + 0.5*cluster instead of the frozen base. The question it
+  answers is the one round 1 left open — whether the cluster layer contributes
+  anything once the client is trained in the order D3 prescribes. DP is kept out
+  of that comparison on purpose and verified separately.

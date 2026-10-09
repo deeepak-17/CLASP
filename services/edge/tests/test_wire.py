@@ -251,3 +251,39 @@ def test_real_adapter_survives_serialize_deserialize_with_its_config():
     assert len(back_sd) == 192
     for key, arr in sd.items():
         np.testing.assert_array_equal(back_sd[key], arr)
+
+
+# --------------------------------------------------------------------------- #
+# D7 — the privacy block on the upload envelope
+# --------------------------------------------------------------------------- #
+def test_upload_carries_a_contract_privacy_block():
+    spent = {"epsilon": 3.21, "delta": 1e-5, "noise_multiplier": 0.64,
+             "max_grad_norm": 1.0}
+    payload = wire.upload_payload(tiny(), {"r": RANK, "lora_alpha": RANK},
+                                  client_id="c", cluster_id="web", round_id=0,
+                                  num_examples=10, privacy=spent)
+    assert payload["privacy"] == spent
+
+
+def test_upload_without_dp_says_so_in_the_contracts_own_encoding():
+    """contracts.PrivacySpec: epsilon None means DP was disabled (the ablation)."""
+    payload = wire.upload_payload(tiny(), {"r": RANK, "lora_alpha": RANK},
+                                  client_id="c", cluster_id="web", round_id=0,
+                                  num_examples=10)
+    assert payload["privacy"]["epsilon"] is None
+    assert payload["privacy"]["delta"] == 1e-5
+
+
+def test_privacy_block_rejects_a_field_the_contract_does_not_have():
+    with pytest.raises(TypeError):
+        wire.privacy_block({"epsilon": 1.0, "epsilom": 2.0})
+
+
+def test_privacy_is_read_from_the_training_manifest(tmp_path):
+    adapter = tmp_path / "client-x" / "adapter"
+    adapter.mkdir(parents=True)
+    assert wire.privacy_from_training_manifest(adapter)["epsilon"] is None
+    (tmp_path / "client-x" / "manifest.json").write_text(json.dumps(
+        {"privacy": {"epsilon": 7.5, "delta": 1e-5, "noise_multiplier": 0.7,
+                     "max_grad_norm": 1.0}}), encoding="utf-8")
+    assert wire.privacy_from_training_manifest(adapter)["epsilon"] == 7.5

@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-10-09T06:21:52Z",
+  "headlines": [
+    {
+      "id": "personalization",
+      "value": "6/6 clients, mean -0.178 ppl",
+      "claim": "Every client's composite has lower perplexity than the base on its own never-trained-on code.",
+      "source": "results/personalization.json · rounds[-1].summary"
+    },
+    {
+      "id": "d3_cluster_layer",
+      "value": "helps 0/6 → 6/6 clients (vs α = 0)",
+      "claim": "Supports D3, not conclusive: in round 2, α = 0 removes a layer the client was trained on.",
+      "source": "results/personalization.json · rounds[*].summary.n_cluster_helps"
+    },
+    {
+      "id": "round_over_round",
+      "value": "lower on 6/6 clients, by 0.001–0.005 ppl",
+      "claim": "Within unmeasured seed noise: one seed, no interval.",
+      "source": "results/personalization.json · comparisons[-1]"
+    },
+    {
+      "id": "aggregation",
+      "value": "web 1.92× · scientific 2.15×",
+      "claim": "SVD aggregation is ~2× closer to the exact average than naive factor averaging.",
+      "source": "results/in_project_metric.json · aggregation_ablation"
+    },
+    {
+      "id": "in_project",
+      "value": "edit sim 0.534 → 0.547",
+      "claim": "The SVD aggregate also completes held-out code better (within noise at 60 examples).",
+      "source": "results/in_project_metric.json · in_project_completion"
+    },
+    {
+      "id": "guard_baseline",
+      "value": "pass@1 0.50 (95% CI 0.30–0.70)",
+      "claim": "Base model on the 20-task HumanEval guard subset.",
+      "source": "results/noise_report.json · humaneval_guard"
+    },
+    {
+      "id": "guard_noise",
+      "value": "13.9 pts now, 4.8 pts on full HumanEval",
+      "claim": "D5's 2-point tolerance is below the guard's noise floor.",
+      "source": "results/noise_report.json · locked_thresholds"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
   "utc": "2026-08-14T08:50:07.496148+00:00",
   "task": "E3.1/E3.2 client LoRA on real partition",
   "client_id": "scientific/client-scikit-learn",
-  "client_dir": "C:\\Users\\admin\\Desktop\\git\\CLASP\\datasets\\materialized\\scientific\\client-scikit-learn",
+  "client_dir": "datasets/materialized/scientific/client-scikit-learn",
   "profile": "dev",
   "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
   "quantization": {

@@ -149,27 +149,73 @@ def build_eval_result(*, adapter_name: str, version: int, kind: str,
     }
 
 
-def predict_decision(in_project: Dict, baseline_in_project: Optional[Dict],
-                     noise_band: float, guard: GuardStatus) -> Tuple[str, str]:
-    """What D5 will say, and why — computed locally for the manifest ONLY.
+def _guard_contract(metrics: Dict):
+    """A guard dict as sent over HTTP -> ``contracts.GuardMetrics`` (int k keys)."""
+    from contracts import GuardMetrics
 
-    The authoritative decision is whatever the registry returns; this exists so
-    the round manifest can record the inputs' implications next to the actual
-    answer, which makes a disagreement between the two visible instead of
-    invisible. It is never substituted for the registry's decision.
+    return GuardMetrics(benchmark=metrics["benchmark"],
+                        pass_at_k={int(k): float(v) for k, v in metrics["pass_at_k"].items()})
+
+
+def _previous_version(versions: Sequence[int], version: int) -> Optional[int]:
+    """The rollback target D5 would use: the version just before ``version``.
+
+    Mirrors ``registry.storage.previous_version`` over a version list the
+    registry itself returned; None when ``version`` is the first one.
     """
-    if baseline_in_project is None:
-        improved, why = False, "no baseline_in_project"
-    else:
-        delta = in_project["edit_similarity"] - baseline_in_project["edit_similarity"]
-        improved = delta > noise_band
-        why = f"edit_similarity delta {delta:+.4f} vs band {noise_band:.4f}"
-    if not guard.available:
-        return "rollback", f"{why}; guard unavailable ({guard.reason.split('—')[0].strip()})"
-    drop = guard.baseline["pass_at_k"]["1"] - guard.candidate["pass_at_k"]["1"]
-    guard_ok = drop <= GUARD_PASS_AT_1_TOLERANCE
-    action = "promote" if (improved and guard_ok) else "rollback"
-    return action, f"{why}; HumanEval pass@1 drop {drop:+.4f}"
+    earlier = [v for v in versions if v < version]
+    return max(earlier) if earlier else None
+
+
+def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict],
+                     previous_version: Optional[int]) -> Tuple[str, str]:
+    """What D5 will say, and why — for the manifest ONLY.
+
+    Computed by the registry's own rule, ``registry.promotion.decide`` (P4), on
+    exactly the inputs being sent: the EvalResult body and baseline guard of
+    seam C2, with the candidate as the active version (the only one the
+    registry evaluates) and ``previous_version`` as the rollback target. The
+    edge does not keep a copy of D5. The authoritative decision is still
+    whatever the live registry returns; this sits beside it in the manifest so
+    a disagreement between the inputs' implications and the service's answer is
+    visible instead of invisible.
+
+    Returns ("unavailable", why) if the registry package is not installed
+    alongside the edge, or if the rule cannot decide on these inputs (a
+    rollback with no previous version) — a prediction the edge cannot make is
+    not made up.
+    """
+    try:
+        from contracts import AdapterKind, AdapterRef, EvalResult, InProjectMetrics
+        from registry.promotion import decide
+    except ImportError as exc:
+        return "unavailable", (f"registry.promotion is not importable here ({exc}); "
+                               f"the registry's live answer is the only decision")
+
+    def metrics(d: Dict) -> InProjectMetrics:
+        return InProjectMetrics(edit_similarity=float(d["edit_similarity"]),
+                                exact_match=float(d["exact_match"]),
+                                perplexity=float(d["perplexity"]),
+                                n_examples=int(d["n_examples"]))
+
+    ref = eval_result["adapter"]
+    baseline = eval_result.get("baseline_in_project")
+    result = EvalResult(
+        adapter=AdapterRef(name=ref["name"], version=int(ref["version"]),
+                           kind=AdapterKind(ref["kind"]), cluster_id=ref.get("cluster_id")),
+        in_project=metrics(eval_result["in_project"]),
+        guard=tuple(_guard_contract(g) for g in eval_result.get("guard", ())),
+        baseline_in_project=metrics(baseline) if baseline else None,
+        baseline_noise_band=float(eval_result.get("baseline_noise_band", 0.0)),
+        seed=int(eval_result.get("seed", 0)))
+    try:
+        decision = decide(result,
+                          baseline_guard=tuple(_guard_contract(g) for g in baseline_guard),
+                          active_version_before=result.adapter.version,
+                          previous_version=previous_version)
+    except ValueError as exc:
+        return "unavailable", f"registry.promotion.decide could not decide: {exc}"
+    return decision.action.value, decision.reason
 
 
 def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
@@ -198,9 +244,12 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         guard=[guard.candidate] if guard.available else [],
         baseline_noise_band=noise_band, seed=seed)
     baseline_guard: List[Dict] = [guard.baseline] if guard.available else []
+    # Read before C2: a rollback moves the active pointer, not the history.
+    versions = [v["ref"]["version"] for v in client.list_versions(adapter_name)["versions"]]
+    previous_version = _previous_version(versions, version)
     decision = client.promote(adapter_name, eval_result, baseline_guard)
     expected_action, expected_why = predict_decision(
-        in_project, baseline_in_project, noise_band, guard)
+        eval_result, baseline_guard, previous_version)
     return {
         "adapter": adapter_name,
         "candidate_version": version,
@@ -212,9 +261,11 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         "noise_band_source": noise_band_source or (
             "PLACEHOLDER 0.0 — with a band of zero 'improved' means 'improved by "
             "any amount'; P5's measured band is still outstanding"),
-        "locally_predicted": {"action": expected_action, "why": expected_why},
+        "locally_predicted": {"action": expected_action, "why": expected_why,
+                              "rule": "registry.promotion.decide"},
         "registry_agrees_with_local_prediction":
-            decision["action"] == expected_action,
+            (None if expected_action == "unavailable"
+             else decision["action"] == expected_action),
         "in_project_measured": measured,
         "in_project_note": (
             "measured on the client's held-out files"

@@ -1,0 +1,11 @@
+# Used by BuildKit for services/evaluation/Dockerfile (build context is the repo
+# root). Keep local datasets and the dashboard's node_modules out of the image.
+**/__pycache__
+**/*.egg-info
+services/evaluation/datasets/raw
+services/evaluation/datasets/materialized
+services/evaluation/datasets/processed
+services/evaluation/dashboard/node_modules
+services/evaluation/dashboard/dist
+services/evaluation/dashboard/public/data
+services/evaluation/logs/*.log

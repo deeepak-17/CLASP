@@ -5,8 +5,15 @@ description = "CLASP Security (P3) — Opacus DP-SGD + mTLS. Library, not a serv
 requires-python = ">=3.10"
 dependencies = [
     "clasp-contracts",
-    # "opacus", "cryptography",
+    "opacus>=1.4",
+    "cryptography>=42.0",
+    "PyJWT>=2.0",
+    "fastapi>=0.100",
+    "numpy>=1.24",
 ]
+
+[project.optional-dependencies]
+test = ["pytest", "torch", "httpx"]
 
 [build-system]
 requires = ["setuptools>=68"]
