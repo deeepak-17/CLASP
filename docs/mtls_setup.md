@@ -3,6 +3,17 @@
 ## Overview
 This document describes the mutual TLS (mTLS) setup for CLASP, securing communications between Edge ↔ Cluster, Cluster ↔ Registry, and Registry ↔ Eval.
 
+## TLS policy (D7)
+Every CLASP channel requires **TLS 1.3** with a client certificate signed by the
+CLASP CA. `security.mtls.server_ssl_context` and `client_ssl_context` both set
+`minimum_version = TLSv1_3`, matching the registry's server (`registry.serve`)
+and the edge's client, so no caller has to tighten or loosen a context. All CLASP
+services run on Python 3.11 / OpenSSL 3, so no peer needs TLS 1.2.
+
+`security.mtls.verify_cert(cert, ca_cert)` returns True only if the issuer matches
+the CA subject, the current time is inside the certificate's validity window, and
+the CA's signature verifies.
+
 ## Prerequisites
 - Python 3.10+
 - `cryptography` package (`pip install cryptography`)
