@@ -1,11 +1,15 @@
 name: CI
 
-# Required check on every PR (MASTER_PLAN D9). No direct pushes to main.
+# Required check on every PR (D9). No direct pushes to main.
+# Integration branches get the same gate: team PRs land there first.
 on:
   push:
-    branches: [main]
+    branches: [main, "integration/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "integration/**"]
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -35,7 +39,8 @@ jobs:
           - { name: security,    path: security,              tests: security/tests }
           - { name: edge,        path: services/edge,         tests: services/edge/tests }
           - { name: cluster,     path: services/cluster,      tests: services/cluster/tests }
-          - { name: registry,    path: services/registry,     tests: services/registry/tests }
+          # Registry carries a coverage floor (P4 target: >= 90 %, measured 94 %).
+          - { name: registry,    path: services/registry,     tests: services/registry/tests, cov: "--cov=registry --cov-report=term-missing --cov-fail-under=90" }
           - { name: evaluation,  path: services/evaluation,   tests: services/evaluation/tests }
     steps:
       - uses: actions/checkout@v4
@@ -45,11 +50,23 @@ jobs:
       - name: Install contracts (shared seam) + package under test
         run: |
           pip install -e contracts
-          pip install -e "${{ matrix.package.path }}[test]" 2>/dev/null || pip install -e "${{ matrix.package.path }}"
-          pip install pytest httpx
+          # services/edge depends on clasp-evaluation for the B5 in-project
+          # completion metric, so the shared packages go in before the matrix one.
+          pip install -e services/evaluation
+          # A missing [test] extra only warns, so install errors are no longer hidden.
+          pip install -e "${{ matrix.package.path }}[test]"
+          pip install pytest pytest-cov httpx
       - name: Run tests
-        run: pytest "${{ matrix.package.tests }}" -q
+        run: pytest "${{ matrix.package.tests }}" -q ${{ matrix.package.cov }}
 
+  # Two integration jobs, deliberately not consolidated tonight (panel-day
+  # merge of two independently-built suites): `e2e` is the narrower,
+  # Cluster<->Registry-only loop (goes deep on the registry/cluster contract
+  # mismatches — Defect 4's partial config reassembly, the alpha type cast —
+  # reviewed and hardened by Adithyaa in #12); `integration` is the fuller
+  # all-four-seams version including Edge. Different files
+  # (tests/e2e/ vs tests/integration/), not duplicates. Worth revisiting
+  # after the panel whether one subsumes the other.
   e2e:
     name: e2e (cluster -> registry loop)
     runs-on: ubuntu-latest
@@ -76,3 +93,56 @@ jobs:
           pip install pytest httpx safetensors
       - name: Run the cross-service loop test
         run: pytest tests/e2e -q
+
+  integration:
+    name: four-seam integration (CPU only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install every package the seams cross
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e contracts -e services/evaluation
+          pip install -e services/cluster -e services/registry
+          pip install --no-deps -e services/edge
+          pip install peft safetensors requests pytest httpx
+      - name: Run the four-seam test
+        # Tiny synthetic adapters, in-process TestClients: no GPU, no model
+        # download, no services to start, no HumanEval. See the module docstring
+        # in tests/integration/test_four_seams.py for what it does NOT prove.
+        run: pytest tests/integration -q
+
+  experiments:
+    name: experiment configs (D8/D9)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e contracts -e services/registry
+      # Every experiments/*/config.yaml must state a seed, a per-run GPU-hours
+      # estimate, stay in the D8 caps (or justify an override) and fit its budget.
+      - run: python -m registry.runs check experiments
+
+  compose:
+    name: compose stack (registry + demo-seed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every profile parses
+        run: docker compose --profile demo --profile train config --quiet
+      - name: mTLS overlay parses
+        run: docker compose -f docker-compose.yml -f docker-compose.mtls.yml config --quiet
+      # The real image, the real volume, a real HTTP round trip: demo-seed drives
+      # save -> compose -> promote -> rollback -> restore (D11 timed) -> lineage -> GC
+      # against the containerised registry and fails the job on any wrong answer.
+      - name: Registry image + demo-seed end to end
+        run: docker compose --profile demo up --build --exit-code-from demo-seed registry demo-seed
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --profile demo logs registry demo-seed
+

@@ -15,13 +15,14 @@ network or ray.
 from __future__ import annotations
 
 import contextlib
+import os as _os
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from flwr.common import (
     Code,
     FitRes,
@@ -44,14 +45,19 @@ from cluster.adapter_format import (
     LoRAAdapter,
 )
 from cluster.aggregation import (
+    aggregate_layerwise,
     aggregate_naive,
     aggregate_svd,
+    aggregate_svd_lowrank,
     ensure_compatible,
-    exact_average_delta,
+    layerwise_exact_average_error,
 )
 from cluster.clustering import ClusterAssigner
 from cluster.integration import SnapshotSink, cluster_adapter_ref
 from cluster.redistribution import adapter_from_broadcast, build_broadcast
+from cluster.schemas.messages import (
+    DEFAULT_CLUSTER_ID as _DEFAULT_CLUSTER_ID,
+)
 from cluster.schemas.messages import (
     AdapterUpload,
     ClusterAdapterBroadcast,
@@ -233,45 +239,69 @@ def start_grpc_server(
 # HTTP service (Integration Sprint B2/B3) — FastAPI on :8002
 # =============================================================================
 #
-# Wraps the exact-average + SVD aggregation above behind three endpoints so
-# Edge can reach Cluster over a plain HTTP round trip instead of only
-# in-process (simulation.py) or over Flower's own wire protocol
-# (SVDLoRAStrategy above, used by build_server_app/start_grpc_server for the
-# W7 gRPC path). No aggregation math is duplicated or reimplemented here —
-# every endpoint calls straight into
-# cluster.aggregation.{aggregate_svd,aggregate_naive,exact_average_delta} and
-# cluster.adapter_format.LoRAAdapter, unchanged.
+# Wraps the exact-average + SVD aggregation above behind an HTTP surface so
+# Edge can reach Cluster over a plain round trip instead of only in-process
+# (simulation.py) or over Flower's own wire protocol (SVDLoRAStrategy above,
+# used by build_server_app/start_grpc_server for the W7 gRPC path).
 #
-# State is in-memory and resets on process restart: there is no database and
-# no registry client here. services/registry is a separate, unmodified
-# service — Edge pulling the aggregated adapter back out of the *registry*
-# (seam C1 in the integration sprint doc) is registry's endpoint, not this
-# one. What this module exposes is Cluster's own upload -> aggregate ->
-# download loop, which is the piece Cluster owns end to end.
+# NO AGGREGATION MATHEMATICS IS DUPLICATED OR REIMPLEMENTED HERE. Every
+# endpoint calls straight into cluster.aggregation and
+# cluster.adapter_format.LoRAAdapter.
+#
+# Two route sets share ONE per-cluster state (``_clusters``), one set of rules
+# and one lock per cluster:
+#
+#   integration surface (sprint, used by demo_ui / Edge / the four-seam test)
+#       POST /uploads, POST /aggregate            cluster named in the body
+#       GET  /adapters/{id}/active|download|manifest
+#       POST /adapters/{id}/publish               seam B: push to the registry
+#       GET  /adapters/cluster/active, /aggregate/manifest   default cluster
+#
+#   cluster-addressed surface (P2: membership, isolation, re-clustering)
+#       PUT  /clusters/{id}/members               the only call that *registers*
+#       POST /clusters/{id}/uploads|aggregate     404 for an unregistered id
+#       GET  /clusters/{id}/adapters/active|aggregate/manifest, GET /clusters
+#       POST /recluster
+#
+# State is in-memory, keyed by cluster_id, and resets on process restart:
+# there is no database here. Durable, versioned storage is services/registry's
+# job, and /adapters/{cluster_id}/publish is the seam-B hop that hands it over.
+
+DEFAULT_CLUSTER_ID = _DEFAULT_CLUSTER_ID
+_CLUSTER_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+#: Guard against a runaway client fan-in; the demo does 3 clients per cluster.
+MAX_UPLOADS_PER_CLUSTER = 64
+#: Bound on clusters that can exist. ``POST /uploads`` (the integration surface)
+#: creates a cluster on its first upload, as the sprint's demo relies on, so
+#: without a cap any caller could mint unlimited clusters and fill memory.
+MAX_CLUSTERS = 64
+
 
 class _StoredUpload:
-    __slots__ = ("adapter", "arrived_at", "num_examples", "round_id")
+    __slots__ = ("adapter", "arrived_at", "epsilon", "num_examples", "round_id")
 
     def __init__(
-        self, adapter: LoRAAdapter, num_examples: int, round_id: int, arrived_at: float = 0.0
+        self,
+        adapter: LoRAAdapter,
+        num_examples: int,
+        round_id: int,
+        arrived_at: float = 0.0,
+        epsilon: float | None = None,
     ) -> None:
         self.adapter = adapter
         self.num_examples = num_examples
         self.round_id = round_id
         self.arrived_at = arrived_at
-
-
-DEFAULT_CLUSTER_ID = "cluster-default"
-_CLUSTER_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+        self.epsilon = epsilon
 
 
 class _ClusterState:
     """One cluster's upload buffer, round counter and active adapter.
 
-    Multi-cluster (Week 8): the service holds one ``_ClusterState`` per cluster
-    id in ``_clusters``; the legacy single-cluster endpoints are the same
-    handlers bound to ``DEFAULT_CLUSTER_ID``. Buffers never cross clusters —
-    every handler takes the state of exactly one cluster.
+    The service holds one ``_ClusterState`` per cluster id in ``_clusters``; the
+    legacy single-cluster endpoints are the same handlers bound to
+    ``DEFAULT_CLUSTER_ID``. Buffers never cross clusters — every handler takes
+    the state of exactly one cluster.
 
     Concurrency: the handlers are plain ``def`` functions, so FastAPI runs them
     on a thread pool and several can touch one cluster at the same time, even
@@ -281,10 +311,11 @@ class _ClusterState:
     neither be iterated while it is added nor be cleared without having been
     aggregated. An upload that waits behind a running aggregate then sees the
     advanced ``round_id`` and gets an honest 409, never a 201 that is later
-    dropped. Lock order (to stay deadlock-free): ``_registry_lock`` first, then
-    at most one cluster lock — except ``recluster``, which takes every cluster
-    lock in sorted id order. Code holding a cluster lock never takes
-    ``_registry_lock``.
+    dropped. ``publish_to_registry`` takes it to read ``active`` (and so waits
+    for a running aggregate instead of publishing the round before it). Lock
+    order (to stay deadlock-free): ``_registry_lock`` first, then at most one
+    cluster lock — except ``recluster``, which takes every cluster lock in
+    sorted id order. Code holding a cluster lock never takes ``_registry_lock``.
 
     The lock is per process: with several worker processes each has its own
     state anyway, so run this service with one worker.
@@ -309,10 +340,16 @@ class _ClusterState:
         self.last_round: dict[str, tuple[LoRAAdapter, LoRAAdapter | None]] = {}
 
 
-# The default cluster's state object. Kept as a module-level name (and mutated
-# in place, never rebound) because existing tests/clients import it directly.
-_state = _ClusterState()
-_clusters: dict[str, _ClusterState] = {DEFAULT_CLUSTER_ID: _state}
+#: cluster_id -> state. Two statically-assigned clusters in Phase II (D1:
+#: "web" and "scientific"); further clusters are registered with
+#: ``PUT /clusters/{id}/members`` or created by their first ``POST /uploads``.
+_clusters: dict[str, _ClusterState] = {DEFAULT_CLUSTER_ID: _ClusterState()}
+
+#: The default cluster's state, exported under its historical name so callers
+#: written against the single-cluster server keep working unchanged. Mutated in
+#: place, never rebound.
+_state = _clusters[DEFAULT_CLUSTER_ID]
+
 # client_id -> cluster_id. Explicit assignment only (PUT .../members); a client
 # with an assignment may upload only to its own cluster (isolation, W8/W13).
 # NOTE: client_id is self-asserted here — binding it to an authenticated
@@ -322,6 +359,21 @@ _membership: dict[str, str] = {}
 # moving clients). Lock-free readers take a ``dict(...)`` snapshot instead of
 # iterating the live dict, so they can never see "changed size during iteration".
 _registry_lock = threading.RLock()
+
+
+def _reset_clusters() -> None:
+    """Drop every cluster's buffer and every membership, keeping the default
+    cluster's identity (used by tests that share one interpreter)."""
+    with _registry_lock:
+        _clusters.clear()
+        _clusters[DEFAULT_CLUSTER_ID] = _state
+        _membership.clear()
+        with _state.lock:
+            _state.uploads.clear()
+            _state.round_id = 0
+            _state.active = None
+            _state.last_manifest = None
+            _state.last_round.clear()
 
 
 # ---- client identity hook (the seam where P3's mTLS identity plugs in) -------
@@ -380,6 +432,7 @@ def _caller_identity(request: Request) -> str | None:
         raise HTTPException(status_code=401, detail="authenticated client identity required")
     return who
 
+
 app = FastAPI(
     title="CLASP Cluster Service",
     description="Edge-facing HTTP surface over the existing SVD aggregation core (P2).",
@@ -388,14 +441,36 @@ app = FastAPI(
 
 
 class AggregateRequest(_BaseModel):
+    #: Which cluster ``POST /aggregate`` runs over. Ignored by
+    #: ``POST /clusters/{id}/aggregate``, where the path names the cluster (an
+    #: explicit, different value there is a 422).
+    cluster_id: str = DEFAULT_CLUSTER_ID
     aggregation: str = "svd"  # "svd" | "naive" — same choice SVDLoRAStrategy exposes
     rank: int | None = None  # defaults to the uploaded adapters' own rank
-    # Opt-in: also compute the SVD-reconstruction-error manifest below.
-    # Off by default: it recomputes exact_average_delta on top of the averaging
-    # aggregate_svd() already does, doubling compute/memory per call (the same
-    # class of duplicated work that OOM-killed the verification VM at real
-    # model width — see test_real_adapter_pipeline.py).
+    #: Take the exact low-rank route through the same D2 pipeline
+    #: (``aggregate_svd_lowrank``). Same mathematics and — measured on the real
+    #: 24-layer web cluster — the same reconstruction error to six decimals
+    #: (0.171237 mean / 0.227009 max both ways), but 2.5 s instead of 864.6 s,
+    #: and without the 3.2 GB of dense float64 accumulators the reference path
+    #: allocates at real width. Set false to force the reference path.
+    exact_lowrank: bool = True
+    #: Include per-module SVD reconstruction error in the manifest. Opt-in, as
+    #: P2 made it: on the reference path it costs a second dense pass over
+    #: every module, which is the duplicated work that OOM-killed a
+    #: verification run. It is free on the low-rank path (it falls straight out
+    #: of the singular values), but the default stays off so one flag means the
+    #: same thing on both paths. The demo orchestrator asks for it explicitly —
+    #: the sprint wants reconstruction error in the aggregation manifest.
     include_manifest: bool = False
+    #: Keep the upload buffer and round counter after aggregating. Off by
+    #: default, so the normal path is unchanged: aggregate once, clear, advance.
+    #: The D2 ablation needs the SVD aggregate and the naive aggregate built
+    #: from the SAME round's uploads to be comparable at all; without this the
+    #: orchestrator would have to make every client re-send 25 MB of tensors
+    #: between the two, which measures the network rather than the mathematics.
+    #: A retained run is an ablation, not a completed round: it is not published
+    #: to a snapshot sink and is not evidence for ``/recluster``.
+    retain_uploads: bool = False
     # Straggler policy (Week 7). A client is a straggler when its upload
     # arrived more than ``straggler_timeout_s`` after the round's first upload.
     straggler_timeout_s: float | None = None
@@ -406,6 +481,25 @@ class AggregateRequest(_BaseModel):
     # arrived (so min_fraction cannot bite — assign members or set this).
     expected_clients: int | None = _Field(None, ge=1)
     weighting: str = "samples"  # "samples" | "uniform"
+
+
+#: Where seam B posts when the caller does not say. Inside compose the registry
+#: answers to its service name, not to localhost, so the default is read from
+#: the environment rather than hardcoded to one deployment shape.
+DEFAULT_REGISTRY_URL = _os.environ.get("CLASP_REGISTRY_URL", "http://localhost:8004")
+
+
+class PublishRequest(_BaseModel):
+    """Seam B: push this cluster's active aggregate into the State Registry."""
+
+    registry_url: str = DEFAULT_REGISTRY_URL
+    #: Registry adapter name; defaults to the cluster_id, which is what makes
+    #: ``GET /adapters/cluster-web/versions`` the panel-visible gate.
+    adapter_name: str | None = None
+    round: int | None = None
+    seed: int = 0
+    set_active: bool = True
+    timeout_s: float = 120.0
 
 
 class MembersRequest(_BaseModel):
@@ -422,7 +516,10 @@ class ReclusterRequest(_BaseModel):
     include_similarity: bool = False  # cosine matrix between clients' updates
 
 
+
 def _cluster(cluster_id: str, create: bool = False) -> _ClusterState:
+    """The state of one cluster. ``create=False`` (the default) never creates:
+    an unregistered id is a 404, so a typo cannot silently open a new cluster."""
     if not _CLUSTER_ID_RE.match(cluster_id):
         raise HTTPException(status_code=422, detail=f"invalid cluster id {cluster_id!r}")
     state = _clusters.get(cluster_id)
@@ -432,18 +529,38 @@ def _cluster(cluster_id: str, create: bool = False) -> _ClusterState:
         with _registry_lock:  # two racing creators must end up sharing one state
             state = _clusters.get(cluster_id)
             if state is None:
+                if len(_clusters) >= MAX_CLUSTERS:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"already hosting {MAX_CLUSTERS} clusters; refusing to create "
+                        f"{cluster_id!r}",
+                    )
                 state = _clusters[cluster_id] = _ClusterState(cluster_id)
     return state
 
 
 def _healthz() -> dict[str, object]:
+    """Liveness plus per-cluster round bookkeeping.
+
+    The top-level counters describe the DEFAULT cluster (unchanged from the
+    single-cluster surface); ``clusters`` breaks them out per cluster_id. Takes
+    no cluster lock, so a probe never queues behind a running aggregate.
+    """
     return {
         "status": "ok",
         "service": "cluster",
         "pending_uploads": len(_state.uploads),
         "round_id": _state.round_id,
         "has_active_adapter": _state.active is not None,
-        "clusters": sorted(dict(_clusters)),
+        "clusters": {
+            cid: {
+                "pending_uploads": len(st.uploads),
+                "pending_clients": sorted(st.uploads),
+                "round_id": st.round_id,
+                "has_active_adapter": st.active is not None,
+            }
+            for cid, st in sorted(dict(_clusters).items())
+        },
     }
 
 
@@ -451,6 +568,11 @@ def _upload(
     state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None = None
 ) -> dict[str, object]:
     """Seam A: Edge -> Cluster. Accepts one client's trained LoRA adapter.
+
+    ``upload.tensors`` may use either key convention ``LoRAAdapter`` already
+    parses: the short internal 'layers.<i>.<module>.<part>.weight' form, or
+    a real PEFT dump like
+    'base_model.model.model.layers.3.self_attn.q_proj.lora_A.weight'.
 
     Holds the cluster's lock for the whole check-and-store, so it is atomic with
     respect to ``_aggregate`` and to membership moves (see ``_ClusterState``).
@@ -462,13 +584,7 @@ def _upload(
 def _upload_locked(
     state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None
 ) -> dict[str, object]:
-    """Body of ``_upload``; the caller must hold ``state.lock``.
-
-    ``upload.tensors`` may use either key convention ``LoRAAdapter`` already
-    parses: the short internal 'layers.<i>.<module>.<part>.weight' form, or
-    a real PEFT dump like
-    'base_model.model.model.layers.3.self_attn.q_proj.lora_A.weight'.
-    """
+    """Body of ``_upload``; the caller must hold ``state.lock``."""
     if authenticated_as is not None and authenticated_as != upload.client_id:
         raise HTTPException(
             status_code=403,
@@ -501,9 +617,14 @@ def _upload_locked(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"upload round_id={upload.round_id} does not match the "
-                f"cluster's current round_id={state.round_id}"
+                f"upload round_id={upload.round_id} does not match "
+                f"{state.cluster_id}'s current round_id={state.round_id}"
             ),
+        )
+    if upload.client_id not in state.uploads and len(state.uploads) >= MAX_UPLOADS_PER_CLUSTER:
+        raise HTTPException(
+            status_code=429,
+            detail=f"{state.cluster_id} already holds {MAX_UPLOADS_PER_CLUSTER} uploads",
         )
 
     state_dict = {t.name: t.to_numpy() for t in upload.tensors}
@@ -537,6 +658,7 @@ def _upload_locked(
         num_examples=upload.num_examples,
         round_id=upload.round_id,
         arrived_at=state.clock(),
+        epsilon=upload.epsilon,
     )
     return {
         "client_id": upload.client_id,
@@ -559,6 +681,40 @@ def _expected_clients(cluster_id: str, requested: int | None) -> int | None:
     with _registry_lock:
         members = sum(1 for owner in _membership.values() if owner == cluster_id)
     return members or None
+
+
+def cluster_epsilon(epsilons: Sequence[float | None]) -> float | None:
+    """The privacy budget (D7) to record for an aggregate: the **max** ε over the
+    aggregated clients — the loosest guarantee any contribution carries.
+
+    ``None`` as soon as one aggregated client did not report an ε: that client
+    was trained without DP (or did not say), so no finite ε describes the
+    aggregate and claiming the others' maximum would understate the privacy
+    loss. This mirrors the registry's composition rule, where a part trained
+    without DP makes the composite's ε ``None``.
+    """
+    if not epsilons or any(e is None for e in epsilons):
+        return None
+    return float(max(e for e in epsilons if e is not None))
+
+
+def _aggregate_target(
+    request: AggregateRequest | None, path_cluster_id: str | None
+) -> tuple[_ClusterState, AggregateRequest]:
+    """Resolve which cluster an aggregate runs over (the body's ``cluster_id`` on
+    ``POST /aggregate``, the path on ``POST /clusters/{id}/aggregate``)."""
+    req = request or AggregateRequest()
+    if path_cluster_id is None:
+        return _cluster(req.cluster_id), req
+    if "cluster_id" in req.model_fields_set and req.cluster_id != path_cluster_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"body cluster_id {req.cluster_id!r} does not match the path's "
+                f"cluster {path_cluster_id!r}"
+            ),
+        )
+    return _cluster(path_cluster_id), req
 
 
 def _aggregate(state: _ClusterState, request: AggregateRequest | None) -> ClusterAdapterBroadcast:
@@ -586,7 +742,9 @@ def _aggregate_locked(
 ) -> ClusterAdapterBroadcast:
     """Body of ``_aggregate``; the caller must hold ``state.lock``."""
     if not state.uploads:
-        raise HTTPException(status_code=400, detail="no uploads to aggregate")
+        raise HTTPException(
+            status_code=400, detail=f"no uploads to aggregate for {state.cluster_id}"
+        )
 
     req = request or AggregateRequest()
     if req.aggregation not in ("svd", "naive"):
@@ -601,15 +759,16 @@ def _aggregate_locked(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    client_ids = sorted(state.uploads)  # deterministic order => reproducible floats
     first_arrival = min(u.arrived_at for u in state.uploads.values())
     updates = [
         ClientUpdate(
             client_id=client_id,
-            adapter=stored.adapter,
-            num_examples=stored.num_examples,
-            duration_s=stored.arrived_at - first_arrival,
+            adapter=state.uploads[client_id].adapter,
+            num_examples=state.uploads[client_id].num_examples,
+            duration_s=state.uploads[client_id].arrived_at - first_arrival,
         )
-        for client_id, stored in state.uploads.items()
+        for client_id in client_ids
     ]
     # ``min_fraction`` is a fraction of the clients the round *expected*, not of
     # the uploads that happened to arrive (that would always be 100%). Never
@@ -626,73 +785,107 @@ def _aggregate_locked(
                 f"skipped={outcome.skipped}"
             ),
         )
-    adapters = [u.adapter for u in outcome.accepted]
-    weights = outcome.weights
+    accepted = outcome.accepted
+    adapters = [u.adapter for u in accepted]
+    weights = [float(w) for w in outcome.weights]
+    used_ids = [u.client_id for u in accepted]
     rank = req.rank or adapters[0].rank
 
-    try:
-        if req.aggregation == "svd":
-            merged = aggregate_svd(iter(adapters), weights, rank=rank)
-        else:
-            merged = aggregate_naive(iter(adapters), weights)
-    except ValueError as exc:  # incompatible structure / impossible rank
-        raise HTTPException(status_code=422, detail=f"cannot aggregate: {exc}") from exc
+    epsilon = cluster_epsilon([state.uploads[c].epsilon for c in used_ids])
 
     manifest: dict[str, object] = {
         "cluster_id": state.cluster_id,
         "round_id": state.round_id,
-        "num_clients": len(outcome.accepted),
+        "num_clients": len(accepted),
         "expected_clients": expected_n,
         "aggregation": req.aggregation,
         "weighting": req.weighting,
-        "source_clients": sorted(u.client_id for u in outcome.accepted),
+        "source_clients": used_ids,
         "skipped_clients": dict(sorted(outcome.skipped.items())),
+        "sample_weights": [float(u.num_examples) for u in accepted],
+        "rank": rank,
+        "epsilon": epsilon,
     }
-    if req.include_manifest:
-        # SVD reconstruction error vs the exact weighted average, per layer.
-        errors: list[float] = []
-        for layer in merged.layer_indices:
-            exact = exact_average_delta(iter(adapters), weights, layer=layer)
-            for module in merged.target_modules:
-                errors.append(
-                    float(np.linalg.norm(merged.delta_w(module, layer) - exact[module]))
-                )
-        manifest["svd_reconstruction_error"] = {
-            "mean": float(np.mean(errors)) if errors else 0.0,
-            "max": float(np.max(errors)) if errors else 0.0,
-        }
+    if epsilon is None:
+        manifest["epsilon_not_reported_by"] = sorted(
+            c for c in used_ids if state.uploads[c].epsilon is None
+        )
+
+    try:
+        if req.aggregation == "svd" and req.exact_lowrank:
+            merged, errors = aggregate_svd_lowrank(adapters, weights, rank=rank)
+            manifest["aggregation_path"] = "exact_lowrank"
+            if req.include_manifest:
+                vals = list(errors.values())
+                manifest["svd_reconstruction_error"] = {
+                    "mean": float(np.mean(vals)) if vals else 0.0,
+                    "max": float(np.max(vals)) if vals else 0.0,
+                    "min": float(np.min(vals)) if vals else 0.0,
+                    "n_modules": len(vals),
+                    "definition": (
+                        "relative Frobenius ||dW - dW_r|| / ||dW|| of the rank-r "
+                        "truncation against the exact weighted-average delta_W"
+                    ),
+                }
+        else:
+            merged = aggregate_layerwise(
+                adapters, weights, rank=rank, aggregation=req.aggregation
+            )
+            manifest["aggregation_path"] = "reference_layerwise"
+            if req.include_manifest:
+                # Same keys as the low-rank branch, so a manifest reader does not
+                # have to know which path produced it. For the naive branch this
+                # number is the D2 ablation: the cross-term bias of averaging the
+                # A/B factors instead of the delta_Ws.
+                ref = layerwise_exact_average_error(adapters, weights, merged)
+                manifest["svd_reconstruction_error"] = {
+                    "mean": ref["mean_rel_err"],
+                    "max": ref["max_rel_err"],
+                    "min": None,
+                    "n_modules": ref["n_modules"],
+                    "definition": (
+                        "relative Frobenius ||dW_aggregate - dW_exact_average|| / "
+                        "||dW_exact_average||, measured per (layer, module)"
+                    ),
+                }
+    except ValueError as exc:  # incompatible structure / impossible rank
+        raise HTTPException(status_code=422, detail=f"cannot aggregate: {exc}") from exc
 
     broadcast = build_broadcast(
         merged,
         cluster_id=state.cluster_id,
         round_id=state.round_id,
-        num_clients=len(outcome.accepted),
+        num_clients=len(accepted),
         aggregation=req.aggregation,
+        source_clients=used_ids,
+        epsilon=epsilon,
     )
 
-    start = adapter_from_broadcast(state.active) if state.active is not None else None
-    state.last_round = {u.client_id: (u.adapter, start) for u in outcome.accepted}
-    if _publishing.sink is not None:
-        ref = cluster_adapter_ref(state.cluster_id, state.round_id)
-        try:
-            _publishing.sink.publish(ref, broadcast)
-            manifest["published_as"] = {"name": ref.name, "version": ref.version}
-        except Exception as exc:  # noqa: BLE001 - registry trouble must not lose a round
-            manifest["publish_error"] = f"{type(exc).__name__}: {exc}"
+    completed = not req.retain_uploads
+    if completed:
+        # Evidence for POST /recluster and the optional snapshot sink: only a
+        # completed round counts, not a retained ablation run.
+        start = adapter_from_broadcast(state.active) if state.active is not None else None
+        state.last_round = {u.client_id: (u.adapter, start) for u in accepted}
+        if _publishing.sink is not None:
+            ref = cluster_adapter_ref(state.cluster_id, state.round_id)
+            try:
+                _publishing.sink.publish(ref, broadcast)
+                manifest["published_as"] = {"name": ref.name, "version": ref.version}
+            except Exception as exc:  # noqa: BLE001 - registry trouble must not lose a round
+                manifest["publish_error"] = f"{type(exc).__name__}: {exc}"
 
     state.active = broadcast
+    manifest["retained_uploads"] = req.retain_uploads
     state.last_manifest = manifest
-    state.uploads.clear()
-    state.round_id += 1
+    if completed:
+        state.uploads.clear()
+        state.round_id += 1
     return broadcast
 
 
-def _active(state: _ClusterState, request: Request | None = None) -> ClusterAdapterBroadcast:
-    """Where Edge (or, in the full loop, the registry) pulls the aggregated
-    cluster adapter from. ``tensors`` carry the full PEFT key convention and
-    ``peft_config`` is a ready adapter_config.json.
-
-    Retrieval isolation: when an identity provider is installed and the caller
+def _read_access(state: _ClusterState, request: Request | None) -> None:
+    """Retrieval isolation: when an identity provider is installed and the caller
     is a member of a *different* cluster, the request is refused. Callers with
     no membership (registry / evaluation services) are not restricted."""
     caller = _caller_identity(request) if request is not None else None
@@ -705,20 +898,78 @@ def _active(state: _ClusterState, request: Request | None = None) -> ClusterAdap
                 f"cluster {state.cluster_id!r}'s adapter"
             ),
         )
-    active = state.active  # one atomic read: _aggregate swaps the reference
+
+
+def _active(state: _ClusterState | None, cluster_id: str, request: Request | None = None):
+    """Where Edge (or, in the full loop, the registry) pulls the aggregated
+    cluster adapter from. ``tensors`` carry the full PEFT key convention and
+    ``peft_config`` is a ready adapter_config.json. Never creates a cluster."""
+    if state is not None:
+        _read_access(state, request)
+    active = state.active if state is not None else None  # one atomic read
     if active is None:
-        raise HTTPException(status_code=404, detail="no aggregated cluster adapter yet")
+        raise HTTPException(
+            status_code=404, detail=f"no aggregated cluster adapter for {cluster_id!r}"
+        )
     return active
 
 
-def _manifest(state: _ClusterState) -> dict[str, object]:
-    manifest = state.last_manifest
+def _manifest(state: _ClusterState | None, cluster_id: str) -> dict[str, object]:
+    manifest = state.last_manifest if state is not None else None
     if manifest is None:
-        raise HTTPException(status_code=404, detail="no aggregation has run yet")
+        raise HTTPException(
+            status_code=404, detail=f"no aggregation has run for {cluster_id!r}"
+        )
     return manifest
 
 
-# ---- legacy single-cluster surface (cluster-default) ----------------------
+def _canonical_safetensors(blob: bytes) -> bytes:
+    """Rewrite the safetensors header with sorted, compact JSON.
+
+    ``safetensors`` serializes its header — ``__metadata__`` included — from a
+    Rust hash map, so the same tensors and the same metadata come out in a
+    different key order from call to call: three ``save`` calls in one process
+    were measured producing two distinct sha256 digests. Without this, an
+    adapter's published bytes (and the digest the registry records against
+    them) change run to run even when nothing about the adapter changed, which
+    quietly breaks D9's reproducibility story.
+
+    Header-only: ``data_offsets`` are relative to the buffer that FOLLOWS the
+    header, so re-serializing the header JSON canonically leaves them valid.
+
+    Mirrored in ``edge.wire.canonicalize_safetensors`` — duplicated rather than
+    imported because ``contracts`` is the only cross-module import path
+    (docs/architecture.md §2); ``tests/integration`` asserts the two agree.
+    """
+    import json
+
+    header_len = int.from_bytes(blob[:8], "little")
+    header = json.loads(blob[8:8 + header_len].decode("utf-8"))
+    canonical = json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return len(canonical).to_bytes(8, "little") + canonical + blob[8 + header_len:]
+
+
+def _peft_bytes(broadcast: ClusterAdapterBroadcast) -> bytes:
+    """The aggregate as a safetensors blob, config embedded in ``__metadata__``.
+
+    The registry stores payloads opaquely and serves them back with no config
+    beside them (sprint Defect 4). Carrying adapter_config.json inside the
+    blob's own metadata header means the round trip through the registry loses
+    nothing, and Edge never has to invent a hyperparameter it was not given.
+    """
+    import json
+
+    from safetensors.numpy import save
+
+    tensors = {t.name: t.to_numpy() for t in broadcast.tensors}
+    metadata = {"format": "pt", "cluster_id": broadcast.cluster_id,
+                "source_clients": ",".join(broadcast.source_clients)}
+    if broadcast.peft_config is not None:
+        metadata["adapter_config"] = json.dumps(broadcast.peft_config)
+    return _canonical_safetensors(save(tensors, metadata=metadata))
+
+
+# ---- integration surface: cluster named in the body (sprint B2/B3) ----------
 
 
 @app.get("/healthz")
@@ -728,25 +979,148 @@ def healthz() -> dict[str, object]:
 
 @app.post("/uploads", status_code=201)
 def upload_adapter(upload: AdapterUpload, request: Request) -> dict[str, object]:
-    return _upload(_state, upload, _caller_identity(request))
+    """Seam A, cluster named by ``upload.cluster_id`` (default cluster when
+    omitted). The cluster is created on its first upload here — the sprint demo
+    relies on it — bounded by ``MAX_CLUSTERS``; use ``PUT /clusters/{id}/members``
+    plus ``POST /clusters/{id}/uploads`` where a mistyped id must be a 404."""
+    return _upload(_cluster(upload.cluster_id, create=True), upload, _caller_identity(request))
 
 
 @app.post("/aggregate", response_model=ClusterAdapterBroadcast)
 def aggregate(request: AggregateRequest | None = None) -> ClusterAdapterBroadcast:
-    return _aggregate(_state, request)
+    state, req = _aggregate_target(request, None)
+    return _aggregate(state, req)
 
 
+# NOTE: the literal '/adapters/cluster/active' route is declared BEFORE the
+# parameterized one on purpose. FastAPI matches routes in declaration order, so
+# this keeps the original single-cluster path meaning "the default cluster"
+# instead of resolving cluster_id="cluster" to an empty new cluster.
 @app.get("/adapters/cluster/active", response_model=ClusterAdapterBroadcast)
-def get_active_adapter(request: Request) -> ClusterAdapterBroadcast:
-    return _active(_state, request)
+def get_default_active_adapter(request: Request) -> ClusterAdapterBroadcast:
+    """Single-cluster alias for the default cluster's active aggregate."""
+    return _active(_clusters.get(DEFAULT_CLUSTER_ID), DEFAULT_CLUSTER_ID, request)
+
+
+@app.get("/adapters/{cluster_id}/active", response_model=ClusterAdapterBroadcast)
+def get_active_adapter(cluster_id: str, request: Request) -> ClusterAdapterBroadcast:
+    """Where the orchestrator pulls a cluster's aggregate from before the
+    registry hop. ``tensors`` carry the full PEFT key convention
+    (``to_peft_state_dict``) and ``peft_config`` is a ready adapter_config.json
+    — together enough to write a directory ``edge.merge.load_adapter`` reads."""
+    return _active(_clusters.get(cluster_id), cluster_id, request)
+
+
+@app.get("/adapters/{cluster_id}/download")
+def download_adapter(cluster_id: str, request: Request) -> Response:
+    """The active aggregate as raw safetensors bytes — byte-for-byte the
+    payload seam B stores in the registry, with adapter_config.json embedded in
+    the file's own ``__metadata__`` header."""
+    active = _active(_clusters.get(cluster_id), cluster_id, request)
+    return Response(
+        content=_peft_bytes(active),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{cluster_id}.safetensors"',
+            "X-CLASP-Round": str(active.round_id),
+            "X-CLASP-Source-Clients": ",".join(active.source_clients),
+        },
+    )
 
 
 @app.get("/aggregate/manifest")
 def get_last_manifest() -> dict[str, object]:
-    return _manifest(_state)
+    """Single-cluster alias for the default cluster's last aggregation manifest."""
+    return _manifest(_clusters.get(DEFAULT_CLUSTER_ID), DEFAULT_CLUSTER_ID)
 
 
-# ---- multi-cluster surface (Week 8) ----------------------------------------
+@app.get("/adapters/{cluster_id}/manifest")
+def get_cluster_manifest(cluster_id: str) -> dict[str, object]:
+    return _manifest(_clusters.get(cluster_id), cluster_id)
+
+
+@app.post("/adapters/{cluster_id}/publish", status_code=201)
+def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) -> dict:
+    """Seam B: Cluster -> Registry. POST the active aggregate as a new version.
+
+    This is the one place Cluster talks to another service. It sends exactly
+    what ``/download`` serves, plus the metadata envelope the registry records:
+    aggregation method, source clients, round, the LoRA hyperparameters and —
+    when every aggregated client reported one — the cluster's privacy budget
+    (D7: the max ε over the aggregated clients). Every field is read off the
+    aggregate itself, none typed by hand. The registry computes and stores its
+    own sha256 over the payload; Edge verifies the download against that on the
+    way back out (seam C1).
+
+    The cluster lock is taken to read ``active`` (so a publish that arrives
+    during an aggregate waits for it and sends the new round, never a torn
+    one) and released before the network call.
+    """
+    import json as _json
+
+    import httpx
+
+    req = request or PublishRequest()
+    state = _clusters.get(cluster_id)
+    broadcast = None
+    if state is not None:
+        with state.lock:
+            broadcast = state.active
+    if broadcast is None:
+        raise HTTPException(
+            status_code=404, detail=f"no aggregated cluster adapter for {cluster_id!r}"
+        )
+    name = req.adapter_name or cluster_id
+    payload = _peft_bytes(broadcast)
+    cfg = broadcast.peft_config or {}
+    meta: dict[str, object] = {
+        "kind": "cluster",
+        "cluster_id": cluster_id,
+        "aggregation": "svd_exact" if broadcast.aggregation == "svd" else "naive_avg",
+        "round": req.round if req.round is not None else broadcast.round_id,
+        "seed": req.seed,
+        "source_clients": list(broadcast.source_clients),
+        "set_active": req.set_active,
+        "hparams": {
+            "rank": broadcast.rank,
+            # Pinned to r so PEFT's scaling is exactly 1.0 and the stored
+            # tensors mean delta_W itself — the convention edge.aggregate uses.
+            "lora_alpha": int(cfg.get("r", broadcast.rank)),
+            "dropout": float(cfg.get("lora_dropout", 0.0)),
+            "target_modules": list(broadcast.target_modules),
+        },
+    }
+    if broadcast.epsilon is not None:
+        # D7: without this every cluster (and every composite built from it) is
+        # recorded in the registry with epsilon = null.
+        meta["privacy"] = {"epsilon": broadcast.epsilon}
+
+    try:
+        with httpx.Client(timeout=req.timeout_s) as http:
+            resp = http.post(
+                f"{req.registry_url.rstrip('/')}/adapters/{name}/versions",
+                files={"file": (f"{name}.safetensors", payload,
+                                "application/octet-stream")},
+                data={"meta": _json.dumps(meta)},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"registry unreachable at {req.registry_url}: {exc}"
+        ) from exc
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"registry rejected the snapshot ({resp.status_code}): {resp.text}",
+        )
+    return {
+        "cluster_id": cluster_id,
+        "registry_url": req.registry_url,
+        "adapter_name": name,
+        "version": resp.json(),
+    }
+
+
+# ---- cluster-addressed surface (P2: membership, isolation, re-clustering) ----
 
 
 @app.get("/clusters")
@@ -772,12 +1146,13 @@ def list_clusters() -> dict[str, object]:
 @app.put("/clusters/{cluster_id}/members")
 def set_members(cluster_id: str, body: MembersRequest) -> dict[str, object]:
     """Assign ``client_ids`` to this cluster (moving them out of any other).
-    Created lazily on first reference. Uploads already buffered by a moved
-    client in its old cluster are discarded so they cannot leak into the old
-    cluster's aggregate after the move.
+    Created if new. Uploads already buffered by a moved client in its old
+    cluster are discarded so they cannot leak into the old cluster's aggregate
+    after the move.
 
-    This is the **only** endpoint that creates a cluster: an upload to an id
-    nobody registered is a 404, so a typo cannot silently open a new cluster.
+    This is the call that *registers* a cluster for the cluster-addressed
+    surface: ``POST /clusters/{id}/uploads`` and ``.../aggregate`` answer 404
+    for an id nobody registered, so a typo cannot silently open a new cluster.
 
     Order matters for isolation: membership is changed first (under the registry
     lock), the stale buffered uploads are dropped afterwards under each old
@@ -799,30 +1174,44 @@ def set_members(cluster_id: str, body: MembersRequest) -> dict[str, object]:
     return {"cluster_id": state.cluster_id, "members": members}
 
 
+def _path_matches_body(cluster_id: str, upload: AdapterUpload) -> None:
+    if "cluster_id" in upload.model_fields_set and upload.cluster_id != cluster_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"body cluster_id {upload.cluster_id!r} does not match the path's "
+                f"cluster {cluster_id!r}"
+            ),
+        )
+
+
 @app.post("/clusters/{cluster_id}/uploads", status_code=201)
 def upload_adapter_to_cluster(
     cluster_id: str, upload: AdapterUpload, request: Request
 ) -> dict[str, object]:
-    # create=False: only ``PUT /clusters/{id}/members`` creates a cluster, so a
+    # create=False: only ``PUT /clusters/{id}/members`` registers a cluster, so a
     # mistyped id is a 404 and callers cannot mint unlimited clusters.
-    return _upload(_cluster(cluster_id), upload, _caller_identity(request))
+    state = _cluster(cluster_id)
+    _path_matches_body(cluster_id, upload)
+    return _upload(state, upload, _caller_identity(request))
 
 
 @app.post("/clusters/{cluster_id}/aggregate", response_model=ClusterAdapterBroadcast)
 def aggregate_cluster(
     cluster_id: str, request: AggregateRequest | None = None
 ) -> ClusterAdapterBroadcast:
-    return _aggregate(_cluster(cluster_id), request)
+    state, req = _aggregate_target(request, cluster_id)
+    return _aggregate(state, req)
 
 
 @app.get("/clusters/{cluster_id}/adapters/active", response_model=ClusterAdapterBroadcast)
 def get_cluster_active_adapter(cluster_id: str, request: Request) -> ClusterAdapterBroadcast:
-    return _active(_cluster(cluster_id), request)
+    return _active(_cluster(cluster_id), cluster_id, request)
 
 
 @app.get("/clusters/{cluster_id}/aggregate/manifest")
-def get_cluster_manifest(cluster_id: str) -> dict[str, object]:
-    return _manifest(_cluster(cluster_id))
+def get_cluster_manifest_by_path(cluster_id: str) -> dict[str, object]:
+    return _manifest(_cluster(cluster_id), cluster_id)
 
 
 @app.post("/recluster")

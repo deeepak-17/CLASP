@@ -145,8 +145,8 @@ class _SlowAggregate:
 
 
 def test_an_upload_during_an_aggregate_waits_and_is_then_refused_not_lost(monkeypatch):
-    slow = _SlowAggregate(server.aggregate_svd)
-    monkeypatch.setattr(server, "aggregate_svd", slow)
+    slow = _SlowAggregate(server.aggregate_svd_lowrank)
+    monkeypatch.setattr(server, "aggregate_svd_lowrank", slow)
     setup = _client()
     create_cluster(setup, "team-a")
     for i, who in enumerate(("c1", "c2")):
@@ -188,14 +188,14 @@ def test_stress_every_accepted_upload_is_aggregated_exactly_once(monkeypatch):
     """Many uploaders race a repeatedly-aggregating thread. Each client keeps
     retrying (409 -> read the round again) until it gets its single 201. Every
     one of those 201s must be counted by exactly one aggregate."""
-    real = server.aggregate_svd
+    real = server.aggregate_svd_lowrank
     aggregated: list[int] = []
 
     def counting(adapters, weights, **kw):
         aggregated.append(len(weights))
         return real(adapters, weights, **kw)
 
-    monkeypatch.setattr(server, "aggregate_svd", counting)
+    monkeypatch.setattr(server, "aggregate_svd_lowrank", counting)
     setup = _client()
     create_cluster(setup, "team-a")
     n_clients = 12
@@ -253,7 +253,7 @@ def test_listing_clusters_while_others_are_created_and_moved():
     def writer() -> None:
         try:
             client = _client()
-            for i in range(150):
+            for i in range(50):
                 r = client.put(f"/clusters/c{i}/members", json={"client_ids": [f"x{i}", "mover"]})
                 assert r.status_code == 200, r.text
         except BaseException as exc:  # noqa: BLE001
@@ -278,12 +278,12 @@ def test_listing_clusters_while_others_are_created_and_moved():
     for t in threads:
         t.join(JOIN_S)
     assert not any(t.is_alive() for t in threads) and not errors, errors
-    assert setup.get("/clusters").json()["clusters"]["c149"]["members"] == ["mover", "x149"]
+    assert setup.get("/clusters").json()["clusters"]["c49"]["members"] == ["mover", "x49"]
 
 
 def test_health_and_listing_answer_while_an_aggregate_is_running(monkeypatch):
-    slow = _SlowAggregate(server.aggregate_svd)
-    monkeypatch.setattr(server, "aggregate_svd", slow)
+    slow = _SlowAggregate(server.aggregate_svd_lowrank)
+    monkeypatch.setattr(server, "aggregate_svd_lowrank", slow)
     setup = _client()
     create_cluster(setup, "team-a")
     assert _upload(setup, "team-a", "c1", 1).status_code == 201

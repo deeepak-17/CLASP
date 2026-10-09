@@ -1,7 +1,26 @@
 # Copy this folder per experiment. All run parameters live here (no hardcoding).
+# `python -m registry.runs plan experiments/<name>/config.yaml` validates it;
+# CI rejects any config without a seed and a GPU-hours estimate (D8/D9).
 name: example-ablation
 base_model: deepseek-ai/deepseek-coder-6.7b-base
 seed: 0
+gpu_hours_estimate: 0.5          # per run — estimate BEFORE running (D8)
+budget:
+  gpu_hours_total: 5             # the sweep below must fit in this
+gpus: 1                          # actual GPU-hours = wall hours x gpus
+
+# D8 caps — exceeding one needs caps_override: {<field>: <value>, justification: "..."}
+clients: 6
+rank: 16
+seq_len: 1024
+max_steps: 200
+rounds: 5
+
 alpha: 1.0      # cluster contribution in Wnew = Wbase + alpha*dWcluster + beta*dWclient
 beta: 1.0       # client contribution
+
+# One run per combination (x seeds if given). Placeholders like {rank} and
+# {outputs_dir} are filled into the command passed to `registry.runs run`.
+sweep: {}
+seeds: []
 notes: ""

@@ -1,7 +1,7 @@
 """Week 6 review pass (P2 code review — no panel feedback was available).
 
 Each test pins one defect found while reviewing the Cluster code; see
-docs/WEEK6_REVIEW.md for the list and what was changed.
+the test names say what each pins.
 """
 
 from __future__ import annotations

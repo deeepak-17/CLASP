@@ -21,7 +21,7 @@ Flower/gRPC push without this module knowing about any transport.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 from cluster.adapter_format import LoRAAdapter
@@ -39,7 +39,11 @@ def build_broadcast(
     round_id: int,
     num_clients: int,
     aggregation: str = "svd",
+    source_clients: Sequence[str] = (),
+    epsilon: float | None = None,
 ) -> ClusterAdapterBroadcast:
+    """``source_clients`` names the contributors (the registry records it);
+    ``epsilon`` is the cluster's privacy budget (D7), ``None`` when unknown."""
     return ClusterAdapterBroadcast(
         cluster_id=cluster_id,
         round_id=round_id,
@@ -48,7 +52,9 @@ def build_broadcast(
         alpha=adapter.alpha,
         num_layers=adapter.num_layers,
         num_clients=num_clients,
+        source_clients=tuple(source_clients),
         aggregation=aggregation,
+        epsilon=epsilon,
         peft_config=adapter.to_peft_config(),
         tensors=[
             TensorPayload.from_numpy(name, arr)

@@ -1,0 +1,20 @@
+# Phase III ablation — dynamic re-clustering (D4: k-means k=2 on cosine of dW from
+# round 3) against the static project clusters it replaces.
+name: clustering-ablation
+owner: P2 Prasanth (runs) · P4 (orchestration)
+base_model: deepseek-ai/deepseek-coder-1.3b-base
+seed: 0
+seeds: [0, 1, 2]
+# 5 rounds x 1.4 GPU-h per round (see rank-sweep).
+gpu_hours_estimate: 7.0
+gpus: 1
+budget:
+  gpu_hours_total: 42          # 2 modes x 3 seeds x 7.0
+clients: 6
+rank: 16
+seq_len: 1024
+max_steps: 200
+rounds: 5
+sweep:
+  clustering: [static, dynamic]
+notes: ""

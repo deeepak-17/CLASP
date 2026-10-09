@@ -5,8 +5,8 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
 **blocked**. Nothing here implements another team's work; the only code added on P2's side is
 `cluster/tls.py`, `cluster/integration.py` and the identity / sink hooks in `cluster/server.py`
 (all optional, off by default). Repository facts below were read from the working tree on
-2026-10-06; `security/`, `services/registry` and `services/evaluation` contain only an empty package
-`__init__.py` (234-282 bytes each).
+2026-10-06 and refreshed after the integration-sprint merge: `security/` is still an empty package,
+`services/registry` now has a service (`registry.app`), and `services/evaluation` has only `completion.py`.
 
 ## Summary
 
@@ -18,8 +18,8 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
 | Client identity | self-asserted `client_id`; `configure_identity()` is a **hook, not wired at startup** (only tests call it; the running service has no authenticated identity) | none | **BLOCKED BY P3** (real identity) |
 | mTLS (G1) | `cluster/tls.py`, tested against an *ephemeral test CA*; **not wired into a running service — mTLS is not finished** | `security/` is empty | **BLOCKED BY P3** |
 | DP mu tuning (W9) | toy non-DP mu sweep only | `security/` is empty | **BLOCKED BY P3** |
-| Cluster -> Registry snapshot | `SnapshotSink` + `AdapterRef` mapping + in-memory stub — **hook, not wired at startup** (only tests call `configure_snapshot_sink`) | `services/registry` is empty | **BLOCKED BY P4** (live) |
-| Evaluation | none needed by Cluster (see below) | `services/evaluation` is empty | **BLOCKED BY P5** (eval of cluster adapters) |
+| Cluster -> Registry snapshot | on request: `POST /adapters/{id}/publish` pushes the active aggregate (with the cluster's ε) to `CLASP_REGISTRY_URL`, tested against an HTTP stand-in. Automatic publish after every aggregate (`SnapshotSink`, `configure_snapshot_sink`) is a **hook, not wired at startup** | `services/registry` has a service; Cluster has not been run against it in CI beyond `tests/integration` | **P4 owns the live end** |
+| Evaluation | none needed by Cluster (see below) | `services/evaluation` has only `completion.py` | **BLOCKED BY P5** (eval of cluster adapters) |
 
 ## P1 Edge
 
@@ -37,7 +37,7 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
   branch) is **not** in this working tree.
 * **Match**: yes for rank, alpha, target modules and PEFT key layout (`test_peft_interop.py`).
   **The previous mismatch (Edge alpha 16 vs Cluster default 32) is fixed on the Cluster side**
-  (`DEFAULT_ALPHA = 16.0`, see `WEEK6_REVIEW.md` #1). Aggregation now *rejects* a mixed-alpha round
+  (`DEFAULT_ALPHA = 16.0`). Aggregation now *rejects* a mixed-alpha round
   instead of averaging it (422 at upload time over HTTP). `base_model_name_or_path` in the broadcast
   config defaults to the 1.3B dev model; pass the real one if Edge trains the 6.7B `target` profile.
 * **Mockable**: yes — every Cluster test uploads synthetic adapters through the real HTTP handlers
@@ -90,10 +90,10 @@ client-certificate TLS when it is *given* certificates. To close G1:
 
 There is no DP-SGD code in the repository, so tuning mu *for DP stability* cannot be done and no result
 is claimed. What exists, clearly separate: a **toy, non-DP** FedProx mu sweep in
-`python -m cluster.evidence` (section `mu_sweep`, results in `demo_runs/phase2_cluster_evidence.md`). It
+a toy loop that is no longer part of this package (it was a throw-away script). It
 shows only that on that toy loss rises as mu grows (more drag toward the global adapter) and that the
 proximal step diverges once `lr * mu >= 2`. It says nothing about the optimum under DP noise/clipping.
-Once P3's clipped + noised gradients exist: rerun the sweep through the same `evidence.mu_sweep` harness with
+Once P3's clipped + noised gradients exist: rerun a mu sweep with
 DP on, and record the chosen mu with its epsilon.
 
 ## P4 Registry
@@ -101,13 +101,15 @@ DP on, and record the chosen mu with its epsilon.
 * **Cluster expects**: somewhere to publish each aggregated cluster adapter after a round: a
   versioned adapter named per cluster, with the PEFT tensors and `adapter_config` (and later epsilon).
 * **Exists**: `contracts.types.AdapterRef(name, version, kind, cluster_id)` and `AdapterKind.CLUSTER`;
-  `services/registry` is an empty package (docker-compose declares a registry service on :8004).
+  `services/registry` is a service on :8004 (`registry.app`); its manifest takes `meta["privacy"]["epsilon"]`,
+  which `POST /adapters/{id}/publish` now fills from the cluster's ε (D7).
 * **Interface**: Cluster defines `cluster.integration.SnapshotSink.publish(ref, broadcast)` and maps
   round `r` of cluster `c` to `AdapterRef(name=c, version=r+1, kind=CLUSTER, cluster_id=c)`. **This naming is
   Cluster's proposal** — P4 has not specified one. It is wired into `MultiClusterFederation(sink=...)` and
   `server.configure_snapshot_sink(...)` (**a hook only tests call — the running service publishes nothing**); a failing sink is reported (`publish_error`) and never loses a round.
-* **Mockable**: yes — `InMemorySnapshotSink` (a test double, not a registry), `tests/test_integration_stubs.py`.
-* **Blocked**: publishing to a real registry; the wire format of the snapshot (the registry may want
+* **Mockable**: yes — `InMemorySnapshotSink` (a test double, not a registry), `tests/test_integration_stubs.py`,
+  and the HTTP stand-in in `tests/test_server_routes_and_epsilon.py`.
+* **Open**: the wire format of the snapshot (the registry may want
   safetensors + metadata rather than `ClusterAdapterBroadcast`); the Registry -> Evaluation extended metadata
   list (`rank, target_modules, alpha, beta, epsilon, seed, timestamp`) is only partly covered by the
   broadcast (no beta/seed/timestamp mapping to registry metadata exists to test against).
@@ -120,7 +122,7 @@ DP on, and record the chosen mu with its epsilon.
   meant to consume adapters from the registry (and drive promote/rollback). There is therefore no
   "evaluation endpoint" on the Cluster side to implement or mock.
 * **Exists**: `contracts.types.EvalResult(adapter: AdapterRef, benchmark, pass_at_k)`;
-  `services/evaluation` is an empty package.
+  `services/evaluation` only has `completion.py`.
 * **What Cluster offers an evaluator** today: `GET /clusters/{id}/adapters/active` (PEFT-keyed tensors +
   a ready `adapter_config`) and `GET /clusters/{id}/aggregate/manifest`; the same adapter is what the
   registry sink receives.
