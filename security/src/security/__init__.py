@@ -35,6 +35,7 @@ __version__ = "0.1.0"
 from security.dp import (
     BudgetExhaustedError,
     DPConfig,
+    EpsilonTracker,
     PrivacyAccountant,
     get_privacy_engine,
     make_private,
@@ -46,6 +47,7 @@ from security.mtls import (
     check_expiry,
     client_ssl_context,
     create_ca,
+    create_client_ssl_context,
     generate_client_cert,
     generate_service_cert,
     server_ssl_context,
@@ -61,6 +63,7 @@ __all__ = [
     "DPConfig",
     "make_private",
     "PrivacyAccountant",
+    "EpsilonTracker",
     "BudgetExhaustedError",
     "get_privacy_engine",
     # mTLS
@@ -71,6 +74,7 @@ __all__ = [
     "verify_cert",
     "server_ssl_context",
     "client_ssl_context",
+    "create_client_ssl_context",
     "check_expiry",
     "CertStatus",
     # Threat Model

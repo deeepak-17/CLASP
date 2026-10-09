@@ -1,3 +1,20 @@
+"""SSL/TLS context factories for mutual TLS (mTLS).
+
+TLS version policy
+~~~~~~~~~~~~~~~~~~
+Both ``server_ssl_context`` and ``client_ssl_context`` set the minimum TLS
+version to **TLS 1.2** (not 1.3).  This is a deliberate choice:
+
+* TLS 1.2 is still considered secure and is required by NIST SP 800-52r2.
+* Many production load-balancers and embedded devices do not yet support
+  TLS 1.3; enforcing 1.3-only would break interoperability.
+* If TLS 1.3-only is desired (e.g. for the edge↔cluster channel), callers
+  can override ``context.minimum_version = ssl.TLSVersion.TLSv1_3`` after
+  obtaining the context.
+
+The previous security branch used TLS 1.3 as the minimum.  This was relaxed
+to 1.2 for broader compatibility; see the PR discussion for details.
+"""
 from __future__ import annotations
 
 import ssl

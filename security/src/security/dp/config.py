@@ -31,12 +31,19 @@ class DPConfig:
         if self.target_epsilon <= 0:
             raise ValueError(f"target_epsilon must be > 0, got {self.target_epsilon}")
 
+    # Fields accepted by the old API but no longer used by this DPConfig.
+    _IGNORED_LEGACY_KEYS = frozenset({
+        "target_delta", "epochs", "batch_size", "physical_batch_size",
+        "grad_sample_mode", "accountant_type",
+    })
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DPConfig:
-        """
-        Creates a DPConfig instance from a dictionary.
-        """
-        return cls(**d)
+        """Create a DPConfig from a dictionary, ignoring unknown/legacy keys."""
+        import dataclasses
+        valid_keys = {f.name for f in dataclasses.fields(cls)}
+        filtered = {k: v for k, v in d.items() if k in valid_keys}
+        return cls(**filtered)
 
     def to_privacy_spec(self, epsilon_spent: float | None = None) -> PrivacySpec:
         """

@@ -1,5 +1,17 @@
 # CLASP DP-SGD Configuration (D7)
 
+## Privacy Unit
+- **Unit**: Per-sample (record-level). Each individual training example is the
+  privacy unit. This means ε bounds the information leakage about any single
+  training record.
+- **Client-level vs record-level**: CLASP currently operates at record-level
+  privacy. In federated settings, each client's local dataset contributes
+  updates clipped and noised per-sample. Client-level DP (bounding leakage
+  about an entire client's dataset) is a future extension tracked in
+  MASTER_PLAN §2.
+- **Implication**: The guarantee is (ε, δ)-DP with respect to adding or
+  removing a single training example from the dataset.
+
 ## Budget Rationale: ε = 8, δ = 1e-5
 - **Epsilon (ε = 8)**: 
   - (a) At ≤200 steps per client per round with `batch_size=1` (`sample_rate ≈ 1/60`), the noise needed for smaller ε would destroy utility for code generation.
@@ -37,18 +49,19 @@
 - `poisson_sampling`: Whether to use Poisson sampling for minibatches.
 
 ## Integration Guide
-The P1 (Edge) service integrates this via Opacus:
+The P1 (Edge) service integrates via the `security.dp` wrapper:
 ```python
-from opacus import PrivacyEngine
+from security.dp import DPConfig, make_private
 
-privacy_engine = PrivacyEngine()
-model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
-    module=model,
-    optimizer=optimizer,
-    data_loader=train_loader,
-    epochs=epochs,
-    target_epsilon=8.0,
-    target_delta=1e-5,
-    max_grad_norm=1.0,
+config = DPConfig(target_epsilon=8.0, delta=1e-5, max_grad_norm=1.0)
+
+# Auto-calibrate noise to enforce ε ≤ 8 over the training run:
+model, optimizer, train_loader = make_private(
+    model, optimizer, train_loader, config, epochs=epochs
 )
 ```
+
+When `epochs` is provided, `make_private` uses Opacus's
+`make_private_with_epsilon` internally to calibrate the noise multiplier σ
+automatically. Without `epochs`, the caller must set `noise_multiplier`
+explicitly and is responsible for the privacy budget.

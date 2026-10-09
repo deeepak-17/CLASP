@@ -145,6 +145,9 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         """
         Process the request and check body size.
+
+        Checks both the ``Content-Length`` header (fast path) and, for chunked
+        or missing-length requests, reads the body stream to enforce the limit.
         """
         content_length = request.headers.get("content-length")
         if content_length:
@@ -152,10 +155,21 @@ class RequestValidationMiddleware(BaseHTTPMiddleware):
                 length = int(content_length)
                 if length > self.max_body_bytes:
                     logger.warning(
-                        f"Rejected request due to large body size: {length} bytes"
+                        "Rejected request due to large Content-Length: %d bytes",
+                        length,
                     )
                     return Response("Payload Too Large", status_code=413)
             except ValueError:
                 pass
-                
+        else:
+            # No Content-Length — request may be chunked.  Read the body and
+            # enforce the size limit so chunked transfers cannot bypass it.
+            body = await request.body()
+            if len(body) > self.max_body_bytes:
+                logger.warning(
+                    "Rejected chunked request due to large body: %d bytes",
+                    len(body),
+                )
+                return Response("Payload Too Large", status_code=413)
+
         return await call_next(request)

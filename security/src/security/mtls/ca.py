@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 from pathlib import Path
 
 from cryptography import x509
@@ -139,13 +140,17 @@ def save_pem(
     key_path = directory / f"{name}_key.pem"
     cert_path = directory / f"{name}_cert.pem"
     
-    key_path.write_bytes(
-        key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
+    key_data = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
     )
+    # Write private key with restrictive permissions (owner-only: 0o600).
+    fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, key_data)
+    finally:
+        os.close(fd)
     
     cert_path.write_bytes(
         cert.public_bytes(serialization.Encoding.PEM)

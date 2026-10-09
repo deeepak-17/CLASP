@@ -14,6 +14,8 @@ class RateLimitConfig:
     requests_per_minute: int = 60
     burst_size: int = 10
     enabled: bool = True
+    max_buckets: int = 10_000
+    bucket_ttl_seconds: float = 300.0
 
 class TokenBucket:
     """Internal token bucket implementation."""
@@ -68,12 +70,30 @@ class RateLimiter:
 
     def _get_bucket(self, client_id: str) -> TokenBucket:
         with self.lock:
+            self._evict_stale_buckets()
             if client_id not in self.buckets:
                 self.buckets[client_id] = TokenBucket(
                     capacity=self.config.burst_size,
                     fill_rate=self.fill_rate
                 )
             return self.buckets[client_id]
+
+    def _evict_stale_buckets(self) -> None:
+        """Remove idle buckets that have exceeded the TTL, or oldest when over max_buckets."""
+        now = time.monotonic()
+        stale = [
+            cid for cid, bucket in self.buckets.items()
+            if (now - bucket.last_fill) > self.config.bucket_ttl_seconds
+        ]
+        for cid in stale:
+            del self.buckets[cid]
+        # If still over capacity, evict the oldest buckets
+        if len(self.buckets) >= self.config.max_buckets:
+            sorted_ids = sorted(
+                self.buckets, key=lambda cid: self.buckets[cid].last_fill
+            )
+            for cid in sorted_ids[: len(self.buckets) - self.config.max_buckets + 1]:
+                del self.buckets[cid]
 
     def check(self, client_id: str) -> bool:
         """
@@ -149,9 +169,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not self.limiter.config.enabled:
             return await call_next(request)
 
-        client_id = request.headers.get("X-Forwarded-For")
-        if not client_id:
-            client_id = request.client.host if request.client else "unknown"
+        # Use request.client.host — X-Forwarded-For is client-controlled and
+        # trivially spoofed unless a trusted reverse proxy strips it.
+        client_id = request.client.host if request.client else "unknown"
 
         if not self.limiter.check(client_id):
             stats = self.limiter.get_stats(client_id)
@@ -177,9 +197,9 @@ def rate_limit_dependency(limiter: RateLimiter) -> Callable[..., Any]:
         A dependency callable.
     """
     def dependency(request: Request) -> None:
-        client_id = request.headers.get("X-Forwarded-For")
-        if not client_id:
-            client_id = request.client.host if request.client else "unknown"
+        # Use request.client.host — X-Forwarded-For is client-controlled and
+        # trivially spoofed unless a trusted reverse proxy strips it.
+        client_id = request.client.host if request.client else "unknown"
             
         if not limiter.check(client_id):
             stats = limiter.get_stats(client_id)
