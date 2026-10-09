@@ -1,4 +1,4 @@
-"""Contracts v1.0 freeze tests — guard the integration seam.
+"""Contracts freeze tests — guard the integration seam (v1.0 base, v1.1 additive).
 
 If any of these break, it means the frozen wire format changed: that needs a
 semver bump + all-hands sign-off (MASTER_PLAN D9), not a silent edit.
@@ -8,9 +8,10 @@ from dataclasses import fields
 import contracts as c
 
 
-def test_version_frozen_at_1_0():
-    assert c.__version__ == "1.0.0"
-    assert c.CONTRACTS_VERSION == "1.0.0"
+def test_version_is_1_1():
+    # v1.1.0 is an additive minor bump over the v1.0 freeze (see test_v1_1.py).
+    assert c.__version__ == "1.1.0"
+    assert c.CONTRACTS_VERSION == "1.1.0"
 
 
 def test_three_wire_seams_present():
@@ -40,7 +41,7 @@ def test_adapter_upload_defaults():
         round=1,
     )
     assert up.hparams.rank == 16
-    assert up.contracts_version == "1.0.0"
+    assert up.contracts_version == c.CONTRACTS_VERSION
     assert up.timestamp  # auto-stamped
 
 

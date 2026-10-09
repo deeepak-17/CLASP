@@ -9,34 +9,60 @@ Endpoints:
     GET  /adapters/{name}/versions/{v}             metadata for one version
     GET  /adapters/{name}/versions/{v}/file        download the safetensors blob
     GET  /adapters/{name}/active                   metadata for the active version
+    GET  /adapters/{name}/lineage                  versions + parents + decisions
+    POST /adapters/{name}/compose                  store a pre-merged D6 composite
     POST /adapters/{name}/promote                  D5 two-sided rule on the active version
+                                                   (+ optional build-on-promote composite)
+    POST /adapters/{name}/restore                  operator restore / rollback drill
+    POST /adapters/{name}/gc                       retention: keep last N + ever-live
+    POST /gc                                       retention across every adapter
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
 
-Composite-adapter storage (D6) is the W8 follow-on, still to build.
-mTLS in front of these endpoints is a W10 deliverable (D7).
+Every mutating route runs under one process-wide write lock: FastAPI serves
+sync routes from a threadpool, and without it two concurrent saves race for
+the same version number (one gets a spurious 409) and a GC can delete the
+version a concurrent restore is pointing at. The service runs one worker.
+
+Storage errors map to HTTP status in one place (see the exception handlers):
+unknown adapter/version -> 404, bad name -> 422, version race -> 409, and a
+corrupt on-disk record -> a clean 500 with the reason, never a traceback.
 """
 from __future__ import annotations
 
 import json
+import os
+import threading
 
 from contracts import (
     CONTRACTS_VERSION,
     AdapterKind,
-    AdapterRef,
     AggregationMethod,
+    CompositeProvenance,
     EvalResult,
     GuardMetrics,
-    InProjectMetrics,
     LoRAHyperParams,
     PrivacySpec,
     PromotionAction,
 )
-from fastapi import Body, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import JSONResponse
 
 from . import __version__
-from .promotion import decide
+from .cascade import apply_cascade, plan_cascade
+from .composition import (
+    CompositionError,
+    PlannedComposite,
+    parse_compose_request,
+    plan_composite,
+    store_composite,
+)
+from .lineage import build_lineage
+from .promotion import decide, restore_decision
+from .retention import RetentionPlan, collect_referenced, default_keep_last, gc_adapter
 from .storage import (
     AdapterNotFound,
+    InvalidAdapterName,
+    KindMismatch,
     RegistryStore,
     StorageError,
     VersionExists,
@@ -50,7 +76,13 @@ app = FastAPI(
     summary="Versioned safetensors adapter storage with two-sided promotion (P4).",
 )
 
+#: Uploads above this are refused with 413 before they reach storage.
+#: A 6.7B-class rank-16 adapter is ~100 MB; 1 GiB leaves ample headroom.
+MAX_UPLOAD_ENV = "CLASP_MAX_UPLOAD_BYTES"
+DEFAULT_MAX_UPLOAD = 1024 * 1024 * 1024
+
 _store: RegistryStore | None = None
+_WRITE_LOCK = threading.RLock()
 
 
 def get_store() -> RegistryStore:
@@ -61,61 +93,76 @@ def get_store() -> RegistryStore:
     return _store
 
 
-def _hparams_from(d: dict | None) -> LoRAHyperParams:
-    d = d or {}
-    base = LoRAHyperParams()
-    return LoRAHyperParams(
-        rank=d.get("rank", base.rank),
-        lora_alpha=d.get("lora_alpha", base.lora_alpha),
-        dropout=d.get("dropout", base.dropout),
-        target_modules=tuple(d.get("target_modules", base.target_modules)),
-        alpha=d.get("alpha", base.alpha),
-        beta=d.get("beta", base.beta),
-    )
+# --------------------------------------------------------------------------- #
+# storage error -> HTTP status, in one place
+# --------------------------------------------------------------------------- #
+@app.exception_handler(AdapterNotFound)
+async def _not_found(_: Request, exc: AdapterNotFound) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": f"not found: {exc}"})
 
 
-def _in_project_from(d: dict | None) -> InProjectMetrics | None:
-    if d is None:
-        return None
-    return InProjectMetrics(
-        edit_similarity=d["edit_similarity"],
-        exact_match=d["exact_match"],
-        perplexity=d["perplexity"],
-        n_examples=d["n_examples"],
-    )
+@app.exception_handler(InvalidAdapterName)
+async def _bad_name(_: Request, exc: InvalidAdapterName) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
-def _guard_metrics_from(d: dict) -> GuardMetrics:
-    return GuardMetrics(
-        benchmark=d["benchmark"],
-        pass_at_k={int(k): v for k, v in d["pass_at_k"].items()},
-    )
+@app.exception_handler(VersionExists)
+async def _version_race(_: Request, exc: VersionExists) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
-def _get_active_version(store: RegistryStore, name: str) -> int | None:
-    """`store.get_active` but with a corrupt on-disk pointer turned into a
-    clean HTTP 500 instead of an unhandled `StorageError` (L1)."""
+@app.exception_handler(KindMismatch)
+async def _kind_conflict(_: Request, exc: KindMismatch) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(StorageError)
+async def _data_error(_: Request, exc: StorageError) -> JSONResponse:
+    # L1: e.g. a corrupt/hand-edited `active` pointer — clean 500, not a crash.
+    return JSONResponse(status_code=500, content={"detail": f"registry data error: {exc}"})
+
+
+def _max_upload() -> int:
     try:
-        return store.get_active(name)
-    except StorageError as e:
-        raise HTTPException(500, f"registry data error: {e}") from e
+        return int(os.environ.get(MAX_UPLOAD_ENV, DEFAULT_MAX_UPLOAD))
+    except ValueError as e:
+        raise HTTPException(500, f"registry misconfigured: {MAX_UPLOAD_ENV}: {e}") from e
 
 
-def _eval_result_from(d: dict) -> EvalResult:
-    ref = d["adapter"]
-    return EvalResult(
-        adapter=AdapterRef(
-            name=ref["name"],
-            version=ref["version"],
-            kind=AdapterKind(ref.get("kind", "client")),
-            cluster_id=ref.get("cluster_id"),
-        ),
-        in_project=_in_project_from(d["in_project"]),
-        guard=tuple(_guard_metrics_from(g) for g in d.get("guard", ())),
-        baseline_in_project=_in_project_from(d.get("baseline_in_project")),
-        baseline_noise_band=d.get("baseline_noise_band", 0.0),
-        seed=d.get("seed", 0),
-    )
+def _read_capped(file: UploadFile) -> bytes:
+    limit = _max_upload()
+    payload = file.file.read(limit + 1)
+    if len(payload) > limit:
+        raise HTTPException(413, f"payload exceeds {limit} bytes ({MAX_UPLOAD_ENV})")
+    return payload
+
+
+def _parse_save_meta(raw: str) -> dict:
+    """Decode the save envelope into ``RegistryStore.save`` keyword arguments."""
+    try:
+        m = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(422, f"meta is not valid JSON: {e}") from e
+    if not isinstance(m, dict):
+        raise HTTPException(422, "meta must be a JSON object")
+    try:
+        composed = m.get("composed_from")
+        if not isinstance(m.get("set_active", True), bool):
+            raise ValueError("set_active must be a boolean")
+        return {
+            "kind": AdapterKind(m.get("kind", "client")),
+            "hparams": LoRAHyperParams.from_json(m.get("hparams")),
+            "privacy": PrivacySpec.from_json(m["privacy"]) if m.get("privacy") else None,
+            "aggregation": AggregationMethod(m["aggregation"]) if m.get("aggregation") else None,
+            "round": m.get("round"),
+            "seed": m.get("seed", 0),
+            "cluster_id": m.get("cluster_id"),
+            "source_clients": tuple(m.get("source_clients", ())),
+            "set_active": m.get("set_active", True),
+            "composed_from": CompositeProvenance.from_json(composed) if composed else None,
+        }
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(422, f"invalid meta: {e}") from e
 
 
 @app.get("/healthz")
@@ -125,43 +172,24 @@ def healthz() -> dict:
 
 @app.get("/adapters")
 def list_adapters() -> dict:
-    store = get_store()
-    return {"adapters": store.list_adapters()}
+    return {"adapters": get_store().list_adapters()}
 
 
 @app.post("/adapters/{name}/versions", status_code=201)
-async def save_version(
+def save_version(
     name: str,
     file: UploadFile = File(..., description="safetensors payload"),
     meta: str = Form("{}", description="JSON metadata envelope"),
 ) -> dict:
     """Write a new immutable version and return its metadata."""
-    store = get_store()
+    kwargs = _parse_save_meta(meta)
+    payload = _read_capped(file)
     try:
-        m = json.loads(meta)
-    except json.JSONDecodeError as e:
-        raise HTTPException(422, f"meta is not valid JSON: {e}") from e
-
-    payload = await file.read()
-    try:
-        kind = AdapterKind(m.get("kind", "client"))
-        aggregation = AggregationMethod(m["aggregation"]) if m.get("aggregation") else None
-        written = store.save(
-            name,
-            payload,
-            kind=kind,
-            hparams=_hparams_from(m.get("hparams")),
-            privacy=PrivacySpec(**m["privacy"]) if m.get("privacy") else None,
-            aggregation=aggregation,
-            round=m.get("round"),
-            seed=m.get("seed", 0),
-            cluster_id=m.get("cluster_id"),
-            source_clients=tuple(m.get("source_clients", ())),
-            set_active=m.get("set_active", True),
-        )
-    except VersionExists as e:  # M4: concurrent save lost the version race
-        raise HTTPException(409, str(e)) from e
-    except (StorageError, ValueError) as e:
+        with _WRITE_LOCK:
+            written = get_store().save(name, payload, **kwargs)
+    except (VersionExists, InvalidAdapterName, KindMismatch):  # mapped by the handlers
+        raise
+    except StorageError as e:  # bad payload / inconsistent envelope: client error
         raise HTTPException(422, str(e)) from e
     return _metadata_to_dict(written)
 
@@ -169,10 +197,7 @@ async def save_version(
 @app.get("/adapters/{name}/versions")
 def list_versions(name: str) -> dict:
     store = get_store()
-    try:
-        versions = store.list_versions(name)
-    except AdapterNotFound as e:
-        raise HTTPException(404, f"adapter not found: {name}") from e
+    versions = store.list_versions(name)
     return {
         "name": name,
         "active": store.get_active(name),
@@ -182,19 +207,12 @@ def list_versions(name: str) -> dict:
 
 @app.get("/adapters/{name}/versions/{version}")
 def get_version(name: str, version: int) -> dict:
-    try:
-        return _metadata_to_dict(get_store().get_metadata(name, version))
-    except AdapterNotFound as e:
-        raise HTTPException(404, str(e)) from e
+    return _metadata_to_dict(get_store().get_metadata(name, version))
 
 
 @app.get("/adapters/{name}/versions/{version}/file")
 def download_version(name: str, version: int) -> Response:
-    store = get_store()
-    try:
-        payload = store.load_payload(name, version)
-    except AdapterNotFound as e:
-        raise HTTPException(404, str(e)) from e
+    payload = get_store().load_payload(name, version)
     return Response(
         content=payload,
         media_type="application/octet-stream",
@@ -205,37 +223,117 @@ def download_version(name: str, version: int) -> Response:
 @app.get("/adapters/{name}/active")
 def get_active(name: str) -> dict:
     store = get_store()
-    active = _get_active_version(store, name)
+    active = store.get_active(name)
     if active is None:
         raise HTTPException(404, f"no active version for {name}")
     return _metadata_to_dict(store.get_metadata(name, active))
+
+
+@app.get("/adapters/{name}/lineage")
+def get_lineage(name: str) -> dict:
+    """Every version with its parents (clients / cluster+client) and decisions."""
+    return build_lineage(get_store(), name)
+
+
+@app.post("/adapters/{name}/compose", status_code=201)
+def compose(name: str, response: Response, body: dict = Body(...)) -> dict:
+    """Store ``alpha*cluster + beta*client`` as one COMPOSITE version of ``name``.
+
+    Body: ``{"cluster": "cluster-web" | {"name", "version"}, "client": ...,
+    "alpha": 0.5, "beta": 1.0, "base_model"?: str}``. Part versions default to
+    each part's active version. ``base_model`` defaults to the base the parts
+    embed; parts on different bases, or a request that contradicts them, are
+    refused. Re-composing identical inputs returns the existing version with
+    200 instead of writing a duplicate.
+    """
+    store = get_store()
+    with _WRITE_LOCK:
+        try:
+            plan = plan_composite(store, parse_compose_request(body), name)
+        except CompositionError as e:
+            raise HTTPException(422, str(e)) from e
+        meta, created = store_composite(store, name, plan)
+    if not created:
+        response.status_code = 200
+    return _metadata_to_dict(meta)
+
+
+def _composite_on_promote(spec: object, candidate: str) -> tuple[str, PlannedComposite]:
+    """Validate a promote body's ``composite`` block and plan it (writes nothing)."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("name"), str):
+        raise HTTPException(422, "composite must be an object with a 'name'")
+    try:
+        req = parse_compose_request(spec)
+    except CompositionError as e:
+        raise HTTPException(422, f"invalid composite: {e}") from e
+    if candidate not in (req.cluster_name, req.client_name):
+        raise HTTPException(
+            422, f"composite must include the promoted adapter {candidate!r} as cluster or client"
+        )
+    try:
+        return spec["name"], plan_composite(get_store(), req, spec["name"])
+    except CompositionError as e:
+        raise HTTPException(422, f"composite cannot be built: {e}") from e
+
+
+def _plan_cascade(name: str, from_version: int, to_version: int) -> list:
+    """Plan the composite moves for a part's rollback/restore; 409 if one can't be built."""
+    try:
+        return plan_cascade(get_store(), name, from_version, to_version)
+    except CompositionError as e:
+        raise HTTPException(
+            409, f"{name} v{from_version} -> v{to_version} would leave a composite serving "
+                 f"v{from_version}, and its replacement cannot be built: {e}",
+        ) from e
+
+
+def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...]]:
+    try:
+        if not isinstance(body.get("eval"), dict) or not isinstance(
+                body["eval"].get("in_project"), dict):
+            raise ValueError("eval.in_project is required (the D5 primary metric)")
+        eval_result = EvalResult.from_json(body["eval"])
+        baseline_guard = tuple(GuardMetrics.from_json(g) for g in body.get("baseline_guard", ()))
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
+        raise HTTPException(422, f"invalid promote payload: {e}") from e
+    return eval_result, baseline_guard
 
 
 @app.post("/adapters/{name}/promote")
 def promote(name: str, body: dict = Body(...)) -> dict:
     """Apply the D5 two-sided rule to the currently-active version.
 
-    Saves auto-activate (D9 groundwork); this endpoint is the checkpoint that
-    confirms or reverts that activation once P5's evaluation lands. Body::
+    Saves auto-activate; this endpoint is the checkpoint that confirms or
+    reverts that activation once evaluation lands. Body::
 
-        {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...]}
+        {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...],
+         "composite"?: {"name", "cluster", "client", "alpha", "beta"}}
 
-    ``baseline_guard`` isn't part of the frozen EvalResult contract (v1.0) —
-    it's an API-boundary extension, same pattern as `save`'s ``meta`` envelope.
+    ``baseline_guard`` isn't part of the EvalResult contract — it's an
+    API-boundary extension, same pattern as `save`'s ``meta`` envelope.
+
+    With ``composite`` (D6), a PROMOTE also stores the pre-merged composite
+    built from the parts' active versions — i.e. including this candidate.
+    The composite is built in memory *before* anything is written, so a bad
+    composite request rejects the whole call and records no decision.
+
+    A ROLLBACK also moves every composite the edge is serving from the
+    rolled-back version onto the restored one (``registry.cascade``), so what
+    is served changes with the pointer. The moves are listed in ``composites``.
     """
-    store = get_store()
-    try:
-        eval_result = _eval_result_from(body["eval"])
-        baseline_guard = tuple(_guard_metrics_from(g) for g in body.get("baseline_guard", ()))
-    except (KeyError, ValueError, TypeError) as e:
-        raise HTTPException(422, f"invalid promote payload: {e}") from e
+    with _WRITE_LOCK:
+        return _promote(name, body)
 
+
+def _promote(name: str, body: dict) -> dict:
+    store = get_store()
+    eval_result, baseline_guard = _parse_promote_body(body)
     if eval_result.adapter.name != name:
         raise HTTPException(
             422, f"eval.adapter.name {eval_result.adapter.name!r} does not match path {name!r}"
         )
 
-    active_before = _get_active_version(store, name)
+    active_before = store.get_active(name)
     if active_before is None:
         raise HTTPException(404, f"no active version for {name}")
     if active_before != eval_result.adapter.version:
@@ -255,10 +353,130 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 
+    wants_composite = "composite" in body
+    planned = None
+    if wants_composite and decision.action == PromotionAction.PROMOTE:
+        planned = _composite_on_promote(body["composite"], name)
+
+    cascade = []
     if decision.action == PromotionAction.ROLLBACK:
+        cascade = _plan_cascade(name, active_before, decision.active_version_after)
         store.set_active(name, decision.active_version_after)
     store.record_promotion(name, decision)
-    return _promotion_decision_to_dict(decision)
+    result = _promotion_decision_to_dict(decision)
+    result["composites"] = apply_cascade(store, cascade, action=decision.action,
+                                         reason=f"{name} {decision.reason}")
+    if wants_composite:
+        composite_name, plan = planned if planned else (None, None)
+        result["composite"] = (
+            _metadata_to_dict(store_composite(store, composite_name, plan)[0]) if plan else None
+        )
+    return result
+
+
+@app.post("/adapters/{name}/restore")
+def restore(name: str, body: dict = Body(...)) -> dict:
+    """Repoint ``active`` by hand — the rollback drill and the D11 restore path.
+
+    Body: ``{"reason": str, "to_version"?: int}``; ``to_version`` defaults to
+    the version before the current active one. Recorded in the audit trail.
+    Composites built from the current active version follow it, as for a D5
+    ROLLBACK; the moves are listed in ``composites``.
+    """
+    with _WRITE_LOCK:
+        return _restore(name, body)
+
+
+def _restore(name: str, body: dict) -> dict:
+    reason, to_version = body.get("reason"), body.get("to_version")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(422, "reason is required (it goes in the audit trail)")
+    if to_version is not None and (isinstance(to_version, bool) or not isinstance(to_version, int)):
+        raise HTTPException(422, f"to_version must be an integer, got {to_version!r}")
+
+    store = get_store()
+    active = store.get_active(name)
+    if active is None:
+        store.list_versions(name)  # 404 for an unknown adapter
+        raise HTTPException(409, f"{name} has no active version to restore from")
+    if to_version is None:
+        to_version = store.previous_version(name, active)
+        if to_version is None:
+            raise HTTPException(409, f"{name} v{active} is the first version — nothing to restore")
+    if to_version == active:
+        raise HTTPException(409, f"{name} v{to_version} is already active")
+
+    store.get_metadata(name, to_version)  # 404 if that version does not exist
+    candidate = store.get_metadata(name, active).ref
+    decision = restore_decision(candidate, to_version=to_version, reason=reason.strip())
+    cascade = _plan_cascade(name, active, to_version)
+    store.set_active(name, to_version)
+    store.record_promotion(name, decision)
+    result = _promotion_decision_to_dict(decision)
+    result["composites"] = apply_cascade(store, cascade, action=decision.action,
+                                         reason=f"{name} {decision.reason}")
+    return result
+
+
+def _parse_gc_body(body: dict) -> tuple[int, bool]:
+    keep_last, dry_run = body.get("keep_last"), body.get("dry_run", True)
+    if keep_last is None:
+        try:
+            keep_last = default_keep_last()
+        except ValueError as e:
+            raise HTTPException(500, f"registry misconfigured: {e}") from e
+    if isinstance(keep_last, bool) or not isinstance(keep_last, int) or keep_last < 1:
+        raise HTTPException(422, f"keep_last must be an integer >= 1, got {keep_last!r}")
+    if not isinstance(dry_run, bool):
+        raise HTTPException(422, f"dry_run must be a boolean, got {dry_run!r}")
+    return keep_last, dry_run
+
+
+def _gc_report(name: str, plan: RetentionPlan, dry_run: bool) -> dict:
+    return {
+        "name": name,
+        "dry_run": dry_run,
+        "deleted": list(plan.delete),
+        "kept": {str(v): list(reasons) for v, reasons in plan.keep.items()},
+    }
+
+
+@app.post("/adapters/{name}/gc")
+def gc_one(name: str, body: dict = Body(default={})) -> dict:
+    """Retention for one adapter. Body: ``{"keep_last"?: int, "dry_run"?: bool}``.
+
+    Dry run by default; ``keep_last`` defaults to ``CLASP_REGISTRY_KEEP_LAST``
+    (else 5). See ``registry.retention`` for what is always protected.
+    """
+    with _WRITE_LOCK:
+        return _gc_one(name, body)
+
+
+def _gc_one(name: str, body: dict) -> dict:
+    keep_last, dry_run = _parse_gc_body(body)
+    plan = gc_adapter(get_store(), name, keep_last=keep_last, dry_run=dry_run)
+    return _gc_report(name, plan, dry_run)
+
+
+@app.post("/gc")
+def gc_all(body: dict = Body(default={})) -> dict:
+    """Retention across every adapter, with one shared composite-reference scan."""
+    with _WRITE_LOCK:
+        return _gc_all(body)
+
+
+def _gc_all(body: dict) -> dict:
+    keep_last, dry_run = _parse_gc_body(body)
+    store = get_store()
+    referenced = collect_referenced(store)
+    reports = []
+    for name in store.list_adapters():
+        if not store.list_versions(name):
+            continue
+        plan = gc_adapter(store, name, keep_last=keep_last, dry_run=dry_run,
+                          referenced=referenced)
+        reports.append(_gc_report(name, plan, dry_run))
+    return {"dry_run": dry_run, "keep_last": keep_last, "adapters": reports}
 
 
 @app.get("/adapters/{name}/promotions")

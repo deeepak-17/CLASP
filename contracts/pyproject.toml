@@ -1,7 +1,7 @@
 [project]
 name = "clasp-contracts"
-version = "1.0.0"
-description = "Shared interface contracts for the CLASP monorepo (integration seam). Frozen v1.0 (Phase II W2)."
+version = "1.1.0"
+description = "Shared interface contracts for the CLASP monorepo (integration seam). v1.1 (additive over the v1.0 freeze)."
 requires-python = ">=3.10"
 dependencies = []
 

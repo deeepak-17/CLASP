@@ -24,10 +24,12 @@ CLASP/
 ├── services/
 │   ├── edge/           # Edge Layer — PEFT training, 4-bit inference, dynamic merger
 │   ├── cluster/        # Cluster Layer — Flower + FedProx aggregation (FastAPI)
-│   ├── registry/       # State Registry — safetensors versioning, Pass@k rollback (FastAPI)
+│   ├── registry/       # State Registry — versioning, two-sided promotion, composites (FastAPI)
 │   └── evaluation/     # Evaluation & Dashboard — HumanEval/MBPP, Pass@k, React/Recharts
 ├── security/           # Security library — Opacus DP-SGD + mTLS (imported, not deployed)
 ├── experiments/        # reproducible ablation configs and results
+├── scripts/            # demo_round.py (four-seam round), run_services.py, fresh_machine_check.sh
+├── tests/integration/  # CPU-only end-to-end proof of all four seams
 └── docs/               # reports, paper draft, figures
 ```
 
@@ -40,11 +42,37 @@ Each module is an installable package that depends on the shared `contracts` pac
 
 ```bash
 # install the shared contracts, then a module + its tests
-pip install -e contracts -e services/registry
+pip install -e contracts -e "services/registry[test]"
 pytest services/registry/tests
 
-# or bring up the full stack
-docker compose up --build
+# the full demo, one command: registry + cluster + demo UI (:8010) + a registry walkthrough
+docker compose --profile demo up --build
+
+# or just the services: registry (:8004) + cluster (:8002)
+docker compose up -d --build
+```
+
+`docs/devops.md` covers the compose profiles, CI, mTLS for the registry and the
+measured non-functional requirements; `scripts/fresh_machine_check.sh` proves a
+clean clone installs, tests and runs.
+
+### Run one federated round across all four seams
+
+```bash
+docker compose up -d registry cluster
+```
+
+```bash
+python scripts/demo_round.py --round 1
+```
+
+Edge → Cluster → Registry → Edge → Registry, on the real trained adapters,
+writing to `experiments/w12-integration/results/`. `docs/integration-sprint.md`
+has the full record, including the known gaps. The same loop runs CPU-only over
+tiny synthetic adapters in CI:
+
+```bash
+python -m pytest tests/integration -q
 ```
 
 ## Modules
@@ -54,7 +82,7 @@ docker compose up --build
 | Edge Layer | `services/edge` | Local LoRA training (PEFT), 4-bit inference, dynamic adapter merger |
 | Cluster Layer | `services/cluster` | Flower orchestration, FedProx aggregation, cluster LoRA redistribution |
 | Security | `security` | Opacus DP-SGD on gradients, mTLS between edge and cluster (library) |
-| State Registry | `services/registry` | safetensors versioning, metadata, Pass@k-based rollback, FastAPI |
+| State Registry | `services/registry` | safetensors versioning, two-sided promotion/rollback, pre-merged composites, retention, run manifests, FastAPI |
 | Evaluation & Dashboard | `services/evaluation` | HumanEval/MBPP pipeline, Pass@k scoring, React/Recharts dashboard |
 
 ## Tech stack

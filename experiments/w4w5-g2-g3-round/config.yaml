@@ -7,6 +7,9 @@ depends_on: w3-edge-lora-composite      # reuses its packing, merge and TTFT mac
 base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile; 6.7B does not fit in 4 GB
 device_profile: dev
 seed: 0
+# D8: GPU-hours per run. Back-filled from the recorded run, not estimated in advance:
+# training 55.8 min + round 27.8 min = 83.6 min (SUMMARY.md).
+gpu_hours_estimate: 1.40
 
 # --- clients (D1) ---
 # NOTE: the web cluster on disk is {flask, requests, werkzeug}. D1 specifies
