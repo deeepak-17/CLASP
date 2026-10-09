@@ -13,7 +13,7 @@ math in isolation from the storage/HTTP layers.
 """
 from __future__ import annotations
 
-from contracts import EvalResult, GuardMetrics, PromotionAction, PromotionDecision
+from contracts import AdapterRef, EvalResult, GuardMetrics, PromotionAction, PromotionDecision
 
 #: Absolute pass@1 regression tolerated before it blocks a promotion (D5),
 #: expressed as a fraction since GuardMetrics.pass_at_k is 0..1 (e.g. 0.31 = 31%).
@@ -80,4 +80,22 @@ def decide(
         action=PromotionAction.ROLLBACK,
         active_version_after=previous_version,
         reason=f"rolled back: {improved_reason}; {guard_reason}",
+    )
+
+
+def restore_decision(
+    candidate: AdapterRef, *, to_version: int, reason: str
+) -> PromotionDecision:
+    """An operator restore, recorded in the same audit trail as D5 decisions.
+
+    Moving back is a ROLLBACK; moving forward (e.g. re-activating a fixed
+    version) is recorded as PROMOTE but says plainly that no D5 rule ran.
+    """
+    backwards = to_version < candidate.version
+    gate = "" if backwards else " — not a D5 decision"
+    return PromotionDecision(
+        adapter=candidate,
+        action=PromotionAction.ROLLBACK if backwards else PromotionAction.PROMOTE,
+        active_version_after=to_version,
+        reason=f"operator restore v{candidate.version} -> v{to_version}{gate}: {reason}",
     )

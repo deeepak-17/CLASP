@@ -19,6 +19,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 SCHEMA_VERSION = "1.0"
 
+#: Dtype every tensor must use on the Edge<->Cluster wire (Integration Sprint B3).
+WIRE_DTYPE = "float32"
+
+#: Cluster id assumed when a caller does not name one (single-cluster callers).
+DEFAULT_CLUSTER_ID = "cluster-default"
+
 
 class TensorPayload(BaseModel):
     """A single tensor encoded for transport."""
@@ -75,6 +81,14 @@ class AdapterUpload(BaseModel):
 
     schema_version: str = SCHEMA_VERSION
     client_id: str
+    # Which project cluster this client belongs to (D1: statically assigned,
+    # "web" | "scientific" in Phase II). Integration Sprint: without it the
+    # server cannot buffer two clusters' uploads separately in one round, and
+    # the registry snapshot it later produces cannot be named after a cluster
+    # -- the panel gate is `GET /adapters/cluster-web/active` listing the three
+    # real web clients. Defaulted so single-cluster callers (and every test
+    # written before this field existed) keep working unchanged.
+    cluster_id: str = DEFAULT_CLUSTER_ID
     round_id: int = Field(ge=0)
     rank: int = Field(gt=0)
     target_modules: tuple[str, ...]
@@ -121,6 +135,16 @@ class AdapterUpload(BaseModel):
         names = [t.name for t in self.tensors]
         if len(set(names)) != len(names):
             raise ValueError("upload contains duplicate tensor names")
+        # Integration Sprint: settle the dtype contract instead of leaving it
+        # implicit. FP32 in both directions -- the six real trained adapters
+        # are fp32, the aggregation promotes to float64 internally and casts
+        # back to the input dtype, so anything else crossing this seam would
+        # silently change what the aggregate is made of.
+        wrong = sorted({t.dtype for t in self.tensors} - {WIRE_DTYPE})
+        if wrong:
+            raise ValueError(
+                f"upload violates the {WIRE_DTYPE} wire contract; got dtype(s) {wrong}"
+            )
         return self
 
 
@@ -135,6 +159,9 @@ class ClusterAdapterBroadcast(BaseModel):
     alpha: float = Field(gt=0)
     num_layers: int = Field(1, ge=1)
     num_clients: int = Field(gt=0)
+    # Which clients this aggregate is made of. The registry records this as
+    # AdapterMetadata.source_clients, which is what the panel gate reads back.
+    source_clients: tuple[str, ...] = ()
     aggregation: str = "svd"  # "svd" | "naive" (ablation baseline, D2)
     epsilon: float | None = None  # DP budget spent, filled by P3's accountant
     # PEFT adapter_config.json fields (LoRAAdapter.to_peft_config()) so a
