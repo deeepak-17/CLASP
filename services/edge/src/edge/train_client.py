@@ -113,6 +113,9 @@ DEFAULT_DP_EPSILON = 8.0
 DEFAULT_DP_DELTA = 1e-5
 DEFAULT_DP_MAX_GRAD_NORM = 1.0
 DEFAULT_DP_BATCH_SIZE = 8
+# The accountant security.make_private's PrivacyEngine uses (Opacus's default),
+# and so the one the noise is calibrated for and epsilon is reported by.
+DP_ACCOUNTANT = "prv"
 
 
 def set_determinism(seed: int) -> None:
@@ -449,13 +452,14 @@ class _Blocks(torch.utils.data.Dataset):
 def _security_dp():
     """P3's DP-SGD API, or a precise statement of what is missing."""
     try:
-        from security import DPConfig, EpsilonTracker, make_private
+        from security import DPConfig, PrivacyAccountant, get_privacy_engine, make_private
     except ImportError as exc:
         raise RuntimeError(
             "--dp needs P3's security library (security.DPConfig, security.make_private, "
-            "security.EpsilonTracker). The installed `security` package does not provide "
-            "them — integrate the security branch first.") from exc
-    return DPConfig, EpsilonTracker, make_private
+            "security.PrivacyAccountant, security.get_privacy_engine). The installed "
+            "`security` package does not provide them — integrate the security branch "
+            "first.") from exc
+    return DPConfig, PrivacyAccountant, get_privacy_engine, make_private
 
 
 def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
@@ -463,40 +467,47 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
              delta: float, max_grad_norm: float) -> Dict:
     """DP-SGD over the client's packed blocks, via ``security.make_private``.
 
-    Everything privacy-related is P3's: ``DPConfig`` describes the run,
-    ``make_private`` builds the Opacus engine and calibrates the noise to hit
-    ``target_epsilon`` at ``delta`` over ``epochs``. The edge supplies the model,
-    the optimizer, the data and the loop. Four constraints, all measured or
-    read off the library rather than assumed:
+    P3's ``DPConfig`` carries the budget and ``make_private`` builds the
+    Opacus engine. The noise is calibrated so the run stays within
+    ``target_epsilon`` at ``delta`` (D7): Opacus's ``get_noise_multiplier``
+    over the engine's accountant, sample rate and epochs, i.e. exactly what
+    ``make_private_with_epsilon`` computes. ``security.make_private(...,
+    epochs=)`` would do it for us but crashes on Opacus 1.6; once P3 fixes
+    that, the calibration line can go. Without calibration ``make_private``
+    uses ``DPConfig.noise_multiplier`` as given and nothing enforces the
+    budget. The edge supplies the model, the optimizer, the data and the loop.
+    Constraints, all measured or read off the library rather than assumed:
 
-    * ``grad_sample_mode="hooks"``. DPConfig defaults to ``"ghost"``, but in
-      ghost mode Opacus 1.6's ``make_private`` returns FOUR objects (module,
-      optimizer, criterion, loader) and ``security.make_private`` unpacks
-      three, so the default crashes. Hooks mode returns three. With LoRA
-      only (6.3 M params) per-sample gradients are cheap at physical batch 1.
+    * Per-sample gradients use Opacus's default ``hooks`` mode, which is what
+      ``make_private`` asks for. With LoRA only (6.3 M params) they are cheap
+      at physical batch 1.
+    * ``make_private`` may replace Opacus-incompatible modules with a fixed
+      deep copy. The edge's 4-bit LoRA model has none (``ModuleValidator``
+      reports 0 errors), and the wrapped module is checked to be the model
+      the edge saves afterwards — a copy would train weights nobody saves.
     * Gradient checkpointing is switched OFF for DP runs. With it on, Opacus's
       per-sample hooks never populate ``grad_sample`` ("Per sample gradient is
       not initialized") — measured on this model. The memory it saved has to
       come from a shorter ``--seq-len`` instead.
-    * ``security.make_private`` is used, not ``make_private_lora``: the latter
-      sets ``requires_grad=True`` on every parameter whose name contains
-      "lora_", which would UNFREEZE the D3 cluster adapter. Freezing is done
-      by ``attach_lora`` / ``stack_frozen_cluster`` and asserted there.
+    * ``make_private`` leaves ``requires_grad`` alone, so the frozen D3
+      cluster adapter stays frozen. Freezing is done by ``attach_lora`` /
+      ``stack_frozen_cluster`` and asserted there.
     * The privacy unit is one packed ``seq_len`` block (record-level DP-SGD),
       which is what Opacus provides. D7 asks for client-level DP; that is a
       property of the federated protocol, not of one client's loop, and is
       recorded as such rather than claimed.
 
-    ε is reported two ways: by Opacus's RDP accountant over the (σ, q, steps)
-    this run actually took — the accountant ``security.make_private`` builds
-    its engine with — and by P3's standalone ``security.EpsilonTracker``. They
-    disagree (the tracker uses a looser bound, 1.3-3x higher on the settings
-    checked); both are recorded and neither is hidden.
+    ε is reported two ways. The one recorded (and uploaded) is the engine's
+    own accountant over the steps actually taken: it is the accountant the
+    noise was calibrated with, so it is the number D7's budget is enforced
+    against. Opacus 1.6 calibrates with PRV; P3's ``PrivacyAccountant`` gives
+    the RDP bound for the same (σ, q, steps), which is looser and can read
+    above the target. Both are recorded and neither is hidden.
     """
-    from opacus.accountants import RDPAccountant
+    from opacus.accountants.utils import get_noise_multiplier
     from opacus.utils.batch_memory_manager import BatchMemoryManager
 
-    DPConfig, EpsilonTracker, make_private = _security_dp()
+    DPConfig, PrivacyAccountant, get_privacy_engine, make_private = _security_dp()
 
     model.train()
     model.config.use_cache = False
@@ -507,13 +518,30 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     n_trainable = sum(p.numel() for p in trainable)
     optimizer = torch.optim.AdamW(trainable, lr=lr)
     loader = torch.utils.data.DataLoader(_Blocks(chunks), batch_size=batch_size)
-    cfg = DPConfig(target_epsilon=target_epsilon, target_delta=delta,
-                   max_grad_norm=max_grad_norm, noise_multiplier=None, epochs=epochs,
-                   batch_size=batch_size, physical_batch_size=1,
-                   grad_sample_mode="hooks", accountant_type="rdp")
+    # D7: sigma calibrated so this run spends at most target_epsilon at delta.
+    # Exactly what Opacus's make_private_with_epsilon does (same accountant,
+    # sample rate 1/len(loader), epochs) — done here because
+    # security.make_private(..., epochs=) crashes on Opacus 1.6 (it reads
+    # accountant.noise_multiplier, which the PRV accountant does not have).
+    sigma_target = float(get_noise_multiplier(
+        target_epsilon=target_epsilon, target_delta=delta, sample_rate=1 / len(loader),
+        epochs=epochs, accountant=DP_ACCOUNTANT))
+    cfg = DPConfig(enabled=True, noise_multiplier=sigma_target, target_epsilon=target_epsilon,
+                   delta=delta, max_grad_norm=max_grad_norm)
+    cfg.validate()
     dp_model, dp_opt, dp_loader = make_private(model, optimizer, loader, cfg)
+    if getattr(dp_model, "_module", dp_model) is not model:
+        raise RuntimeError("security.make_private wrapped a copy of the model; the "
+                           "trained adapter would not be the one saved")
+    engine = get_privacy_engine(dp_model)
+    if engine is None or engine.accountant.mechanism() != DP_ACCOUNTANT:
+        raise RuntimeError(f"security.make_private's engine does not account with "
+                           f"{DP_ACCOUNTANT!r}, the accountant sigma was calibrated for")
     sigma = float(dp_opt.noise_multiplier)
     q = float(dp_loader.sample_rate)
+    if not (math.isclose(sigma, sigma_target) and math.isclose(q, 1 / len(loader))):
+        raise RuntimeError(f"DP engine runs sigma={sigma}, q={q}; calibrated for "
+                           f"sigma={sigma_target}, q={1 / len(loader)}")
 
     # Count real (noised) logical steps through Opacus's public step hook: it
     # fires only when a logical batch completes, never on the skipped
@@ -572,15 +600,16 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
                         print(f"dp step {steps:4d}/{planned_steps} | loss {history[-1]['loss']:.4f}")
                 dp_opt.zero_grad(set_to_none=True)
 
-    accountant = RDPAccountant()
-    accountant.history = [(sigma, q, steps)] if steps else []
-    eps_opacus = float(accountant.get_epsilon(delta)) if steps else 0.0
-    tracker = EpsilonTracker(noise_multiplier=sigma, sample_rate=q, delta=delta)
-    eps_tracker = float(tracker.step(steps)) if steps else 0.0
+    # The engine's accountant saw every noised step through its step hook.
+    eps_engine = float(engine.get_epsilon(delta)) if steps else 0.0
+    rdp = PrivacyAccountant(DPConfig(enabled=True, noise_multiplier=sigma, delta=delta,
+                                     max_grad_norm=max_grad_norm,
+                                     target_epsilon=target_epsilon), sample_rate=q)
+    eps_rdp = float(rdp.compute_epsilon(steps, q, delta)) if steps else 0.0
 
     privacy = {
         # contracts.PrivacySpec fields — what rides the upload envelope.
-        "epsilon": round(eps_opacus, 6),
+        "epsilon": round(eps_engine, 6),
         "delta": delta,
         "noise_multiplier": round(sigma, 6),
         "max_grad_norm": max_grad_norm,
@@ -599,11 +628,14 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
         "dp": {
             "library": "security.make_private (P3) over Opacus",
             "grad_sample_mode": "hooks",
-            "accountant": "opacus RDPAccountant over the steps actually taken",
-            "epsilon_opacus_rdp": round(eps_opacus, 6),
-            "epsilon_security_tracker": round(eps_tracker, 6),
+            "noise_calibration": (f"opacus get_noise_multiplier({DP_ACCOUNTANT}) to "
+                                  f"target_epsilon at delta over {epochs} epochs"),
+            "accountant": f"opacus {engine.accountant.mechanism()} (the engine's, "
+                          f"over the steps actually taken)",
+            "epsilon_engine": round(eps_engine, 6),
+            "epsilon_rdp_security": round(eps_rdp, 6),
             "target_epsilon": target_epsilon,
-            "within_d7_budget": eps_opacus <= DEFAULT_DP_EPSILON,
+            "within_d7_budget": eps_engine <= DEFAULT_DP_EPSILON,
             "sample_rate": q,
             "logical_batch_size": batch_size,
             "epochs": epochs,
@@ -879,8 +911,8 @@ def main() -> None:
               f"(clip {args.grad_clip}){'  <-- SATURATED, lr too hot' if clip_saturated else ''}")
     if args.dp:
         dp = result["dp"]
-        print(f"DP-SGD epsilon    : {dp['epsilon_opacus_rdp']:.4f} (opacus RDP) / "
-              f"{dp['epsilon_security_tracker']:.4f} (security.EpsilonTracker) at "
+        print(f"DP-SGD epsilon    : {dp['epsilon_engine']:.4f} (engine, {DP_ACCOUNTANT}) / "
+              f"{dp['epsilon_rdp_security']:.4f} (security.PrivacyAccountant, RDP) at "
               f"delta {args.dp_delta:g}, sigma {privacy['noise_multiplier']}")
     print(f"loss decreased    : {loss_decreased}")
     if base_eval and final_eval:
