@@ -70,5 +70,5 @@ CLASP_REGISTRY_DATA=./_demo_data/registry .venv-demo/bin/uvicorn registry.app:ap
 .venv-demo/bin/uvicorn demo_ui.server:app --port 8010
 ```
 
-Open `http://localhost:8010/` (redirects to Page 1). See `RUNBOOK.md` for the
+Open `http://localhost:8010/` for the live multi-laptop round (`static/live.html`; edges upload from their own laptops, see `docs/multi-laptop-demo.md`); the three panel pages are linked from it. See `RUNBOOK.md` for the
 full pre-demo checklist and presentation script.
