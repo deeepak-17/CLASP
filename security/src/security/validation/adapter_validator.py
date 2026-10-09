@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from dataclasses import dataclass, field
 from typing import Any
@@ -12,7 +13,7 @@ class AdapterValidationConfig:
     """Configuration for validating LoRA adapters."""
     max_adapter_size_bytes: int = 500 * 1024 * 1024  # 500MB
     max_tensor_norm: float = 100.0
-    max_rank: int = 128
+    max_rank: int = 16  # D8 caps LoRA rank at 16
     allowed_dtypes: tuple[str, ...] = ('float32', 'float16', 'bfloat16')
     enable_norm_check: bool = True
     enable_nan_check: bool = True
@@ -75,6 +76,10 @@ def validate_adapter_integrity(state_dict: dict[str, Any], config: AdapterValida
             if dtype_str not in config.allowed_dtypes:
                 errors.append(f"Tensor {key} has disallowed dtype {arr.dtype}")
         
+        rank = _lora_rank(key, arr)
+        if rank is not None and rank > config.max_rank:
+            errors.append(f"Tensor {key} has LoRA rank {rank}, above max_rank {config.max_rank}")
+
         if config.enable_nan_check and np.isnan(arr).any():
             errors.append(f"Tensor {key} contains NaN values")
             
@@ -107,6 +112,17 @@ def validate_adapter_integrity(state_dict: dict[str, Any], config: AdapterValida
     )
 
 
+def _lora_rank(key: str, arr: np.ndarray) -> int | None:
+    """The LoRA rank a factor carries: rows of lora_A, columns of lora_B."""
+    if arr.ndim != 2:
+        return None
+    if "lora_A" in key:
+        return int(arr.shape[0])
+    if "lora_B" in key:
+        return int(arr.shape[1])
+    return None
+
+
 def compute_adapter_hash(state_dict: dict[str, Any]) -> str:
     """
     Compute a SHA-256 hash of the adapter's tensors for integrity checking.
@@ -135,19 +151,36 @@ def compute_adapter_hash(state_dict: dict[str, Any]) -> str:
     return hasher.hexdigest()
 
 
-def detect_poisoning(adapters: list[dict[str, Any]], weights: list[float] | None = None, threshold_sigma: float = 3.0) -> list[int]:
+#: MAD -> standard deviation for normally distributed data.
+_MAD_TO_SIGMA = 1.4826
+
+
+def detect_poisoning(adapters: list[dict[str, Any]], weights: list[float] | None = None,
+                     threshold_sigma: float = 3.0, max_norm_ratio: float = 3.0) -> list[int]:
     """
-    Detect potential poisoning across multiple adapters by comparing norms (Byzantine fault detection).
-    
+    Detect potential poisoning across adapters by their update norms (Byzantine faults).
+
+    Mean and standard deviation cannot work at CLASP's scale: with n samples the
+    largest possible |z| is (n-1)/sqrt(n), i.e. 1.15 for a 3-client cluster and
+    2.04 for all 6 clients, so a 3-sigma rule never fires and a single client at
+    1000x the others' norm goes unflagged. This uses robust statistics instead:
+    an adapter is flagged when its norm is more than ``max_norm_ratio`` times
+    away from the median norm (above or below) **and** its robust z-score,
+    |norm - median| / (1.4826 * MAD), exceeds ``threshold_sigma`` (or the MAD is
+    zero). Needs at least 3 adapters; with fewer there is no majority to compare
+    against and nothing is flagged.
+
     Args:
         adapters: List of adapter state dictionaries.
-        weights: Optional aggregation weights.
-        threshold_sigma: Number of standard deviations from the mean to consider an adapter suspicious.
-        
+        weights: Optional aggregation weights (unused; kept for API stability).
+        threshold_sigma: Robust z-score above which an adapter can be flagged.
+        max_norm_ratio: How many times above or below the median norm an
+            adapter must be before it can be flagged.
+
     Returns:
         List of indices of suspicious adapters.
     """
-    if not adapters:
+    if len(adapters) < 3:
         return []
         
     adapter_norms = []
@@ -162,29 +195,48 @@ def detect_poisoning(adapters: list[dict[str, Any]], weights: list[float] | None
             total_norm_sq += float(np.sum(np.square(arr)))
         adapter_norms.append(np.sqrt(total_norm_sq))
         
-    norms_array = np.array(adapter_norms)
-    mean_norm = np.mean(norms_array)
-    std_norm = np.std(norms_array)
-    
+    norms_array = np.array(adapter_norms, dtype=np.float64)
+    median = float(np.median(norms_array))
+    mad = float(np.median(np.abs(norms_array - median)))
+
     suspicious_indices = []
     for i, norm in enumerate(norms_array):
-        # Allow zero std to avoid division by zero
-        if std_norm > 0 and abs(norm - mean_norm) > threshold_sigma * std_norm:
+        if median > 0:
+            ratio = norm / median
+            far = ratio > max_norm_ratio or ratio < 1.0 / max_norm_ratio
+        else:
+            far = norm > 0
+        if not far:
+            continue
+        robust_z = abs(norm - median) / (_MAD_TO_SIGMA * mad) if mad > 0 else float("inf")
+        if robust_z > threshold_sigma:
             suspicious_indices.append(i)
-            
     return suspicious_indices
 
 
-def validate_adapter_metadata(metadata: dict[str, Any]) -> list[str]:
+def validate_adapter_metadata(metadata: Any) -> list[str]:
     """
     Validate required adapter metadata fields.
-    
+
+    Accepts the two upload shapes that exist in CLASP:
+
+    * ``contracts.AdapterUpload`` (seam A), as an instance or its JSON dict:
+      ``client_id``, ``round``, and ``hparams.rank`` / ``hparams.target_modules``;
+    * the cluster's flat wire format: ``client_id``, ``round_id``, ``rank``,
+      ``target_modules``.
+
     Args:
-        metadata: The metadata dictionary to validate.
-        
+        metadata: An ``AdapterUpload`` or a metadata dictionary.
+
     Returns:
         List of error strings (empty if valid).
     """
+    if dataclasses.is_dataclass(metadata) and not isinstance(metadata, type):
+        metadata = dataclasses.asdict(metadata)
+    if not isinstance(metadata, dict):
+        return ["metadata must be a dict or a contracts.AdapterUpload"]
+    if "hparams" in metadata:
+        return _validate_contract_upload(metadata)
     errors = []
     required_fields = ['client_id', 'round_id', 'rank', 'target_modules']
     
@@ -208,4 +260,26 @@ def validate_adapter_metadata(metadata: dict[str, Any]) -> list[str]:
         elif not all(isinstance(m, str) for m in metadata['target_modules']):
             errors.append("target_modules must be a list of strings")
             
+    return errors
+
+
+def _validate_contract_upload(metadata: dict[str, Any]) -> list[str]:
+    """``contracts.AdapterUpload``: round and LoRA hparams live where the contract puts them."""
+    hparams = metadata.get("hparams")
+    flat = {
+        "client_id": metadata.get("client_id"),
+        "round_id": metadata.get("round"),
+        "rank": hparams.get("rank") if isinstance(hparams, dict) else None,
+        "target_modules": hparams.get("target_modules") if isinstance(hparams, dict) else None,
+    }
+    if isinstance(flat["target_modules"], tuple):
+        flat["target_modules"] = list(flat["target_modules"])
+    renames = {"round_id": "round", "rank": "hparams.rank",
+               "target_modules": "hparams.target_modules"}
+    present = {k: v for k, v in flat.items() if v is not None}
+    errors = validate_adapter_metadata(present)
+    for old, new in renames.items():
+        errors = [e.replace(old, new) for e in errors]
+    if not isinstance(hparams, dict):
+        errors.append("hparams must be an object with rank and target_modules")
     return errors
