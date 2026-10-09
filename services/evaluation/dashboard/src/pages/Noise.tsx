@@ -98,7 +98,7 @@ export function Noise() {
       </div>
 
       <div className="section">
-        <span className="section-title">Locked thresholds</span>
+        <span className="section-title">Thresholds — provisional until a candidate is scored (discordance is assumed)</span>
         <div className="panel">
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
             {t.statements.map((s) => (

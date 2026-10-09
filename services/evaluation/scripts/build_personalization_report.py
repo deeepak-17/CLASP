@@ -88,10 +88,14 @@ def _report(feed: dict, path: Path) -> Path:
         )
     for comp in feed["comparisons"]:
         report.heading(f"Round {comp['from_round']} → round {comp['to_round']}")
+        changes = [abs(r["composite_ppl_change"]) for r in comp["clients"]]
         report.paragraph(
-            f"Composite perplexity improved on {comp['n_composite_better']} of {comp['n_clients']} "
-            "clients. The cluster-contribution columns show whether the cluster layer moved from "
-            "harmful (positive) to helpful (negative) once clients were trained in the D3 order."
+            f"Composite perplexity is lower in round {comp['to_round']} on {comp['n_composite_better']} of "
+            f"{comp['n_clients']} clients, by {min(changes):.3f}–{max(changes):.3f} ppl — one seed, no "
+            "interval, so within unmeasured seed noise. The cluster-contribution columns compare "
+            "composite(α = 0.5) with composite(α = 0); in round 2 the client was trained on top of the "
+            "cluster layer, so removing it is partly a mechanical loss. Read the change from harmful to "
+            "helpful as supportive of D3, not as proof of it."
         )
         report.table(
             ["client", "composite Δ (r→r)", "cluster contribution before", "after", "best α before", "after"],
@@ -149,7 +153,7 @@ def main(args: argparse.Namespace) -> int:
         )
     for comp in feed["comparisons"]:
         lines.append(
-            f"  r{comp['from_round']}→r{comp['to_round']}  composite better on "
+            f"  r{comp['from_round']}→r{comp['to_round']}  composite lower on "
             f"{comp['n_composite_better']}/{comp['n_clients']} clients"
         )
     lines.append(f"  feed     {paths.relative(out)}")

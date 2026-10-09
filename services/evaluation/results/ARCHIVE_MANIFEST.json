@@ -1,6 +1,6 @@
 {
   "label": "phase-2 final",
-  "created_at": "2026-10-09T05:48:56Z",
+  "created_at": "2026-10-09T06:21:52Z",
   "directories": [
     "results",
     "reports",
@@ -10,7 +10,7 @@
     "configs"
   ],
   "n_files": 93,
-  "total_bytes": 24251498,
+  "total_bytes": 24252656,
   "files": {
     "configs/dataset.yaml": {
       "sha256": "7cec9c079882f026fb6813b288dcea915b610f534389219c7912406c3a06e3fc",
@@ -29,8 +29,8 @@
       "bytes": 3934
     },
     "configs/guard_thresholds.yaml": {
-      "sha256": "8a30a40e9e5964535299a50dd254f317d078a5905e241d200ef307629a76c816",
-      "bytes": 2875
+      "sha256": "6031153879d9e6eb6465a7f9136788d07b0b75c265bb3dc5b809b541c4e5e682",
+      "bytes": 2974
     },
     "configs/logging.yaml": {
       "sha256": "6d02962455d61102e4a174638de5e3c1b3e82782eae013464e1f27593d00c210",
@@ -205,8 +205,8 @@
       "bytes": 2645
     },
     "docs/report/eval_section.md": {
-      "sha256": "50eeecd8a4c448681ddbfaeca3c2c3cde63688e62019362d965d0ea431aeb1ed",
-      "bytes": 7563
+      "sha256": "fbce2518b7b09566db8014a98d30a9b2160b32ce4428109619135db405a85962",
+      "bytes": 8263
     },
     "docs/report/figures/fig_aggregation_error.svg": {
       "sha256": "eff4a774ed57ec9c51cbbaf7f3d10277b9f245fff00272adf1a153ad41042b13",
@@ -229,12 +229,12 @@
       "bytes": 4754
     },
     "docs/report/results_tables.md": {
-      "sha256": "22ecdfd07075b876fe9efea183250f9fbcdd36b7d8c46657e4f8720b03f06c26",
+      "sha256": "51439e976da06d986975aa80c6f5f11e667dbe9ba1bc02d84085a2887c9893b3",
       "bytes": 2767
     },
     "docs/report/slides_data.md": {
-      "sha256": "bd7234d0bd96fbcdf69777753cf40da6e9c02308dd0a3822415c536c8d451f89",
-      "bytes": 1414
+      "sha256": "e867d08d909e038331c479892266483f9344480bc32ab0c003db0f44f0152351",
+      "bytes": 1477
     },
     "reports/baseline_eval_report.md": {
       "sha256": "def3552f19deaba76a16770d3f6e03180966afb23257d8ec6f479281b3d830e5",
@@ -269,12 +269,12 @@
       "bytes": 1899
     },
     "reports/eval_noise_report.md": {
-      "sha256": "b9c075a735fb72229d54f9d2ddcfc17b1b0c933a6f15417571a1b684b761e88d",
-      "bytes": 2633
+      "sha256": "09ff0ed6ae24b3e99b472be581cd31b5e19ed34d97ca2da093ec05e9e2e89acc",
+      "bytes": 2669
     },
     "reports/in_project_eval_report.md": {
-      "sha256": "68867786d37c48cdff2e3b6ff6f9e9df44a73bdd783cc772800a35cb01fff3a6",
-      "bytes": 2376
+      "sha256": "2d9ae578189db5a523ac91738888392a352e0911d49db3e1d3b8986f003f3f9a",
+      "bytes": 2367
     },
     "reports/materialize_client-flask.md": {
       "sha256": "cdcbea961530f1d328f6be2299b4a3257e279f9ed1b1be28bd91b53694dbe7dd",
@@ -305,8 +305,8 @@
       "bytes": 3407
     },
     "reports/personalization_report.md": {
-      "sha256": "191f0dc93281a5f5aa9bd762f0e5f8152ba36892b018bc54bae8ffae1cce9704",
-      "bytes": 3970
+      "sha256": "b55a66edd2f96a2e8ebd8720fc6211b0f8b681614dfb27a80400b78f277f98f1",
+      "bytes": 4176
     },
     "reports/project_vs_developer_comparison.md": {
       "sha256": "5ed8eb80f565adf2089861f16dddf2e3b8744f835ab41723a4341e50ae98a048",
@@ -325,7 +325,7 @@
       "bytes": 13932
     },
     "results/humaneval_guard/base_anchor.json": {
-      "sha256": "30e3d861dd29d03495f1f1a31c89f8ee52ee3e93790d2b9e6af68edb2f1bdc2d",
+      "sha256": "d5835da08a9b2721467321b8c0da162337b1007558324639b104555ed35cc1c7",
       "bytes": 9091
     },
     "results/humaneval_guard/base_samples.jsonl": {
@@ -341,11 +341,11 @@
       "bytes": 1868
     },
     "results/lineage.json": {
-      "sha256": "f20a7ce5715312295c28c7e9c27c39cd35095ecbf099f344ff292653b9b79548",
+      "sha256": "9c9b211652166fe1e67950f5eda034bd4a836806667618495bd1b584709fcd13",
       "bytes": 12668
     },
     "results/noise_report.json": {
-      "sha256": "5c1d4176f319c2ecd9f55634926440d0b6b222d45afaa48a88d930bb4f71172f",
+      "sha256": "333e088f485adb9a337394e1e98e784e2827aa65cc2b361e651877c32fb76ef4",
       "bytes": 3752
     },
     "results/p5-20260805T194656Z.json": {
@@ -373,16 +373,16 @@
       "bytes": 3709
     },
     "results/personalization.json": {
-      "sha256": "24cfbf99b15ce9ccff5bd40ccb65c8393bfcb18942af57001b0d428f49c858b0",
+      "sha256": "b133d228e6075064d16277cde156c8b621c83ad89dffa4e6ec85e5140110a2f9",
       "bytes": 10987
     },
     "results/results.json": {
-      "sha256": "3d9178abaf06b9ba685eca9437736947cd2c5e8c37ccbe2531be3451bf4ee65a",
+      "sha256": "ca392c49b144c1c1889a7a496a81f893c06df92c870112146642255c4ee69b76",
       "bytes": 5989
     },
     "results/slides_data.json": {
-      "sha256": "336a5670ac38d0bf150e1c9f751fe4f6bb398fd9b956d247a23ee0cea88c7691",
-      "bytes": 1796
+      "sha256": "df58241f2c42495f46f5d6930311e1532a5016a9b8c8031b1fc3ca8a3864a1fa",
+      "bytes": 1859
     }
   }
 }

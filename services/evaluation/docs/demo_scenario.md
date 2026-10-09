@@ -30,7 +30,7 @@ cd dashboard && npm install && npm run build        # or: docker compose up -d d
 |---|---|---|---|
 | 1 | Overview page | P5 owns the data the federation trains on and the measurement that decides whether a round's adapter is promoted. | — |
 | 2 | Personalization page, first chart | Each client's model is measured on its own files that were never trained on. | `personalization` |
-| 3 | Personalization page, second chart | Round 1: cluster layer off everywhere, slightly harmful. Round 2, clients trained on the frozen cluster (D3): it helps every client. | `d3_cluster_layer`, `round_over_round` |
+| 3 | Personalization page, second chart | Round 1: cluster layer off everywhere, slightly harmful. Round 2, clients trained on the frozen cluster (D3): against α = 0 it helps every client — supportive of D3, not proof (α = 0 removes a layer those clients were trained on), and round 2's composite is lower than round 1's by only 0.001–0.005 ppl, within seed noise. | `d3_cluster_layer`, `round_over_round` |
 | 4 | Adapter Lineage page → click `flask r2` | This client was trained on `cluster-web v2`, which was aggregated from the three round-1 web clients; registry sha256 shown. | — |
 | 5 | In-Project page | The promotion rule decides on completion quality, not perplexity; SVD aggregation is ~2× more faithful than naive averaging. | `aggregation`, `in_project` |
 | 6 | Noise & Guard page | Base pass@1 and its interval; the D5 2-point tolerance is below what 20 — or even 164 — tasks can resolve, so a drop inside the noise floor is reported as "within noise", never as a pass. | `guard_baseline`, `guard_noise` |

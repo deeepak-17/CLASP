@@ -65,8 +65,9 @@ export function Personalization() {
         />
         {comparison ? (
           <StatTile
-            label={`Composite better r${comparison.from_round}→r${comparison.to_round}`}
+            label={`Composite lower r${comparison.from_round}→r${comparison.to_round}`}
             value={`${comparison.n_composite_better} / ${comparison.n_clients}`}
+            hint={`by ${Math.min(...comparison.clients.map((c) => Math.abs(c.composite_ppl_change))).toFixed(3)}–${Math.max(...comparison.clients.map((c) => Math.abs(c.composite_ppl_change))).toFixed(3)} ppl · one seed, within noise`}
           />
         ) : null}
       </div>
@@ -85,7 +86,9 @@ export function Personalization() {
           <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 10 }}>
             Composite minus client-only perplexity. In round 1 clients were trained on the bare base and the cluster
             layer made every client slightly worse; in round 2 they were trained on the frozen base + 0.5·cluster (the
-            D3 order) and it helps every client.
+            D3 order) and, against α = 0, it lowers perplexity for every client. This supports D3 but does not
+            establish it: a round-2 client was trained on top of the cluster layer, so removing it (α = 0) is partly
+            a mechanical loss. Perplexity only — the D5 completion metric is on the In-Project page.
           </p>
         </div>
       </div>

@@ -1,7 +1,7 @@
 # Evaluation noise and guard thresholds
 
 _How large a change must be before D5 can tell it from noise_  
-**Generated:** 2026-10-09T05:48:56Z
+**Generated:** 2026-10-09T06:21:52Z
 
 ## HumanEval guard
 
@@ -21,7 +21,7 @@ Candidate and baseline are scored on the same tasks, so the relevant noise is pa
 | 0.1 | 0.1386 | 0.0484 | 961 |
 | 0.2 | 0.196 | 0.0684 | 1921 |
 
-### Locked thresholds
+### Thresholds (provisional while discordance is assumed)
 
 - D5 in-project noise band = spread of 3 repeated baseline evaluations (computed with evaluation.completion.noise_band); see the in-project section for its value.
 - D5 tolerance stays 0.02 (registry-owned); P5 does not loosen it.

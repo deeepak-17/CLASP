@@ -156,7 +156,7 @@ def _report(result: dict[str, Any], path: Path) -> Path:
             for r in g["paired"]
         ],
     )
-    report.heading("Locked thresholds", level=3)
+    report.heading("Thresholds (provisional while discordance is assumed)", level=3)
     report.bullets(result["locked_thresholds"]["statements"])
     if result.get("candidate"):
         c = result["candidate"]

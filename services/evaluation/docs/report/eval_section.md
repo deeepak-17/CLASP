@@ -52,19 +52,31 @@ of task order.
 **Every client's model improves on its own held-out code in both rounds.**
 Composite perplexity is below the frozen base on 6/6 clients, by a mean of
 0.175 (round 1) and 0.178 (round 2); the smallest gain is numpy's (−0.083 /
-−0.085), the largest scikit-learn's (−0.213 / −0.217).
+−0.085), the largest scikit-learn's (−0.213 / −0.217). These are perplexity
+results; D5's primary signal, in-project edit similarity and exact match, was
+not measured per client in these rounds (§4 has it for one client per
+cluster).
 
 ![Cluster layer contribution](figures/fig_cluster_contribution.svg)
 
-**The cluster layer helps only when clients are trained in the D3 order.** In
-round 1 the clients were trained on the bare base; the α sweep switched the
-cluster layer off for all six, and forced to α = 0.5 it made every client
-slightly worse (+0.000 to +0.014). In round 2 each client was trained on the
-frozen base + 0.5·cluster (the registry's SVD cluster adapter, v2); the sweep
-kept the cluster layer for all six and it lowered perplexity on every client
-(−0.016 to −0.064). The round-2 composite beats round 1 on 6/6 clients. This
-supports D3 as the condition for cross-client transfer: a client trained
-without the cluster layer has already learned what the cluster would add.
+**The cluster layer's effect changes with the training order — evidence
+that supports D3, but does not establish it.** In round 1 the clients were
+trained on the bare base; the α sweep switched the cluster layer off for all
+six, and forced to α = 0.5 it made every client slightly worse (+0.000 to
++0.014). In round 2 each client was trained on the frozen base + 0.5·cluster
+(the registry's SVD cluster adapter, v2); the sweep kept the cluster layer
+for all six, and against α = 0 it lowered perplexity on every client (−0.016
+to −0.064).
+
+Two cautions. **A confound:** the "contribution" is composite(α = 0.5) minus
+composite(α = 0), and a round-2 client was trained on top of the cluster
+layer, so evaluating it at α = 0 removes a layer it learned to rely on — part
+of that difference is mechanical, and the sweep landing on α = 0.5 is
+expected for the same reason. **The fair comparison is small:** comparing the
+two rounds' composites directly, round 2 is lower on 6/6 clients, but only by
+0.001–0.005 ppl, from one seed and with no interval — within unmeasured seed
+noise. Establishing D3 needs that comparison repeated across training seeds
+(the Phase III composition-order ablation).
 
 ## 4. Aggregation and in-project completion
 

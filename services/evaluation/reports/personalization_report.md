@@ -1,7 +1,7 @@
 # Personalization results
 
 _Held-out perplexity on each client's own never-trained-on files (lower is better)_  
-**Generated:** 2026-10-09T05:48:56Z
+**Generated:** 2026-10-09T06:21:52Z
 
 Each row compares three models on one client's held-out files: the frozen base, the client-only adapter, and the three-layer composite base + α·cluster + β·client (D6). The personalization delta is composite − base; the cluster contribution is composite − client-only at the reference α (negative means the cluster layer helps). Every number is read from the edge round manifest named under Sources.
 
@@ -47,7 +47,7 @@ Each row compares three models on one client's held-out files: the frozen base, 
 
 ## Round 1 → round 2
 
-Composite perplexity improved on 6 of 6 clients. The cluster-contribution columns show whether the cluster layer moved from harmful (positive) to helpful (negative) once clients were trained in the D3 order.
+Composite perplexity is lower in round 2 on 6 of 6 clients, by 0.001–0.005 ppl — one seed, no interval, so within unmeasured seed noise. The cluster-contribution columns compare composite(α = 0.5) with composite(α = 0); in round 2 the client was trained on top of the cluster layer, so removing it is partly a mechanical loss. Read the change from harmful to helpful as supportive of D3, not as proof of it.
 
 | client | composite Δ (r→r) | cluster contribution before | after | best α before | after |
 | --- | --- | --- | --- | --- | --- |

@@ -1,4 +1,5 @@
-# Evaluation noise thresholds — derived, not chosen.
+# Evaluation noise thresholds — derived, not chosen, but PROVISIONAL: the guard
+# floor uses an assumed discordance until a candidate anchor is scored.
 #
 # Regenerate the evidence with `python scripts/build_noise_report.py`; it reads
 # this file, recomputes every derived number from the scored anchor, and writes

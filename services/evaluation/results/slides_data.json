@@ -1,22 +1,22 @@
 {
-  "generated_at": "2026-10-09T05:48:56Z",
+  "generated_at": "2026-10-09T06:21:52Z",
   "headlines": [
     {
       "id": "personalization",
       "value": "6/6 clients, mean -0.178 ppl",
-      "claim": "Every client's model is better on its own never-trained-on code.",
+      "claim": "Every client's composite has lower perplexity than the base on its own never-trained-on code.",
       "source": "results/personalization.json · rounds[-1].summary"
     },
     {
       "id": "d3_cluster_layer",
-      "value": "helps 0/6 → 6/6 clients",
-      "claim": "Training clients on the frozen cluster (D3) turns the cluster layer from harmful to helpful.",
+      "value": "helps 0/6 → 6/6 clients (vs α = 0)",
+      "claim": "Supports D3, not conclusive: in round 2, α = 0 removes a layer the client was trained on.",
       "source": "results/personalization.json · rounds[*].summary.n_cluster_helps"
     },
     {
       "id": "round_over_round",
-      "value": "composite better on 6/6 clients",
-      "claim": "Round 2 beats round 1 for every client.",
+      "value": "lower on 6/6 clients, by 0.001–0.005 ppl",
+      "claim": "Within unmeasured seed noise: one seed, no interval.",
       "source": "results/personalization.json · comparisons[-1]"
     },
     {

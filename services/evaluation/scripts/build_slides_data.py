@@ -39,6 +39,8 @@ def headlines(pers: dict[str, Any], noise: dict[str, Any], inproj: dict[str, Any
     first, last = pers["rounds"][0], pers["rounds"][-1]
     s1, s2 = first["summary"], last["summary"]
     comp = pers["comparisons"][-1]
+    changes = [abs(r["composite_ppl_change"]) for r in comp["clients"]]
+    lo, hi = min(changes), max(changes)
     g = noise["humaneval_guard"]
     t = noise["locked_thresholds"]
     abl = {r["cluster"]: r for r in inproj["aggregation_ablation"]["rows"]}
@@ -49,19 +51,19 @@ def headlines(pers: dict[str, Any], noise: dict[str, Any], inproj: dict[str, Any
         {
             "id": "personalization",
             "value": f"{s2['n_improved']}/{s2['n_clients']} clients, mean {s2['mean_delta_ppl']:+.3f} ppl",
-            "claim": "Every client's model is better on its own never-trained-on code.",
+            "claim": "Every client's composite has lower perplexity than the base on its own never-trained-on code.",
             "source": "results/personalization.json · rounds[-1].summary",
         },
         {
             "id": "d3_cluster_layer",
-            "value": f"helps {s1['n_cluster_helps']}/{s1['n_clients']} → {s2['n_cluster_helps']}/{s2['n_clients']} clients",
-            "claim": "Training clients on the frozen cluster (D3) turns the cluster layer from harmful to helpful.",
+            "value": f"helps {s1['n_cluster_helps']}/{s1['n_clients']} → {s2['n_cluster_helps']}/{s2['n_clients']} clients (vs α = 0)",
+            "claim": "Supports D3, not conclusive: in round 2, α = 0 removes a layer the client was trained on.",
             "source": "results/personalization.json · rounds[*].summary.n_cluster_helps",
         },
         {
             "id": "round_over_round",
-            "value": f"composite better on {comp['n_composite_better']}/{comp['n_clients']} clients",
-            "claim": f"Round {comp['to_round']} beats round {comp['from_round']} for every client.",
+            "value": f"lower on {comp['n_composite_better']}/{comp['n_clients']} clients, by {lo:.3f}–{hi:.3f} ppl",
+            "claim": "Within unmeasured seed noise: one seed, no interval.",
             "source": "results/personalization.json · comparisons[-1]",
         },
         {

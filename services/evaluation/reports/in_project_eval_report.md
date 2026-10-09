@@ -27,7 +27,7 @@ DEMO/TEST — P1's merged DeepSeek-Coder model is not available here (no GPU, no
 - **edit_similarity** — mean character-level `1 - lev(pred, target) / max(len)` over held-out next-line completions (CodeXGLUE convention). In `[0, 1]`; 1.0 is a perfect line.
 - **exact_match** — fraction of held-out lines reproduced exactly (trailing whitespace ignored).
 - **perplexity** — `null` here: P5 has no logits. P1 supplies its held-out perplexity at the integration seam and it is merged into `InProjectMetrics` there.
-- **noise band** — population standard deviation of edit_similarity across 3 repeated evaluations. D5 promotes only when the in-project gain exceeds this. 0.0 with a deterministic backend — it becomes a real gate once a stochastic backend makes the repeats differ.
+- **noise band** — spread (max − min) of edit_similarity across 3 repeated evaluations. D5 promotes only when the in-project gain exceeds this. 0.0 with a deterministic backend — it becomes a real gate once a stochastic backend makes the repeats differ.
 
 ## 5. Held-out split
 
