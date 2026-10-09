@@ -1,8 +1,10 @@
 """P2-side seam to the registry (P4): publish each aggregated cluster adapter.
 
-Cluster does not own the registry and ``services/registry`` is an empty skeleton
-today, so this module defines only what Cluster *needs* from it and ships an
-in-memory stand-in so the publish path is testable:
+Cluster does not own the registry (``services/registry`` is P4's service), so this
+module defines only what Cluster *needs* from it for the automatic, per-aggregate
+publish hook and ships an in-memory stand-in so that path is testable. (Publishing
+on request goes through ``POST /adapters/{id}/publish`` in ``cluster.server``, which
+does talk to the registry's HTTP API.)
 
   * ``SnapshotSink``           what Cluster calls after a cluster aggregates.
   * ``cluster_adapter_ref``    Cluster's mapping onto ``contracts.AdapterRef``

@@ -7,6 +7,7 @@ the frozen contracts v1.0 (Week 2, Fri).
 from cluster.schemas.messages import (
     AdapterUpload,
     ClusterAdapterBroadcast,
+    PrivacyBlock,
     RoundMetrics,
     TensorPayload,
 )
@@ -14,6 +15,7 @@ from cluster.schemas.messages import (
 __all__ = [
     "AdapterUpload",
     "ClusterAdapterBroadcast",
+    "PrivacyBlock",
     "RoundMetrics",
     "TensorPayload",
 ]

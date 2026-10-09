@@ -5,8 +5,8 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
 **blocked**. Nothing here implements another team's work; the only code added on P2's side is
 `cluster/tls.py`, `cluster/integration.py` and the identity / sink hooks in `cluster/server.py`
 (all optional, off by default). Repository facts below were read from the working tree on
-2026-10-06 and refreshed after the integration-sprint merge: `security/` is still an empty package,
-`services/registry` now has a service (`registry.app`), and `services/evaluation` has only `completion.py`.
+2026-10-06 and refreshed after the integration-sprint merge: `services/registry` now has a service (`registry.app`), `services/evaluation` has only `completion.py`, and
+`security/` is a library with `mtls/`, `dp/`, `auth/` and more (PR #19) that Cluster does not import yet.
 
 ## Summary
 
@@ -16,8 +16,8 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
 | LoRA hyper-parameters | defaults r=16, alpha=16, q/k/v/o — **aligned in Week 6** | Edge pins r=16, alpha=16, q/k/v/o | **MATCH** |
 | Cluster -> Edge adapter retrieval | `GET /clusters/{id}/adapters/active` (PEFT keys + `peft_config`) — **done, tested** | no download client in Edge | **BLOCKED BY P1** (live) |
 | Client identity | self-asserted `client_id`; `configure_identity()` is a **hook, not wired at startup** (only tests call it; the running service has no authenticated identity) | none | **BLOCKED BY P3** (real identity) |
-| mTLS (G1) | `cluster/tls.py`, tested against an *ephemeral test CA*; **not wired into a running service — mTLS is not finished** | `security/` is empty | **BLOCKED BY P3** |
-| DP mu tuning (W9) | toy non-DP mu sweep only | `security/` is empty | **BLOCKED BY P3** |
+| mTLS (G1) | `cluster/tls.py`, tested against an *ephemeral test CA*; **not wired into a running service — mTLS is not finished** | `security.mtls` (CA, certs, SSL context; PR #19) — not used by Cluster yet | **P3 + P2 wiring still to do** |
+| DP mu tuning (W9) | none (the toy sweep was removed from the package) | `security.dp` engine + accountant (PR #19) | **not done** — needs a mu sweep run through P3's DP engine |
 | Cluster -> Registry snapshot | on request: `POST /adapters/{id}/publish` pushes the active aggregate (with the cluster's ε) to `CLASP_REGISTRY_URL`, tested against an HTTP stand-in. Automatic publish after every aggregate (`SnapshotSink`, `configure_snapshot_sink`) is a **hook, not wired at startup** | `services/registry` has a service; Cluster has not been run against it in CI beyond `tests/integration` | **P4 owns the live end** |
 | Evaluation | none needed by Cluster (see below) | `services/evaluation` has only `completion.py` | **BLOCKED BY P5** (eval of cluster adapters) |
 
@@ -54,8 +54,9 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
   edge and cluster layers"): TLS material for a mutually authenticated channel (CA, server cert/key,
   client cert/key), a way to map a verified client certificate to a `client_id`, and, for DP, an
   accountant that fills `ClusterAdapterBroadcast.epsilon`.
-* **Exists**: nothing — `security/src/security/__init__.py` is an empty package. `security/README.md`
-  and `pyproject.toml` exist.
+* **Exists**: the `security` library (PR #19): `mtls/` (CA, certificates, SSL context, rotation), `dp/`
+  (DP-SGD engine, accountant, config), `auth/`, `middleware/`, `validation/`, `audit/`. **Cluster imports
+  none of it**: `cluster/tls.py` below is Cluster's own TLS settings code, not a wrapper over `security.mtls`.
 * **P2-side infrastructure built** (and the only thing that can honestly be built):
   * `cluster/tls.py` — `MTLSFiles`, `uvicorn_ssl_kwargs()`, `client_ssl_context()`,
     `flower_certificates()`, `common_name_from_peercert()`.
@@ -74,8 +75,8 @@ the repository today**, whether the interfaces **match**, what P2 can **mock**, 
 G1 has **not** passed and is not claimed. What was verified is only that the Cluster HTTP server enforces
 client-certificate TLS when it is *given* certificates. To close G1:
 
-1. P3 provides the CA / certificate issuance (and the `security` API Cluster should import) — Cluster has
-   nothing to import today.
+1. Use P3's CA / certificate issuance (`security.mtls`) to produce the server and client certificates —
+   Cluster does not import it today.
 2. Decide how a verified certificate becomes a `client_id`. uvicorn verifies the client certificate during
    the handshake but **does not expose the peer certificate to the ASGI app**, so either a TLS-terminating
    proxy relays the verified subject (install a provider with `configure_identity`) or the service moves to
@@ -86,15 +87,14 @@ client-certificate TLS when it is *given* certificates. To close G1:
 5. Flower gRPC: `flower_certificates()` only builds the tuple Flower's `certificates=` expects.
    `start_grpc_server` still starts an **insecure** channel; a Flower mTLS round has never been run here.
 
-### DP mu tuning (W9 Wed, "FedProx mu tuning for DP stability"): **BLOCKED BY P3**
+### DP mu tuning (W9 Wed, "FedProx mu tuning for DP stability"): **not done**
 
-There is no DP-SGD code in the repository, so tuning mu *for DP stability* cannot be done and no result
+P3's DP engine (`security.dp`, PR #19) now exists, but no mu sweep has been run through it, so no result
 is claimed. What exists, clearly separate: a **toy, non-DP** FedProx mu sweep in
 a toy loop that is no longer part of this package (it was a throw-away script). It
 shows only that on that toy loss rises as mu grows (more drag toward the global adapter) and that the
 proximal step diverges once `lr * mu >= 2`. It says nothing about the optimum under DP noise/clipping.
-Once P3's clipped + noised gradients exist: rerun a mu sweep with
-DP on, and record the chosen mu with its epsilon.
+To close it: run a mu sweep with P3's clipped + noised gradients (DP on) and record the chosen mu with its epsilon.
 
 ## P4 Registry
 

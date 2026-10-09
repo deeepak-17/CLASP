@@ -12,6 +12,7 @@ v1.0.
 from __future__ import annotations
 
 import base64
+import math
 from datetime import datetime, timezone
 
 import numpy as np
@@ -76,6 +77,22 @@ class TensorPayload(BaseModel):
         return self
 
 
+class PrivacyBlock(BaseModel):
+    """The ``privacy`` block of ``contracts.AdapterUpload`` (``contracts.PrivacySpec``).
+
+    This is the shape the Edge actually sends (``edge.wire.privacy_block``):
+    ``{"epsilon": 7.99, "delta": 1e-05, "noise_multiplier": null,
+    "max_grad_norm": null}``. ``epsilon`` is ``None`` when the client trained
+    without DP. Unknown keys are ignored so a later contracts version that adds
+    a field does not make the cluster refuse every upload.
+    """
+
+    epsilon: float | None = Field(None, ge=0, allow_inf_nan=False)
+    delta: float | None = Field(None, ge=0, le=1, allow_inf_nan=False)
+    noise_multiplier: float | None = Field(None, ge=0, allow_inf_nan=False)
+    max_grad_norm: float | None = Field(None, ge=0, allow_inf_nan=False)
+
+
 class AdapterUpload(BaseModel):
     """Edge client -> cluster server: one trained LoRA adapter."""
 
@@ -102,6 +119,11 @@ class AdapterUpload(BaseModel):
     # it aggregated and publishes it to the registry; one client without an
     # epsilon makes the cluster's epsilon unknown (None), never understated.
     epsilon: float | None = Field(None, ge=0, allow_inf_nan=False)
+    # Optional: the same budget in the contracts shape (``contracts.AdapterUpload
+    # .privacy``), which is what the Edge sends. ``epsilon`` is filled from
+    # ``privacy.epsilon`` when it is not given at the top level; if both are
+    # given they must agree (see ``_reconcile_epsilon``).
+    privacy: PrivacyBlock | None = None
     # Optional (backward compatible; schema stays "1.0"): the cluster whose
     # adapter this client trained from. A cluster refuses an upload whose
     # base_cluster_id names a different cluster (a client that was re-clustered
@@ -117,6 +139,27 @@ class AdapterUpload(BaseModel):
         if not v:
             raise ValueError("target_modules must not be empty")
         return v
+
+    @model_validator(mode="after")
+    def _reconcile_epsilon(self) -> AdapterUpload:
+        """One client budget, two ways to state it: the top-level ``epsilon``
+        and the contracts ``privacy.epsilon`` the Edge sends. Without this the
+        Edge's budget was silently dropped (an unknown field) and every cluster
+        published ``epsilon = null``. When only ``privacy.epsilon`` is given it
+        becomes ``epsilon``; two different numbers are refused rather than
+        picking one; ``privacy.epsilon = None`` (DP off) leaves ``epsilon`` as is.
+        """
+        given = self.privacy.epsilon if self.privacy is not None else None
+        if given is None:
+            return self
+        if self.epsilon is None:
+            self.epsilon = given
+        elif not math.isclose(self.epsilon, given, rel_tol=1e-9, abs_tol=0.0):
+            raise ValueError(
+                f"epsilon ({self.epsilon}) and privacy.epsilon ({given}) disagree; "
+                "send one, or the same value twice"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_tensor_coverage(self) -> AdapterUpload:

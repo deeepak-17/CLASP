@@ -119,12 +119,12 @@ client returns non-finite tensors, which are rejected at the adapter-format boun
   self-asserted. `server.configure_identity` (P3's identity) and `server.configure_snapshot_sink` (automatic
   publish of every aggregate) are hooks that only tests call, so by default uploads are not tied to a client
   certificate. `tls.py` builds TLS settings and is tested against an ephemeral test CA; uvicorn does not expose the
-  peer certificate to the app, and `start_grpc_server` is insecure. G1 is blocked by P3. Publishing to the registry
+  peer certificate to the app, and `start_grpc_server` is insecure. G1 has not passed. Publishing to the registry
   works today through `POST /adapters/{id}/publish`, on request.
 * Membership and re-cluster endpoints are unauthenticated admin operations; HTTP state is in memory and per process.
 * The Flower strategy aggregates a single cluster per server; multi-cluster = the HTTP service + the in-process
   federation.
-* Evidence is a toy workload, not the real model, and not DP (**µ tuning under DP is blocked by P3**).
+* The demos use a toy workload, not the real model, and not DP: no FedProx µ sweep under DP has been run.
 
 Per module (Edge / Security / Registry / Evaluation): what Cluster expects, what exists, what is mocked and what is
 blocked — [`docs/INTEGRATION_BOUNDARIES.md`](docs/INTEGRATION_BOUNDARIES.md). End-semester demo script:

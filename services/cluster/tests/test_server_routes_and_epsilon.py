@@ -213,6 +213,84 @@ def test_upload_epsilon_is_optional_and_validated():
     assert _up("cluster-web", "c1", 1, epsilon=-0.5).status_code == 422
 
 
+def _edge_privacy(epsilon, **over):
+    """The ``privacy`` block exactly as ``edge.wire.privacy_block`` builds it
+    (``asdict(contracts.PrivacySpec(...))``): all four keys, always present."""
+    return {
+        "epsilon": epsilon,
+        "delta": 1e-05,
+        "noise_multiplier": None,
+        "max_grad_norm": None,
+        **over,
+    }
+
+
+def test_the_privacy_block_the_edge_sends_sets_the_upload_epsilon():
+    ok = upload_body("c1", trained_adapter(1))
+    up = AdapterUpload(**{**ok, "privacy": _edge_privacy(7.99)})
+    assert up.epsilon == 7.99 and up.privacy is not None and up.privacy.delta == 1e-05
+    # DP off (epsilon None in the block) stays "not reported", it is not 0
+    assert AdapterUpload(**{**ok, "privacy": _edge_privacy(None)}).epsilon is None
+    assert AdapterUpload(**ok).privacy is None
+
+
+def test_epsilon_and_privacy_epsilon_must_agree_when_both_are_given():
+    ok = upload_body("c1", trained_adapter(1))
+    both = {**ok, "epsilon": 5.0, "privacy": _edge_privacy(5.0)}
+    assert AdapterUpload(**both).epsilon == 5.0
+    with pytest.raises(ValueError, match="disagree"):
+        AdapterUpload(**{**ok, "epsilon": 5.0, "privacy": _edge_privacy(6.0)})
+    # DP off in the block does not contradict a top-level epsilon: nothing to compare
+    assert AdapterUpload(**{**ok, "epsilon": 5.0, "privacy": _edge_privacy(None)}).epsilon == 5.0
+    assert _up("cluster-web", "c1", 1, epsilon=5.0, privacy=_edge_privacy(6.0)).status_code == 422
+
+
+def test_the_privacy_block_is_validated_and_tolerates_unknown_keys():
+    ok = upload_body("c1", trained_adapter(1))
+    for bad in (
+        _edge_privacy(-1.0),
+        _edge_privacy(float("inf")),
+        _edge_privacy(1.0, delta=1.5),
+        _edge_privacy(1.0, noise_multiplier=-0.1),
+        _edge_privacy("lots"),
+    ):
+        with pytest.raises(ValueError):
+            AdapterUpload(**{**ok, "privacy": bad})
+    # a later contracts version may add a field: ignored, not a reason to refuse the upload
+    future = {**_edge_privacy(2.0), "accountant": "rdp"}
+    assert AdapterUpload(**{**ok, "privacy": future}).epsilon == 2.0
+
+
+def test_epsilon_sent_in_the_edge_privacy_shape_reaches_the_registry(monkeypatch):
+    """The seam that was broken: the Edge sends ``privacy.epsilon``, not a
+    top-level ``epsilon``. Cluster epsilon = max over the clients, published as
+    ``privacy.epsilon``; one client on the old top-level field mixes in fine."""
+    registry = _Registry(monkeypatch)
+    for who, seed, kw in (
+        ("a1", 1, {"privacy": _edge_privacy(2.0)}),
+        ("a2", 2, {"privacy": _edge_privacy(5.0)}),
+        ("a3", 3, {"epsilon": 3.5}),
+    ):
+        assert _up("cluster-web", who, seed, **kw).status_code == 201
+    agg = client.post("/aggregate", json={"cluster_id": "cluster-web"})
+    assert agg.status_code == 200 and agg.json()["epsilon"] == 5.0
+    manifest = client.get("/adapters/cluster-web/manifest").json()
+    assert manifest["epsilon"] == 5.0 and "epsilon_not_reported_by" not in manifest
+    assert client.post("/adapters/cluster-web/publish").status_code == 201
+    assert registry.posts[0]["meta"]["privacy"] == {"epsilon": 5.0}
+
+
+def test_a_dp_off_edge_client_still_makes_the_cluster_epsilon_unknown(monkeypatch):
+    registry = _Registry(monkeypatch)
+    assert _up("cluster-web", "dp", 1, privacy=_edge_privacy(2.0)).status_code == 201
+    assert _up("cluster-web", "plain", 2, privacy=_edge_privacy(None)).status_code == 201
+    assert client.post("/aggregate", json={"cluster_id": "cluster-web"}).json()["epsilon"] is None
+    manifest = client.get("/adapters/cluster-web/manifest").json()
+    assert manifest["epsilon_not_reported_by"] == ["plain"]
+    assert client.post("/adapters/cluster-web/publish").status_code == 201
+    assert "privacy" not in registry.posts[0]["meta"]
+
+
 def test_aggregate_records_the_max_epsilon_and_publishes_it(monkeypatch):
     registry = _Registry(monkeypatch)
     for who, seed, eps in (("a1", 1, 2.0), ("a2", 2, 5.0), ("a3", 3, 3.5)):
