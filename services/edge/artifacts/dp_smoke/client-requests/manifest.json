@@ -1,0 +1,254 @@
+{
+  "utc": "2026-10-06T08:39:55.410199+00:00",
+  "task": "E3.1/E3.2 client LoRA on real partition",
+  "client_id": "web/client-requests",
+  "client_dir": "datasets/materialized/web/client-requests",
+  "profile": "dev",
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "quantization": {
+    "load_in_4bit": true,
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_use_double_quant": true
+  },
+  "lora": {
+    "r": 16,
+    "lora_alpha": 16,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "lora_dropout": 0.0
+  },
+  "data": {
+    "seq_len": 512,
+    "train": {
+      "n_files": 16,
+      "n_tokens": 53753,
+      "n_chunks": 104,
+      "file_order": [
+        "src/requests/__init__.py",
+        "src/requests/__version__.py",
+        "src/requests/_internal_utils.py",
+        "src/requests/adapters.py",
+        "src/requests/api.py",
+        "src/requests/auth.py",
+        "src/requests/certs.py",
+        "src/requests/compat.py",
+        "src/requests/cookies.py",
+        "src/requests/exceptions.py",
+        "src/requests/help.py",
+        "src/requests/models.py",
+        "src/requests/sessions.py",
+        "src/requests/status_codes.py",
+        "src/requests/structures.py",
+        "src/requests/utils.py"
+      ],
+      "order_sha256": "56648d7bd29443c47f4bf1429de551490abacf293b851aa10f529ff1202b5712",
+      "dropped_tail_tokens": 505
+    },
+    "held_out": {
+      "n_files": 2,
+      "n_tokens": 514,
+      "n_chunks": 2,
+      "file_order": [
+        "src/requests/hooks.py",
+        "src/requests/packages.py"
+      ],
+      "order_sha256": "1ed49a61fd54892ea45271d7aa767f0a0e4638e9e1262944dc0883797e8d4424",
+      "dropped_tail_tokens": 0
+    }
+  },
+  "optimization": {
+    "lr": 0.001,
+    "scheduler": "cosine_with_warmup",
+    "warmup_ratio": 0.03,
+    "grad_clip": 1.0,
+    "micro_batch": 1,
+    "grad_accum": 1,
+    "chunk_budget": 200,
+    "epochs": 1.923,
+    "budget_plan": null,
+    "dp_sgd": true,
+    "dp_epochs": 2
+  },
+  "seed": 0,
+  "d3": {
+    "composition_order": "D3: client trained on frozen (base + alpha*cluster)",
+    "cluster_adapter": "artifacts\\round2_cluster\\cluster-web",
+    "alpha": 0.5,
+    "cluster_rank": 16,
+    "cluster_scaling_after_alpha": 0.5,
+    "lora_layers_scaled": 96,
+    "n_trainable_tensors": 192,
+    "compatibility": {
+      "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+      "target_modules": [
+        "k_proj",
+        "o_proj",
+        "q_proj",
+        "v_proj"
+      ],
+      "ranks": {
+        "cluster": 16,
+        "client": 16
+      },
+      "scalings": {
+        "cluster": 1.0,
+        "client": 1.0
+      }
+    },
+    "registry_provenance": {
+      "registry_url": "http://localhost:8004",
+      "adapter": "cluster-web",
+      "version": 2,
+      "kind": "cluster",
+      "cluster_id": "web",
+      "aggregation": "svd_exact",
+      "round": 1,
+      "source_clients": [
+        "client-flask",
+        "client-requests",
+        "client-werkzeug"
+      ],
+      "sha256_verified": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279"
+    }
+  },
+  "privacy": {
+    "epsilon": 7.991991,
+    "delta": 1e-05,
+    "noise_multiplier": 0.701599,
+    "max_grad_norm": 1.0
+  },
+  "results": {
+    "history": [
+      {
+        "step": 2,
+        "loss": 1.0032,
+        "lr": 0.000996057350657239
+      },
+      {
+        "step": 4,
+        "loss": 1.0128,
+        "lr": 0.0009648882429441257
+      },
+      {
+        "step": 6,
+        "loss": 0.9389,
+        "lr": 0.0009045084971874737
+      },
+      {
+        "step": 8,
+        "loss": 1.1154,
+        "lr": 0.0008187119948743449
+      },
+      {
+        "step": 10,
+        "loss": 0.9778,
+        "lr": 0.0007128896457825364
+      },
+      {
+        "step": 12,
+        "loss": 1.097,
+        "lr": 0.0005936906572928624
+      },
+      {
+        "step": 14,
+        "loss": 1.1091,
+        "lr": 0.0004686047402353433
+      },
+      {
+        "step": 16,
+        "loss": 1.2913,
+        "lr": 0.00034549150281252633
+      },
+      {
+        "step": 18,
+        "loss": 1.0318,
+        "lr": 0.00023208660251050156
+      },
+      {
+        "step": 20,
+        "loss": 1.0697,
+        "lr": 0.00013551568628929433
+      },
+      {
+        "step": 22,
+        "loss": 1.0692,
+        "lr": 6.184665997806827e-05
+      },
+      {
+        "step": 24,
+        "loss": 1.0898,
+        "lr": 1.5708419435684463e-05
+      },
+      {
+        "step": 26,
+        "loss": 1.0304,
+        "lr": 0.0
+      }
+    ],
+    "first_window": 0.985,
+    "last_window": 1.0631,
+    "window_steps": 6,
+    "loss_slope": 0.00296,
+    "loss_decreased": false,
+    "n_steps_recorded": 26,
+    "optimizer_steps": 26,
+    "planned_steps": 26,
+    "empty_logical_batches": 0,
+    "max_grad_norm": null,
+    "micro_batches": null,
+    "n_trainable_params": 6291456,
+    "wall_seconds": 275.1,
+    "dp": {
+      "library": "security.make_private (P3) over Opacus",
+      "grad_sample_mode": "hooks",
+      "accountant": "opacus RDPAccountant over the steps actually taken",
+      "epsilon_opacus_rdp": 7.991991,
+      "epsilon_security_tracker": 11.085878,
+      "target_epsilon": 8.0,
+      "within_d7_budget": true,
+      "sample_rate": 0.07692307692307693,
+      "logical_batch_size": 8,
+      "epochs": 2,
+      "privacy_unit": "one packed block (record-level DP-SGD); client-level DP is a federated-protocol property and is not claimed here",
+      "gradient_checkpointing": false
+    },
+    "base_held_out": {
+      "loss": 1.2418,
+      "perplexity": 3.462,
+      "n_tokens": 512
+    },
+    "cluster_start_held_out": {
+      "loss": 1.2137,
+      "perplexity": 3.366,
+      "n_tokens": 512
+    },
+    "final_held_out": {
+      "loss": 1.2125,
+      "perplexity": 3.362,
+      "n_tokens": 512
+    },
+    "held_out_ppl_delta": -0.1,
+    "held_out_ppl_delta_vs_cluster_start": -0.004,
+    "clip_saturated": false,
+    "grad_clip_threshold": 1.0,
+    "diverging": true,
+    "improved_held_out": true,
+    "learned_signal": "held_out_ppl (D5 primary metric)",
+    "stable": false
+  },
+  "hardware": {
+    "peak_vram_gb": 2.842,
+    "device": "NVIDIA GeForce RTX 2050"
+  },
+  "versions": {
+    "python": "3.10.11",
+    "torch": "2.14.0+cu126",
+    "transformers": "5.16.1"
+  },
+  "d3_deviation": null
+}

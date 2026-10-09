@@ -12,6 +12,23 @@ dependencies = [
     "transformers",
     "torch",
     "opacus",
+    # seams A / C1 / C2 and the mTLS transport (edge.registry_client, edge.transport)
+    "requests",
+]
+
+[project.optional-dependencies]
+# The sibling packages edge IMPORTS rather than re-implements. Each is imported
+# lazily, inside the code path that needs it, so the edge installs and its CPU
+# test leg runs without them:
+#   clasp-cluster  -> edge.aggregate        (D2 aggregation, P2)
+#   clasp-registry -> edge.promote          (the D5 rule, P4, for the manifest prediction)
+#   clasp-security -> edge.train_client --dp, edge.transport.mtls_session (D7, P3)
+# They are local packages, not on PyPI: install them from the monorepo first, e.g.
+#   pip install -e services/cluster -e services/registry -e security -e "services/edge[integration]"
+integration = [
+    "clasp-cluster",
+    "clasp-registry",
+    "clasp-security",
 ]
 
 [build-system]

@@ -319,17 +319,50 @@ def decode_tensor(payload: Dict) -> np.ndarray:
     return np.frombuffer(raw, dtype=dtype).reshape(tuple(payload["shape"])).copy()
 
 
+def privacy_block(privacy: Optional[Dict]) -> Dict:
+    """A ``contracts.PrivacySpec`` as a JSON dict — the D7 field of the envelope.
+
+    ``contracts.AdapterUpload`` carries ``privacy: PrivacySpec`` so the ε a
+    client spent travels with its adapter (D7: "ε logged per round into
+    registry metadata"). Built through the contract dataclass, so a misspelt
+    or extra field fails here rather than vanishing on the far side.
+    ``None`` -> DP was off: ``epsilon`` is None, which is the contract's own
+    encoding of the no-DP ablation.
+    """
+    from dataclasses import asdict
+
+    from contracts import PrivacySpec
+
+    return asdict(PrivacySpec(**(privacy or {})))
+
+
+def privacy_from_training_manifest(adapter_dir: Path | str) -> Dict:
+    """The ``privacy`` block ``edge.train_client`` recorded for this adapter.
+
+    ``train_client`` writes ``<client>/manifest.json`` beside
+    ``<client>/adapter/``. An adapter with no manifest, or one trained before
+    the field existed, reports DP as off rather than guessing a budget.
+    """
+    manifest = Path(adapter_dir).parent / "manifest.json"
+    if not manifest.exists():
+        return privacy_block(None)
+    recorded = json.loads(manifest.read_text(encoding="utf-8")).get("privacy")
+    return privacy_block(recorded)
+
+
 def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
                    client_id: str, cluster_id: str, round_id: int,
                    num_examples: int, seed: Optional[int] = None,
-                   key_convention: str = "peft") -> Dict:
+                   key_convention: str = "peft",
+                   privacy: Optional[Dict] = None) -> Dict:
     """Build the JSON body for ``POST /uploads`` from a real client adapter.
 
     Carries everything the cluster needs to identify and aggregate the upload:
     the source client and its cluster, the tensor payload, the adapter's own
     hyperparameters (rank / alpha / target modules / layer count), and the
     FedAvg sample weight (``num_examples``). Matches
-    ``cluster.schemas.messages.AdapterUpload``.
+    ``cluster.schemas.messages.AdapterUpload``, plus the ``privacy`` block
+    ``contracts.AdapterUpload`` defines (see :func:`privacy_block`).
     """
     sd = as_fp32(translate_keys(state_dict, "peft" if key_convention == "peft" else "cluster"))
     info = describe(sd)
@@ -364,6 +397,7 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
         "num_layers": int(info["num_layers"]),
         "num_examples": int(num_examples),
         "seed": seed,
+        "privacy": privacy_block(privacy),
         "tensors": [encode_tensor(name, arr) for name, arr in sd.items()],
     }
 

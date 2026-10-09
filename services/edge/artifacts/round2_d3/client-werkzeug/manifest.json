@@ -1,0 +1,270 @@
+{
+  "utc": "2026-10-06T06:46:34.536098+00:00",
+  "task": "E3.1/E3.2 client LoRA on real partition",
+  "client_id": "web/client-werkzeug",
+  "client_dir": "datasets/materialized/web/client-werkzeug",
+  "profile": "dev",
+  "model_id": "deepseek-ai/deepseek-coder-1.3b-base",
+  "quantization": {
+    "load_in_4bit": true,
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_use_double_quant": true
+  },
+  "lora": {
+    "r": 16,
+    "lora_alpha": 16,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "lora_dropout": 0.0
+  },
+  "data": {
+    "seq_len": 1024,
+    "train": {
+      "n_files": 44,
+      "n_tokens": 174445,
+      "n_chunks": 170,
+      "file_order": [
+        "src/werkzeug/__init__.py",
+        "src/werkzeug/_internal.py",
+        "src/werkzeug/_reloader.py",
+        "src/werkzeug/datastructures/__init__.py",
+        "src/werkzeug/datastructures/auth.py",
+        "src/werkzeug/datastructures/cache_control.py",
+        "src/werkzeug/datastructures/csp.py",
+        "src/werkzeug/datastructures/etag.py",
+        "src/werkzeug/datastructures/file_storage.py",
+        "src/werkzeug/datastructures/headers.py",
+        "src/werkzeug/datastructures/mixins.py",
+        "src/werkzeug/datastructures/range.py",
+        "src/werkzeug/datastructures/structures.py",
+        "src/werkzeug/debug/__init__.py",
+        "src/werkzeug/debug/console.py",
+        "src/werkzeug/debug/tbtools.py",
+        "src/werkzeug/exceptions.py",
+        "src/werkzeug/formparser.py",
+        "src/werkzeug/http.py",
+        "src/werkzeug/local.py",
+        "src/werkzeug/middleware/dispatcher.py",
+        "src/werkzeug/middleware/http_proxy.py",
+        "src/werkzeug/middleware/lint.py",
+        "src/werkzeug/middleware/profiler.py",
+        "src/werkzeug/middleware/proxy_fix.py",
+        "src/werkzeug/middleware/shared_data.py",
+        "src/werkzeug/routing/__init__.py",
+        "src/werkzeug/routing/converters.py",
+        "src/werkzeug/routing/exceptions.py",
+        "src/werkzeug/routing/map.py",
+        "src/werkzeug/routing/matcher.py",
+        "src/werkzeug/routing/rules.py",
+        "src/werkzeug/sansio/http.py",
+        "src/werkzeug/sansio/multipart.py",
+        "src/werkzeug/sansio/request.py",
+        "src/werkzeug/sansio/response.py",
+        "src/werkzeug/sansio/utils.py",
+        "src/werkzeug/security.py",
+        "src/werkzeug/serving.py",
+        "src/werkzeug/testapp.py",
+        "src/werkzeug/urls.py",
+        "src/werkzeug/utils.py",
+        "src/werkzeug/wrappers/request.py",
+        "src/werkzeug/wsgi.py"
+      ],
+      "order_sha256": "0754e213343ffa6872241dc0a6090b923d2c74f39a5598bc3b3172673334b3ec",
+      "dropped_tail_tokens": 365
+    },
+    "held_out": {
+      "n_files": 5,
+      "n_tokens": 30309,
+      "n_chunks": 30,
+      "file_order": [
+        "src/werkzeug/datastructures/accept.py",
+        "src/werkzeug/debug/repr.py",
+        "src/werkzeug/test.py",
+        "src/werkzeug/user_agent.py",
+        "src/werkzeug/wrappers/response.py"
+      ],
+      "order_sha256": "99747f0498fe2d0fb5cc8e5ba066a644128c515a78cb8eff7d63ea3c074d0514",
+      "dropped_tail_tokens": 0
+    }
+  },
+  "optimization": {
+    "lr": 0.001,
+    "scheduler": "cosine_with_warmup",
+    "warmup_ratio": 0.03,
+    "grad_clip": 1.0,
+    "micro_batch": 1,
+    "grad_accum": 1,
+    "chunk_budget": 106,
+    "epochs": 0.624,
+    "budget_plan": "budget_plan.json",
+    "dp_sgd": false,
+    "dp_epochs": null
+  },
+  "seed": 0,
+  "d3": {
+    "composition_order": "D3: client trained on frozen (base + alpha*cluster)",
+    "cluster_adapter": "artifacts\\round2_cluster\\cluster-web",
+    "alpha": 0.5,
+    "cluster_rank": 16,
+    "cluster_scaling_after_alpha": 0.5,
+    "lora_layers_scaled": 96,
+    "n_trainable_tensors": 192,
+    "compatibility": {
+      "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+      "target_modules": [
+        "k_proj",
+        "o_proj",
+        "q_proj",
+        "v_proj"
+      ],
+      "ranks": {
+        "cluster": 16,
+        "client": 16
+      },
+      "scalings": {
+        "cluster": 1.0,
+        "client": 1.0
+      }
+    },
+    "registry_provenance": {
+      "registry_url": "http://localhost:8004",
+      "adapter": "cluster-web",
+      "version": 2,
+      "kind": "cluster",
+      "cluster_id": "web",
+      "aggregation": "svd_exact",
+      "round": 1,
+      "source_clients": [
+        "client-flask",
+        "client-requests",
+        "client-werkzeug"
+      ],
+      "sha256_verified": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279"
+    }
+  },
+  "privacy": {
+    "epsilon": null,
+    "delta": 1e-05,
+    "noise_multiplier": null,
+    "max_grad_norm": null
+  },
+  "results": {
+    "history": [
+      {
+        "step": 10,
+        "loss": 1.0074,
+        "lr": 0.0009886469909625624,
+        "grad_norm": 0.1401
+      },
+      {
+        "step": 20,
+        "loss": 0.9492,
+        "lr": 0.0009342779723309745,
+        "grad_norm": 0.1555
+      },
+      {
+        "step": 30,
+        "loss": 0.8496,
+        "lr": 0.0008398201037367201,
+        "grad_norm": 0.1879
+      },
+      {
+        "step": 40,
+        "loss": 0.943,
+        "lr": 0.0007139929324815965,
+        "grad_norm": 0.2087
+      },
+      {
+        "step": 50,
+        "loss": 0.8825,
+        "lr": 0.0005684117531719551,
+        "grad_norm": 0.1891
+      },
+      {
+        "step": 60,
+        "loss": 0.7922,
+        "lr": 0.00041651538247953904,
+        "grad_norm": 0.1766
+      },
+      {
+        "step": 70,
+        "loss": 0.9612,
+        "lr": 0.00027232560184971434,
+        "grad_norm": 0.232
+      },
+      {
+        "step": 80,
+        "loss": 1.023,
+        "lr": 0.00014915278585845353,
+        "grad_norm": 0.19
+      },
+      {
+        "step": 90,
+        "loss": 0.887,
+        "lr": 5.83672016027697e-05,
+        "grad_norm": 0.1952
+      },
+      {
+        "step": 100,
+        "loss": 0.9233,
+        "lr": 8.349402317873788e-06,
+        "grad_norm": 0.2084
+      },
+      {
+        "step": 106,
+        "loss": 1.0386,
+        "lr": 0.0,
+        "grad_norm": 0.2055
+      }
+    ],
+    "first_window": 0.968,
+    "last_window": 0.9555,
+    "window_steps": 22,
+    "loss_slope": 0.00035,
+    "loss_decreased": false,
+    "n_steps_recorded": 106,
+    "optimizer_steps": 106,
+    "max_grad_norm": 0.2892,
+    "micro_batches": 106,
+    "n_trainable_params": 6291456,
+    "wall_seconds": 295.3,
+    "base_held_out": {
+      "loss": 1.0395,
+      "perplexity": 2.828,
+      "n_tokens": 30279
+    },
+    "cluster_start_held_out": {
+      "loss": 0.9978,
+      "perplexity": 2.712,
+      "n_tokens": 30279
+    },
+    "final_held_out": {
+      "loss": 0.9733,
+      "perplexity": 2.647,
+      "n_tokens": 30279
+    },
+    "held_out_ppl_delta": -0.181,
+    "held_out_ppl_delta_vs_cluster_start": -0.065,
+    "clip_saturated": false,
+    "grad_clip_threshold": 1.0,
+    "diverging": false,
+    "improved_held_out": true,
+    "learned_signal": "held_out_ppl (D5 primary metric)",
+    "stable": true
+  },
+  "hardware": {
+    "peak_vram_gb": 1.771,
+    "device": "NVIDIA GeForce RTX 2050"
+  },
+  "versions": {
+    "python": "3.10.11",
+    "torch": "2.14.0+cu126",
+    "transformers": "5.16.1"
+  },
+  "d3_deviation": null
+}

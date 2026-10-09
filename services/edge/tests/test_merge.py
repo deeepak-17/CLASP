@@ -31,6 +31,7 @@ import torch
 
 from edge.merge import (
     CONTRACT_HYPERPARAMS,
+    AdapterCompatibilityError,
     compose,
     composite_delta,
     delta_weights,
@@ -291,6 +292,21 @@ def test_contract_violation_is_rejected():
     with pytest.raises(ValueError, match="violates contract"):
         validate_compatibility([make_cfg(r=8, lora_alpha=8)], ["client"],
                                contract=CONTRACT_HYPERPARAMS)
+
+
+def test_compat_failure_is_a_clean_contract_error():
+    """W10: a compatibility failure is its own error type carrying EVERY
+    violation, so a caller can report a contract error rather than re-parse a
+    message — and it is still a ValueError for every existing caller."""
+    bad = make_cfg(r=8, lora_alpha=8, use_rslora=True)
+    with pytest.raises(AdapterCompatibilityError) as exc:
+        validate_compatibility([make_cfg(), bad], ["cluster", "client"],
+                               contract=CONTRACT_HYPERPARAMS)
+    assert isinstance(exc.value, ValueError)
+    problems = exc.value.problems
+    assert any("use_rslora mismatch" in p for p in problems)
+    assert any(p.startswith("client: r=8") for p in problems)
+    assert len(problems) >= 3          # rslora + r + lora_alpha, not just the first
 
 
 def test_differing_ranks_between_adapters_are_allowed():

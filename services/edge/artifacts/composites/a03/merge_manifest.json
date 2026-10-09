@@ -3,7 +3,7 @@
   "alpha": 0.3,
   "beta": 1.0,
   "cluster_source": "stub:random",
-  "client_source": "C:/Users/admin/AppData/Local/Temp/claude/C--Users-admin-Desktop-Edu-Final-year-project-CLASP-Team-Bundle/be1a727c-fbc8-4351-8db4-805fbf1e7d5d/scratchpad/train_out/client-requests/adapter",
+  "client_source": "~/AppData/Local/Temp/claude/C--Users-admin-Desktop-Edu-Final-year-project-CLASP-Team-Bundle/be1a727c-fbc8-4351-8db4-805fbf1e7d5d/scratchpad/train_out/client-requests/adapter",
   "composite_rank": 32,
   "composite_scaling": 1.0,
   "n_modules": 96,
