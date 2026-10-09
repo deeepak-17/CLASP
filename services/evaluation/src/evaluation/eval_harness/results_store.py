@@ -92,6 +92,9 @@ class ResultRecord:
     provenance_note: str
     raw_artifact_path: str | None = None
     benchmark_data_source: str | None = None
+    #: ``clasp-evaluation`` version that produced the record (None for records
+    #: written before it was recorded).
+    harness_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.provenance not in ("REAL", "DEMO_TEST"):
@@ -110,6 +113,7 @@ class ResultRecord:
                 "provenance_note": self.provenance_note,
                 "raw_artifact_path": self.raw_artifact_path,
                 "benchmark_data_source": self.benchmark_data_source,
+                "harness_version": self.harness_version,
             },
         }
 
@@ -128,6 +132,7 @@ class ResultRecord:
                 provenance_note=str(meta.get("provenance_note", "")),
                 raw_artifact_path=meta.get("raw_artifact_path"),
                 benchmark_data_source=meta.get("benchmark_data_source"),
+                harness_version=meta.get("harness_version"),
             )
         except (KeyError, TypeError) as exc:
             raise ResultsStoreError(f"Malformed results.json record: {exc}") from exc

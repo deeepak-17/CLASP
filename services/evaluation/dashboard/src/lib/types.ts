@@ -46,6 +46,8 @@ export interface RunMetadata {
   provenance_note: string;
   raw_artifact_path: string | null;
   benchmark_data_source: string | null;
+  /** clasp-evaluation version that produced the record (absent on older records). */
+  harness_version?: string | null;
 }
 
 export interface ResultRecord {

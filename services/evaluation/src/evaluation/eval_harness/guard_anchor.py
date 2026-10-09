@@ -152,6 +152,52 @@ def _isolation_summary(outcomes: Sequence[SampleOutcome]) -> str:
     return "; ".join(_ISOLATION_TEXT.get(k, k) for k in kinds)
 
 
+def anchor_result_record(
+    anchor: Mapping[str, Any],
+    *,
+    model_checkpoint: str,
+    generation: Mapping[str, Any],
+    provenance_note: str,
+    raw_artifact_path: str | None = None,
+):
+    """A REAL ``results.json`` record for a scored anchor (HumanEval pass@1 on its subset).
+
+    ``run_id`` is derived from the samples' sha256, so re-scoring the same
+    samples replaces the record instead of adding a duplicate.
+    """
+    from evaluation import __version__
+    from evaluation.eval_harness.results_store import GenerationSnapshot, ResultRecord
+    from evaluation.interfaces.contracts import AdapterKind, AdapterRef, BenchmarkName, EvalResult
+
+    n = int(anchor["n_problems"])
+    n_samples = int(anchor["samples"]["n_samples"])
+    return ResultRecord(
+        eval_result=EvalResult(
+            adapter=AdapterRef(name="baseline", version=0, kind=AdapterKind.CLIENT),
+            benchmark=BenchmarkName.HUMANEVAL,
+            pass_at_k={1: float(anchor["base_pass_at_1"])},
+            num_tasks=n,
+            num_samples_per_task=max(1, n_samples // n),
+            created_at=anchor["scored_at"],
+            run_id=f"anchor-{anchor['samples']['sha256'][:12]}",
+        ),
+        model_checkpoint=model_checkpoint,
+        dataset_split=f"frozen subset: first {n} HumanEval tasks by id",
+        num_problems=n,
+        seed=generation.get("seed"),
+        generation=GenerationSnapshot(
+            max_new_tokens=int(generation["max_new_tokens"]),
+            temperature=float(generation["temperature"]),
+            stop_sequences=list(generation["stop_sequences"]),
+        ),
+        provenance="REAL",
+        provenance_note=provenance_note,
+        raw_artifact_path=raw_artifact_path,
+        benchmark_data_source="original HumanEval check() tests (src/evaluation/eval_harness/humaneval/tasks.jsonl)",
+        harness_version=__version__,
+    )
+
+
 def _task_order(task_id: str) -> tuple[int, str]:
     tail = task_id.rsplit("/", 1)[-1]
     return (int(tail), task_id) if tail.isdigit() else (1 << 30, task_id)

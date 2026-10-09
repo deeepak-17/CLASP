@@ -139,14 +139,6 @@ export function allKValues(results: ResultRecord[]): number[] {
   return Array.from(ks).sort((a, b) => a - b);
 }
 
-/** True only when every record in the index is provenance "REAL". A single
- * DEMO_TEST record is enough to mark the whole view as placeholder data —
- * per the Week-5 instruction, placeholder values must never be presented as
- * if they were real. */
-export function isAllReal(results: ResultRecord[]): boolean {
-  return results.length > 0 && results.every((r) => r.run_metadata.provenance === "REAL");
-}
-
 export function formatPercent(value: number | undefined): string {
   if (value === undefined || Number.isNaN(value)) return "N/A";
   return `${(value * 100).toFixed(1)}%`;
@@ -156,3 +148,4 @@ export function formatOrNA(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === "") return "N/A";
   return String(value);
 }
+

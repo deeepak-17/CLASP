@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 import { contributionByClient, isPersonalizationFeed, shortClient } from "../src/lib/personalization.ts";
 import { isLineageFeed, lineageColumns, parentsOf } from "../src/lib/lineage.ts";
 import { isNoiseReport } from "../src/lib/noise.ts";
+import { recordKey, recordLabel } from "../src/lib/records.ts";
+import type { ResultsIndex } from "../src/lib/types.ts";
 
 const load = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`../../results/${name}`, import.meta.url), "utf8"));
@@ -40,4 +42,14 @@ test("guards reject wrong shapes", () => {
     false,
   );
   assert.equal(isNoiseReport({}), false);
+});
+
+test("results.json: REAL and DEMO_TEST records never share a key or a label", () => {
+  const index = load("results.json") as ResultsIndex;
+  assert.ok(Array.isArray(index.results) && index.results.length > 0);
+  const keys = index.results.map(recordKey);
+  const labels = index.results.map(recordLabel);
+  assert.equal(new Set(keys).size, keys.length);
+  assert.equal(new Set(labels).size, labels.length);
+  assert.ok(index.results.some((r) => r.run_metadata.provenance === "REAL"));
 });

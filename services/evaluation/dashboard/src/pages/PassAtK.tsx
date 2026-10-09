@@ -2,6 +2,7 @@ import { EmptyResultsState, ErrorState, LoadingState } from "../components/DataS
 import { PassAtKChart } from "../components/PassAtKChart";
 import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { useResults } from "../lib/loadResults";
+import { recordKey, recordLabel } from "../lib/records";
 
 export function PassAtK() {
   const state = useResults();
@@ -40,11 +41,11 @@ export function PassAtK() {
               <div style={{ display: "flex", gap: 16, marginTop: 4, flexWrap: "wrap" }}>
                 {results.map((r) => (
                   <div
-                    key={r.eval_result.benchmark}
+                    key={recordKey(r)}
                     style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}
                   >
                     <ProvenanceBadge provenance={r.run_metadata.provenance} />
-                    <span style={{ color: "var(--text-muted)" }}>{r.eval_result.benchmark}</span>
+                    <span style={{ color: "var(--text-muted)" }}>{recordLabel(r)}</span>
                   </div>
                 ))}
               </div>

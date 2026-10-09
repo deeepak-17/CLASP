@@ -10,6 +10,17 @@ humaneval_guard:
   tolerance_pass_at_1: 0.02
   # Scored baseline anchor the noise floor is measured from.
   baseline_anchor: "results/humaneval_guard/base_anchor.json"
+  # How the edge lane generated results/humaneval_guard/base_samples.jsonl
+  # (edge.humaneval_baseline, `--profile dev --n 20`, its frozen defaults: "do
+  # not change without minting a NEW anchor"). Its manifest.json is not
+  # committed, so these are the generator's pinned defaults, not a copy of it.
+  # Used for the REAL HumanEval record in results.json.
+  baseline_generation:
+    model_checkpoint: "deepseek-ai/deepseek-coder-1.3b-base (edge dev profile, NF4), no adapter"
+    max_new_tokens: 384
+    temperature: 0.0
+    seed: 0
+    stop_sequences: ["\nclass ", "\ndef ", "\n#", "\nif __name__", "\nprint(", "\n@", "\nassert "]
   # Fraction of tasks whose pass/fail flips between baseline and candidate.
   # Assumed until a candidate anchor exists; then the measured value replaces it.
   assumed_discordance: 0.10

@@ -1,6 +1,7 @@
 import { EmptyResultsState, ErrorState, LoadingState } from "../components/DataState";
 import { ProvenanceBadge } from "../components/ProvenanceBadge";
 import { formatOrNA, formatPercent, useResults } from "../lib/loadResults";
+import { recordKey, recordLabel } from "../lib/records";
 
 export function Benchmarks() {
   const state = useResults();
@@ -37,7 +38,7 @@ export function Benchmarks() {
               .map(Number)
               .sort((a, b) => a - b);
             return (
-              <div key={record.eval_result.benchmark} className="panel">
+              <div key={recordKey(record)} className="panel">
                 <div
                   style={{
                     display: "flex",
@@ -47,7 +48,7 @@ export function Benchmarks() {
                   }}
                 >
                   <div>
-                    <h3>{record.eval_result.benchmark}</h3>
+                    <h3>{recordLabel(record)}</h3>
                     <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
                       {record.run_metadata.dataset_split}
                     </p>

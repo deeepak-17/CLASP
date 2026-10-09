@@ -11,15 +11,14 @@ import {
 } from "recharts";
 import type { ResultRecord } from "../lib/types";
 import { allKValues } from "../lib/loadResults";
+import { recordKey, recordLabel } from "../lib/records";
 
 interface PassAtKChartProps {
   records: ResultRecord[];
 }
 
-const SERIES_COLOR: Record<string, string> = {
-  HumanEval: "var(--series-humaneval)",
-  MBPP: "var(--series-mbpp)",
-};
+/** Categorical slots in fixed order, one per record (validated in light and dark). */
+const SLOT = ["var(--series-humaneval)", "var(--series-mbpp)", "var(--series-3)"];
 
 /** Grouped bar chart, x=k, y=Pass@k rate, one bar-series per benchmark.
  *
@@ -33,7 +32,9 @@ const SERIES_COLOR: Record<string, string> = {
  * renders nothing for a missing key, not a zero-value bar).
  */
 export function PassAtKChart({ records }: PassAtKChartProps) {
-  const benchmarks = Array.from(new Set(records.map((r) => r.eval_result.benchmark)));
+  // One series per record (not per benchmark): two runs of the same benchmark —
+  // e.g. a DEMO_TEST mock and a REAL anchor — must never overwrite each other.
+  const series = records.map((r, i) => ({ key: recordKey(r), label: recordLabel(r), record: r, color: SLOT[i] ?? "var(--text-muted)" }));
   const ks = allKValues(records);
 
   if (ks.length === 0) {
@@ -42,10 +43,10 @@ export function PassAtKChart({ records }: PassAtKChartProps) {
 
   const data = ks.map((k) => {
     const row: Record<string, number | string> = { k: `k = ${k}` };
-    for (const record of records) {
-      const value = record.eval_result.pass_at_k[String(k)];
+    for (const s of series) {
+      const value = s.record.eval_result.pass_at_k[String(k)];
       if (value !== undefined) {
-        row[record.eval_result.benchmark] = value;
+        row[s.key] = value;
       }
     }
     return row;
@@ -84,17 +85,17 @@ export function PassAtKChart({ records }: PassAtKChartProps) {
             wrapperStyle={{ fontSize: 12, color: "var(--text-secondary)" }}
             formatter={(value: string) => <span style={{ color: "var(--text-secondary)" }}>{value}</span>}
           />
-          {benchmarks.map((benchmark) => (
+          {series.map((s) => (
             <Bar
-              key={benchmark}
-              dataKey={benchmark}
-              name={benchmark}
-              fill={SERIES_COLOR[benchmark] ?? "var(--accent)"}
+              key={s.key}
+              dataKey={s.key}
+              name={s.label}
+              fill={s.color}
               radius={[4, 4, 0, 0]}
               maxBarSize={24}
             >
               <LabelList
-                dataKey={benchmark}
+                dataKey={s.key}
                 position="top"
                 formatter={(v: number) => `${(v * 100).toFixed(0)}%`}
                 style={{ fill: "var(--text-secondary)", fontSize: 11 }}

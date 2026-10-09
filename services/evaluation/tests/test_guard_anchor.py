@@ -121,3 +121,21 @@ class TestBuildAnchor:
         status = promote.resolve_guard(anchor_path, anchor_path)
         assert status.available
         assert status.candidate == {"benchmark": "HumanEval", "pass_at_k": {"1": 0.5}}
+
+
+def test_anchor_becomes_a_real_results_record_with_stable_run_id() -> None:
+    from evaluation.eval_harness.guard_anchor import anchor_result_record
+    from evaluation.eval_harness.results_store import ResultRecord
+    from evaluation.utils.io_utils import read_json
+    from evaluation.utils.paths import project_paths
+
+    anchor = read_json(project_paths().eval_results / "humaneval_guard" / "base_anchor.json")
+    gen = {"max_new_tokens": 384, "temperature": 0.0, "seed": 0, "stop_sequences": ["\ndef "]}
+    record = anchor_result_record(anchor, model_checkpoint="m", generation=gen, provenance_note="n")
+    record.validate()
+    assert record.provenance == "REAL"
+    assert record.eval_result.pass_at_k == {1: anchor["base_pass_at_1"]}
+    assert record.eval_result.num_tasks == anchor["n_problems"]
+    assert record.eval_result.run_id == f"anchor-{anchor['samples']['sha256'][:12]}"
+    assert record.harness_version
+    assert ResultRecord.from_dict(record.to_dict()).harness_version == record.harness_version

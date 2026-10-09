@@ -36,8 +36,12 @@ are measured on these files.
 | in-project next-line completion: edit similarity, exact match | does it *complete* this client's code better? (CodeXGLUE edit similarity: 1 − Levenshtein / max length) | D5 primary signal |
 | HumanEval pass@1 | did general coding ability regress? | D5 guard |
 
-Pass@k uses the unbiased estimator; candidate programs run in a subprocess
-per program with a wall-clock timeout and POSIX resource limits. Sampling is
+Pass@k uses the unbiased estimator. Each candidate program runs in its own
+docker container with no network, a read-only filesystem, no capabilities
+and memory/CPU/process limits; where Docker is unavailable it falls back to
+a subprocess with a timeout and POSIX resource limits, and every result
+records which isolation produced it. (The base-model anchor in §5 was scored
+with the subprocess fallback — the development machine has no Docker.) Sampling is
 seeded per task (`generation.seed`), so a run is reproducible and independent
 of task order.
 

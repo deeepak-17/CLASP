@@ -23,6 +23,7 @@
   --accent-soft: #eaf1fb;
   --series-humaneval: #2a78d6; /* categorical slot 1 */
   --series-mbpp: #eb6834; /* categorical slot 2 */
+  --series-3: #1c9e77; /* categorical slot 3 */
 
   --status-good: #0ca30c;
   --status-warning: #fab219;
@@ -53,6 +54,7 @@
     --accent-soft: #1a2c3f;
     --series-humaneval: #3987e5;
     --series-mbpp: #d95926;
+    --series-3: #24a17e;
   }
 }
 :root[data-theme="dark"] {
@@ -70,6 +72,7 @@
   --accent-soft: #1a2c3f;
   --series-humaneval: #3987e5;
   --series-mbpp: #d95926;
+  --series-3: #24a17e;
 }
 
 * {

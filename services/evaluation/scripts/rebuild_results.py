@@ -3,7 +3,8 @@
 
 Steps, in dependency order (each is its own script and can be run alone):
 
-1. score the base-model HumanEval samples into the guard anchor;
+1. score the base-model HumanEval samples into the guard anchor (and its REAL
+   results.json record);
 2. personalization results from the edge round manifests;
 3. adapter lineage;
 4. evaluation noise and the locked guard thresholds;
@@ -38,7 +39,7 @@ SCRIPTS = Path(__file__).resolve().parent
 def steps(label: str) -> list[tuple[str, list[str]]]:
     return [
         ("guard anchor", ["score_humaneval_samples.py", "--samples", "results/humaneval_guard/base_samples.jsonl",
-                          "--out", "results/humaneval_guard/base_anchor.json", "--no-report"]),
+                          "--out", "results/humaneval_guard/base_anchor.json", "--no-report", "--record-result"]),
         ("personalization", ["build_personalization_report.py"]),
         ("lineage", ["export_lineage.py"]),
         ("noise", ["build_noise_report.py"]),

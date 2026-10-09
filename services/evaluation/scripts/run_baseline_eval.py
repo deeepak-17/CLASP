@@ -123,6 +123,8 @@ def main(args: argparse.Namespace) -> int:
         if summary.tasks_succeeded > summary.tasks_attempted:
             sanity_failures.append(f"{summary.benchmark.value}: succeeded > attempted")
 
+        from evaluation import __version__ as harness_version
+
         adapter_ref = AdapterRef(name="baseline", version=0, kind=AdapterKind.CLIENT)
         eval_result_pass_at_k = {k: v for k, v in summary.pass_at_k.items()}
         from evaluation.interfaces.contracts import EvalResult
@@ -152,6 +154,7 @@ def main(args: argparse.Namespace) -> int:
                 provenance_note=_DEMO_NOTE,
                 raw_artifact_path=paths.relative(run.artifact_path) if run.artifact_path else None,
                 benchmark_data_source=source_url,
+                harness_version=harness_version,
             )
         )
 
