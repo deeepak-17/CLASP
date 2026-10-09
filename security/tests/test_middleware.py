@@ -6,19 +6,19 @@ import pytest
 # Middleware tests need fastapi/starlette
 fastapi = pytest.importorskip("fastapi", reason="fastapi required for middleware tests")
 
-from security.middleware.rate_limiter import (
+from security.middleware.rate_limiter import (  # noqa: E402 — after the importorskip guard
     RateLimitConfig,
     RateLimiter,
     TokenBucket,
 )
-from security.middleware.request_validator import (
+from security.middleware.request_validator import (  # noqa: E402 — after the importorskip guard
     ValidationError,
     sanitize_client_id,
     sanitize_path,
     validate_round_id,
     validate_tensor_payload,
 )
-from security.middleware.security_headers import SecurityHeadersConfig
+from security.middleware.security_headers import SecurityHeadersConfig  # noqa: E402 — after the importorskip guard
 
 # ── Token Bucket ─────────────────────────────────────────────────────────────
 

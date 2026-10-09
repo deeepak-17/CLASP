@@ -9,7 +9,7 @@ from security.dp.config import DPConfig
 # opacus is not installed (CI may not have GPU deps).
 opacus = pytest.importorskip("opacus", reason="opacus required for accountant tests")
 
-from security.dp.accountant import BudgetExhaustedError, PrivacyAccountant
+from security.dp.accountant import BudgetExhaustedError, PrivacyAccountant  # noqa: E402 — after the importorskip guard
 
 
 class TestPrivacyAccountantBasic:
