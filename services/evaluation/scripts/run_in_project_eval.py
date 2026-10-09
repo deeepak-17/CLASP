@@ -44,7 +44,7 @@ from _cli import EXIT_FAILURE, EXIT_OK, base_parser, emit, report_line, run_cli,
 from evaluation.eval_harness.in_project import (
     InProjectConfig,
     evaluate_client_in_project,
-    noise_band,
+    noise_band_with_note,
 )
 from evaluation.eval_harness.registry import build_inference_client
 from evaluation.eval_harness.models import BackendConfig, EvaluationConfig
@@ -140,7 +140,7 @@ def main(args: argparse.Namespace) -> int:
             for _ in range(args.repeats)
         ]
         primary = repeats[0]
-        band = noise_band([r.edit_similarity for r in repeats])
+        band, band_note = noise_band_with_note([r.edit_similarity for r in repeats])
         if primary.generation_errors:
             warnings.append(f"{client_id}: {primary.generation_errors} completion request(s) errored")
 
@@ -167,6 +167,7 @@ def main(args: argparse.Namespace) -> int:
                 "repeats": args.repeats,
                 "edit_similarity_repeats": [round(r.edit_similarity, 6) for r in repeats],
                 "baseline_noise_band": round(band, 6),
+                "baseline_noise_band_note": band_note,
                 "in_project": primary.to_dict(include_examples=False),
                 "metrics": metrics.to_dict(),
                 "eval_result": eval_result.to_dict(),

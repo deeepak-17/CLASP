@@ -15,6 +15,12 @@ Steps, in dependency order (each is its own script and can be run alone):
 Nothing here needs a GPU, a network or the other services; inputs are the
 files under ``results/edge_rounds/`` and ``results/humaneval_guard/``.
 
+Step 1 re-executes the committed HumanEval samples (model-generated code) on
+this machine, under ``scoring.sandbox`` — a no-network docker container when
+Docker is available, otherwise the process fallback, which is not a sandbox
+for hostile code. The samples are the edge lane's committed base-model
+outputs, so the risk is low, but run it where that is acceptable.
+
 Usage::
 
     python scripts/rebuild_results.py

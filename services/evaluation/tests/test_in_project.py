@@ -443,3 +443,12 @@ class TestEvalResultInProject:
     def test_negative_noise_band_rejected(self) -> None:
         with pytest.raises(ContractViolationError):
             self._result(baseline_noise_band=-0.01)
+
+
+def test_noise_band_note_travels_with_the_band() -> None:
+    from evaluation.eval_harness.in_project import noise_band_with_note
+
+    band, note = noise_band_with_note([0.42])
+    assert band == 0.0 and note.startswith("PLACEHOLDER")
+    band, note = noise_band_with_note([0.31, 0.31, 0.31])
+    assert band == 0.0 and "decode-level noise only" in note

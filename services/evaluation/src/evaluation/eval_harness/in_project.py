@@ -243,9 +243,20 @@ def noise_band(values: Sequence[float]) -> float:
 
     Delegates to :func:`evaluation.completion.noise_band`. Returns 0.0 for
     fewer than two values: one evaluation shows no run-to-run variation.
+    Use :func:`noise_band_with_note` wherever the band is reported, so its
+    caveat travels with it.
     """
-    band, _note = _canonical.noise_band([{"edit_similarity": float(v)} for v in values])
-    return float(band)
+    return noise_band_with_note(values)[0]
+
+
+def noise_band_with_note(values: Sequence[float]) -> tuple[float, str]:
+    """The band plus the canonical note saying what it does (and does not) measure.
+
+    With fewer than two repeats the note says the 0.0 is a placeholder, not a
+    measurement; with greedy repeats it says the band is decode-level only.
+    """
+    band, note = _canonical.noise_band([{"edit_similarity": float(v)} for v in values])
+    return float(band), note
 
 
 # ---------------------------------------------------------------------------

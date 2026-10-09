@@ -67,7 +67,8 @@ def _client_row(client_id: str, block: Mapping[str, Any]) -> dict[str, Any]:
         "alpha_ref_ppl": float(split("alpha_ref_ppl")),
         "personalization_delta_ppl": float(_get(block, "personalization_delta_ppl")),
         "cluster_contribution_at_alpha_ref": float(_get(block, "cluster_contribution_at_alpha_ref")),
-        # Perplexity: lower is better, so improved means the composite beats the base.
+        # Perplexity: lower is better. Descriptive flag only (no threshold, no noise band) —
+        # never use it to decide a promotion; D5's rule lives in the registry.
         "improved": composite < base,
         "decision": promotion.get("decision"),
         "decision_is_authoritative": bool(promotion.get("decision_is_authoritative", False)),

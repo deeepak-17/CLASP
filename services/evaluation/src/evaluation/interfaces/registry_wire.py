@@ -9,7 +9,7 @@ directions:
 Outbound — what P5 sends (seam C2, ``POST /adapters/{name}/promote``)
     :func:`guard_metrics`, :func:`in_project_wire`, :func:`eval_result_wire`
     and :func:`promote_body` build exactly the JSON
-    ``registry.app._eval_result_from`` parses — the same field set
+    ``contracts.EvalResult.from_json`` (what the registry's ``POST /promote`` calls) parses — the same field set
     ``edge.promote.build_eval_result`` sends. P5's HumanEval/MBPP pass@k
     becomes ``EvalResult.guard``; the in-project metric becomes
     ``EvalResult.in_project``.
