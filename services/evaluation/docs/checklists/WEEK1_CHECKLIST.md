@@ -56,3 +56,9 @@
 - [x] Tests: utils, corpus, evaluation (93 passing at end of Week 1)
 
 **Week 1 status: COMPLETE**
+
+## Reconciliation with the v2 plan (2026-10-09)
+
+- [x] Tue — `docs/dataset.md` recorded at the repository root (decision, pinned sources and licences, filters, checksums, partitions, 10% held-out split)
+- [ ] Tue — Team sign-off on the D1 corpus: not on record. The web cluster used in every round is {flask, requests, werkzeug}, not D1's {django, flask, requests}; `docs/dataset.md` states the deviation
+- [x] Thu — sandboxed-exec design (docker): implemented rather than only noted — `scoring.sandbox` docker backend (no network, read-only fs, no capabilities, memory/CPU/pid limits) with a recorded process fallback (`src/evaluation/eval_harness/execution.py`, `tests/test_sandbox.py`); not exercised on the development machine, which has no Docker

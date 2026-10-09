@@ -45,3 +45,9 @@
 - Real DeepSeek-Coder-6.7B / P1 merged-model inference (needs P1's checkpoint + a GPU; the adapter and registration path are ready)
 - Sandboxed execution beyond process-level isolation (P3 sign-off on a container/gVisor-grade sandbox — see `evaluation/execution.py`'s module docstring)
 - Dashboard (React + Recharts) — Week 5
+
+## Reconciliation with the v2 plan (2026-10-09)
+
+- [x] Mon — HumanEval runner on the base model: the edge lane's 20 greedy base-model completions are executed by P5's scorer and recorded as a REAL `results.json` record (pass@1 0.50, `results/humaneval_guard/`)
+- [x] Deferred above — "sandboxed execution beyond process-level isolation": closed by the docker sandbox backend (see the Week 1 reconciliation)
+- [x] Thu — noise band: the D5 band (spread of 3 repeated baseline evals) is reported in `results/noise_report.json`; it is 0.0 because greedy repeats are identical

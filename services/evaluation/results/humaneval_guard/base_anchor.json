@@ -42,7 +42,7 @@
     "n_samples": 20
   },
   "generation_manifest_supplied": false,
-  "scored_at": "2026-10-09T05:44:18Z",
+  "scored_at": "2026-10-09T05:48:56Z",
   "per_task": [
     {
       "task_id": "HumanEval/0",
@@ -57,7 +57,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "rate_paren_groups)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-txei56sh/candidate.py\", line 45, in check\n    assert candidate('(()()) ((())) () ((())()())') == [\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        '(()())', '((()))', '()', '((())()())'\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ]\n    ^\nAssertionError\n",
+      "stderr_tail": "rate_paren_groups)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-xdd6xsr1/candidate.py\", line 45, in check\n    assert candidate('(()()) ((())) () ((())()())') == [\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        '(()())', '((()))', '()', '((())()())'\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ]\n    ^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -89,7 +89,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "ders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-jcbiqn56/candidate.py\", line 31, in <module>\n    check(intersperse)\n    ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-jcbiqn56/candidate.py\", line 28, in check\n    assert candidate([5, 6, 3, 2], 8) == [5, 8, 6, 8, 3, 8, 2]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "ders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-uh27qy8u/candidate.py\", line 31, in <module>\n    check(intersperse)\n    ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-uh27qy8u/candidate.py\", line 28, in check\n    assert candidate([5, 6, 3, 2], 8) == [5, 8, 6, 8, 3, 8, 2]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -97,7 +97,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "xfd8k40000gn/T/clasp-p5-exec-26c_vflj/candidate.py\", line 29, in <module>\n    check(parse_nested_parens)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-26c_vflj/candidate.py\", line 25, in check\n    assert candidate('(()()) ((())) () ((())()())') == [2, 3, 1, 3]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "xfd8k40000gn/T/clasp-p5-exec-ius0951f/candidate.py\", line 29, in <module>\n    check(parse_nested_parens)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-ius0951f/candidate.py\", line 25, in check\n    assert candidate('(()()) ((())) () ((())()())') == [2, 3, 1, 3]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -121,7 +121,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": " ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-qyjd7z8l/candidate.py\", line 27, in check\n    assert candidate([]) == []\n           ~~~~~~~~~^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-qyjd7z8l/candidate.py\", line 10, in rolling_max\n    max_so_far = numbers[0]\n                 ~~~~~~~^^^\nIndexError: list index out of range\n",
+      "stderr_tail": " ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-zgvq8fwi/candidate.py\", line 27, in check\n    assert candidate([]) == []\n           ~~~~~~~~~^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-zgvq8fwi/candidate.py\", line 10, in rolling_max\n    max_so_far = numbers[0]\n                 ~~~~~~~^^^\nIndexError: list index out of range\n",
       "isolation": "process"
     },
     {
@@ -129,7 +129,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "most recent call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-4vg8o6qm/candidate.py\", line 45, in <module>\n    check(make_palindrome)\n    ~~~~~^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-4vg8o6qm/candidate.py\", line 41, in check\n    assert candidate('xyz') == 'xyzyx'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "most recent call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-hcafv3i2/candidate.py\", line 45, in <module>\n    check(make_palindrome)\n    ~~~~~^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-hcafv3i2/candidate.py\", line 41, in check\n    assert candidate('xyz') == 'xyzyx'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -137,7 +137,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "ast):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-bc80ahl4/candidate.py\", line 26, in <module>\n    check(string_xor)\n    ~~~~~^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-bc80ahl4/candidate.py\", line 22, in check\n    assert candidate('111000', '101010') == '010010'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "ast):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-yu1sr5bl/candidate.py\", line 26, in <module>\n    check(string_xor)\n    ~~~~~^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-yu1sr5bl/candidate.py\", line 22, in check\n    assert candidate('111000', '101010') == '010010'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -177,7 +177,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-ihgzfqny/candidate.py\", line 28, in <module>\n    check(count_distinct_characters)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-ihgzfqny/candidate.py\", line 24, in check\n    assert candidate('abcde' + 'cade' + 'CADE') == 5\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-g1__l78h/candidate.py\", line 28, in <module>\n    check(count_distinct_characters)\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-g1__l78h/candidate.py\", line 24, in check\n    assert candidate('abcde' + 'cade' + 'CADE') == 5\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -185,7 +185,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "Traceback (most recent call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-ye1mqt6g/candidate.py\", line 36, in <module>\n    check(parse_music)\n    ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-ye1mqt6g/candidate.py\", line 30, in check\n    assert candidate('') == []\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "Traceback (most recent call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-jpa0lacf/candidate.py\", line 36, in <module>\n    check(parse_music)\n    ~~~~~^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-jpa0lacf/candidate.py\", line 30, in check\n    assert candidate('') == []\n           ^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -193,7 +193,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-0b8yxfby/candidate.py\", line 29, in <module>\n    check(how_many_times)\n    ~~~~~^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-0b8yxfby/candidate.py\", line 26, in check\n    assert candidate('cacacacac', 'cac') == 4\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "call last):\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-rhq5wcxs/candidate.py\", line 29, in <module>\n    check(how_many_times)\n    ~~~~~^^^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-rhq5wcxs/candidate.py\", line 26, in check\n    assert candidate('cacacacac', 'cac') == 4\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     },
     {
@@ -201,7 +201,7 @@
       "passed": false,
       "timed_out": false,
       "entry_point_defined": true,
-      "stderr_tail": "olders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-7jkq3ef2/candidate.py\", line 31, in <module>\n    check(sort_numbers)\n    ~~~~~^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-7jkq3ef2/candidate.py\", line 27, in check\n    assert candidate('three five nine') == 'three five nine'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+      "stderr_tail": "olders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-01akw3up/candidate.py\", line 31, in <module>\n    check(sort_numbers)\n    ~~~~~^^^^^^^^^^^^^^\n  File \"/var/folders/jg/d87byvpd25l0cs_stgxfd8k40000gn/T/clasp-p5-exec-01akw3up/candidate.py\", line 27, in check\n    assert candidate('three five nine') == 'three five nine'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
       "isolation": "process"
     }
   ]

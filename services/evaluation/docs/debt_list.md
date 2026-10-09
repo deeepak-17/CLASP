@@ -25,8 +25,9 @@ PR #13; the second is what is still open after the Phase II work.
 | Supplementary edit-similarity band | P1 → P5 | per-example rows in the round manifest | bootstrap implemented |
 | D5 tolerance below the guard's noise floor | P4 + P5 | team decision | evidence in `reports/eval_noise_report.md` |
 | Dashboard image not built | P5 | a machine with Docker | `docker compose build dashboard` |
+| Docker sandbox not exercised | P5 | a machine with Docker | `python scripts/sanity_check_scoring.py --sandbox docker`; the base anchor was scored with the process fallback |
 | Dashboard pages not viewed in a browser here | P5 | a working browser | type-checked, built, contract-tested |
 | Federated Rounds page has no committed feed | P4/P1 → P5 | `scripts/demo_round.py` round manifests (gitignored) | `scripts/export_round_feed.py` turns them into `results/rounds.json` |
 | W11 seeded run 1 / run 2 not on the dashboard | team → P5 | the two all-hands run manifests | the w12 write-up reports three identical runs; manifests not committed |
-| Web cluster differs from the D1 plan | team | — | on disk {flask, requests, werkzeug}; plan said {django, flask, requests} |
+| Web cluster differs from the D1 plan — needs all-hands sign-off | team (P5 owns D1) | — | on disk {flask, requests, werkzeug}; D1 says {django, flask, requests}; recorded in `docs/dataset.md` |
 | `pytest` from the repo root fails to collect | all modules | — | every service names its test package `tests`; CI runs each separately |
