@@ -13,6 +13,7 @@ import pytest
 
 from evaluation.partitions.materialize import (
     MaterializeConfig,
+    load_materialize_config,
     materialize_client_repo,
     split_held_out,
 )
@@ -162,3 +163,11 @@ class TestMaterializeClientRepo:
 
         with pytest.raises(PartitionError):
             _safe_write(materialize_config.repo_dir("client-alpha"), bad.relative_path, bad.content)
+
+
+def test_repository_config_writes_to_the_shared_corpus_location() -> None:
+    """The edge lane and compose's train profile read the corpus from <repo>/datasets/materialized."""
+    from evaluation.utils.paths import project_paths
+
+    repo_root = project_paths().root.parent.parent
+    assert load_materialize_config().output_root == (repo_root / "datasets" / "materialized").resolve()

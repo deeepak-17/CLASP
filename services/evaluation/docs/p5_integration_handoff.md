@@ -20,6 +20,7 @@ module rule); nothing is added at the repository root.
 | `scripts/`, `configs/` | one-shot CLIs and their YAML; paths resolve against `services/evaluation` | — |
 | `results/`, `reports/`, `datasets/{partitions,metadata}/` | committed run outputs and the D1 partition definition | — |
 | `tests/` | the P5 suite, run by the `pytest (evaluation)` CI job | — |
+| `<repo>/datasets/materialized/` (not under this module) | per-client corpus + 10% held-out split written by `scripts/materialize_client_repo.py`; the shared location the edge lane and compose's train profile read | — |
 | `dashboard/` | React/Recharts dashboard (incl. the Federated Rounds page) | — |
 
 **One package, one name.** An earlier layout had a second top-level

@@ -18,8 +18,11 @@ materialize:
   manifest_path: "datasets/partitions/manifest.json"
 
   # Everything this script writes lives under here, one subfolder per
-  # client_id — never inside datasets/partitions/ itself.
-  output_root: "datasets/materialized"
+  # client_id — never inside datasets/partitions/ itself. Relative paths
+  # resolve against services/evaluation, so this is the REPOSITORY-ROOT
+  # datasets/materialized: the shared corpus location the edge lane reads
+  # (edge.chunking) and docker-compose's train profile mounts.
+  output_root: "../../datasets/materialized"
 
   repo_dirname: "repo"
   held_out_dirname: "held_out"
