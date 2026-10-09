@@ -81,6 +81,10 @@ services:
     volumes:
       # Committed edge manifests (numbers shown on the panel pages), read-only.
       - ./services/edge/artifacts:/artifacts:ro
+      # Evaluation's measured results, which the live panel's Promote sends
+      # (demo_ui/evidence.py): round manifests + HumanEval anchors + noise band.
+      - ./experiments/w12-integration/results:/app/experiments/w12-integration/results:ro
+      - ./services/evaluation/results:/app/services/evaluation/results:ro
 
   # P5 evaluation dashboard (static React build behind nginx). Results are baked
   # in at build time from services/evaluation/results/; rebuild after

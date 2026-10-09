@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CLASP Live Round</title>
+<link rel="stylesheet" href="/static/style.css" />
+<style>
+  .lead { color: var(--muted); max-width: 900px; line-height: 1.55; margin: 0 0 14px; }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 18px; }
+  .flow .s { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--muted); }
+  .flow .s b { color: var(--text); margin-right: 6px; }
+  .clusters { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
+  @media (max-width: 520px) { .clusters { grid-template-columns: 1fr; } }
+  .cl { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .cl h2 { margin: 0; font-size: 20px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .cl h2 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .kv { display: flex; gap: 22px; margin: 12px 0; flex-wrap: wrap; }
+  .kv div span { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .kv div b { font-size: 24px; }
+  .edges { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 14px; }
+  .edge { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; min-width: 150px; background: var(--panel-2); }
+  .edge .n { font-weight: 600; }
+  .edge .st { font-size: 12px; color: var(--muted); }
+  .edge.up { border-color: var(--good); }
+  .edge.up .st { color: var(--good); }
+  .steps { display: flex; gap: 8px; flex-wrap: wrap; }
+  .steps button { flex: 1 1 120px; }
+  .out { margin-top: 12px; font-size: 13.5px; line-height: 1.5; }
+  .out .box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+  .out .box h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .verdict { font-size: 18px; font-weight: 700; }
+  .verdict.promote { color: var(--good); }
+  .verdict.rollback { color: var(--warn); }
+  .prov { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .versions { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  .versions td, .versions th { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+  .versions tr.active td { color: var(--good); }
+  .err { color: var(--bad); }
+  .topline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted); }
+  .tag.sec { color: var(--good); border-color: var(--good); }
+  .tag.plain { color: var(--warn); border-color: var(--warn); }
+  button.step { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 14px; cursor: pointer; }
+  button.step.go { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.step:disabled { opacity: .45; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <h1>CLASP <span>Live Round</span> — edge laptops → cluster → registry</h1>
+  <nav class="pages">
+    <a href="/" class="active">Live round</a>
+    <a href="/static/page1.html">Panel pages</a>
+  </nav>
+  <div class="healthbar" id="healthbar"></div>
+</header>
+
+<main>
+  <p class="lead">
+    Each edge laptop trains a LoRA adapter on its own project's code. The raw code never leaves the laptop; only the adapter does.
+    This laptop runs the cluster service: it combines each cluster's uploads with an exact SVD average,
+    publishes the result to the registry, and asks the registry to promote it with evaluation's measured results.
+  </p>
+  <div class="flow">
+    <span class="s"><b>1</b>Register clusters</span>
+    <span class="s"><b>2</b>Edges upload (from laptops B, C)</span>
+    <span class="s"><b>3</b>Aggregate (SVD)</span>
+    <span class="s"><b>4</b>Publish to registry</span>
+    <span class="s"><b>5</b>Promote (D5)</span>
+  </div>
+  <div class="topline">
+    <button class="step go" id="register">1 · Register clusters and members</button>
+    <span id="transport"></span>
+    <span class="prov" id="regmsg"></span>
+  </div>
+  <div class="clusters" id="clusters"></div>
+
+  <div class="section-title">Event log</div>
+  <div class="log" id="log">ready.</div>
+</main>
+
+<script src="/static/common.js"></script>
+<script>
+const logEl = document.getElementById("log");
+const esc = (s) => String(s ?? "—").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const busy = {};
+let seen = {};
+
+async function apiPut(path, json) {
+  const res = await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) });
+  return { ok: res.ok, status: res.status, body: await res.json().catch(() => ({})) };
+}
+const errText = (b) => typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail ?? b);
+
+async function plan() {
+  const { body } = await apiGet("/api/live/plan");
+  document.getElementById("transport").innerHTML = body.mtls
+    ? '<span class="tag sec">mTLS · TLS 1.3 · client certificates required</span>'
+    : '<span class="tag plain">plain HTTP on the private hotspot</span>';
+}
+
+function edgeCards(c) {
+  const st = c.cluster || {};
+  const uploaded = st.uploaded_clients || [];
+  const members = st.members && st.members.length ? st.members : c.planned_members;
+  const all = [...new Set([...members, ...uploaded])].sort();
+  return all.map(m => `<div class="edge ${uploaded.includes(m) ? "up" : ""}"><div class="n">${esc(m)}</div>
+    <div class="st">${uploaded.includes(m) ? "✓ adapter received" : (c.registered ? "waiting for upload" : "not registered")}</div></div>`).join("");
+}
+
+function aggregateBox(m) {
+  if (!m) return "";
+  const err = m.svd_reconstruction_error || {};
+  return `<div class="box"><h4>Aggregate · round ${m.round_id}</h4>
+    ${m.num_clients} client(s): ${esc((m.source_clients || []).join(", "))} · weights ${esc((m.sample_weights || []).join(" / "))} blocks · rank ${m.rank}<br>
+    SVD truncation error vs exact average: mean ${fmt(err.mean, 4)}, max ${fmt(err.max, 4)} over ${esc(err.n_modules)} modules<br>
+    privacy ε (max over clients, D7): ${m.epsilon == null ? `<span class="err">unknown — ${esc((m.epsilon_not_reported_by || []).join(", "))} trained without DP</span>` : fmt(m.epsilon, 2)}
+    ${Object.keys(m.skipped_clients || {}).length ? `<br><span class="err">skipped: ${esc(JSON.stringify(m.skipped_clients))}</span>` : ""}</div>`;
+}
+
+function publishBox(p) {
+  if (!p) return "";
+  return `<div class="box"><h4>Published</h4>${esc(p.name)} <b>v${p.version}</b> · sha256 ${esc(p.sha256.slice(0, 16))}… · from ${esc(p.source_clients.join(", "))} · ε ${p.epsilon == null ? "—" : fmt(p.epsilon, 2)}</div>`;
+}
+
+function promoteBox(r) {
+  if (!r) return "";
+  const d = r.decision, s = r.sent, p = r.provenance;
+  const g = (x) => x && x.length ? fmt(x[0].pass_at_k["1"], 2) : "not scored";
+  return `<div class="box"><h4>Promotion decision (D5, registry)</h4>
+    <div class="verdict ${esc(d.action)}">${esc(d.action).toUpperCase()} — v${r.candidate_version} → active v${d.active_version_after}</div>
+    <div>${esc(d.reason)}</div>
+    <div style="margin-top:6px">edit similarity ${fmt(s.in_project.edit_similarity, 4)} vs baseline ${fmt(s.baseline_in_project.edit_similarity, 4)}
+      (noise band ${fmt(s.baseline_noise_band, 4)}) · HumanEval pass@1 ${g(s.guard)} vs ${g(s.baseline_guard)}</div>
+    <div class="prov">In-project: ${esc(p.in_project)}<br>Guard: ${esc(p.guard)}<br>Noise band: ${esc(p.noise_band)}
+      ${p.stale ? `<br><b>Note:</b> ${esc(p.note)}` : ""}</div></div>`;
+}
+
+function versionsTable(reg) {
+  if (!reg.versions.length) return `<div class="prov">registry: no versions of ${esc(reg.name)} yet</div>`;
+  const rows = reg.versions.slice(-4).reverse().map(v => `<tr class="${v.version === reg.active ? "active" : ""}">
+    <td>v${v.version}${v.version === reg.active ? " ●" : ""}</td><td>round ${esc(v.round)}</td><td>${esc(v.aggregation)}</td>
+    <td>${esc(v.source_clients.join(", "))}</td><td>ε ${v.epsilon == null ? "—" : fmt(v.epsilon, 2)}</td></tr>`).join("");
+  return `<table class="versions"><tr><th colspan="5">registry · ${esc(reg.name)} (● active)</th></tr>${rows}</table>`;
+}
+
+function render(state) {
+  const root = document.getElementById("clusters");
+  root.innerHTML = Object.entries(state.clusters).map(([cid, c]) => {
+    const st = c.cluster || {};
+    const pending = st.pending_uploads || 0;
+    const last = c.last || {};
+    const canPublish = st.has_active_adapter && !busy[cid];
+    const canPromote = (c.registry.versions.length >= 2) && !busy[cid];
+    return `<section class="cl">
+      <h2>${esc(cid)} <small>${c.registered ? "registered" : "not registered"} · ${esc(c.registry.name)}</small></h2>
+      <div class="kv"><div><span>round</span><b>${c.registered ? st.round_id : "—"}</b></div>
+        <div><span>uploads waiting</span><b>${pending}/${(st.members || c.planned_members).length}</b></div>
+        <div><span>registry active</span><b>${c.registry.active ? "v" + c.registry.active : "—"}</b></div></div>
+      <div class="edges">${edgeCards(c)}</div>
+      <div class="steps">
+        <button class="step ${pending ? "go" : ""}" data-act="aggregate" data-c="${cid}" ${!pending || busy[cid] ? "disabled" : ""}>3 · Aggregate (SVD)</button>
+        <button class="step" data-act="publish" data-c="${cid}" ${canPublish ? "" : "disabled"}>4 · Publish</button>
+        <button class="step" data-act="promote" data-c="${cid}" ${canPromote ? "" : "disabled"}>5 · Promote</button>
+      </div>
+      <div class="out">${aggregateBox(last.aggregate)}${publishBox(last.publish)}${promoteBox(last.promote)}${versionsTable(c.registry)}</div>
+    </section>`;
+  }).join("");
+  root.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => act(b.dataset.act, b.dataset.c));
+}
+
+function announce(state) {
+  for (const [cid, c] of Object.entries(state.clusters)) {
+    const ups = (c.cluster && c.cluster.uploaded_clients) || [];
+    for (const u of ups) if (!(seen[cid] || []).includes(u)) log(logEl, `${cid}: adapter received from ${u}`);
+    seen[cid] = ups;
+  }
+}
+
+async function refresh() {
+  const r = await apiGet("/api/live/state");
+  if (!r.ok) { document.getElementById("clusters").innerHTML = `<div class="card err">${esc(errText(r.body))}</div>`; return; }
+  announce(r.body); render(r.body);
+}
+
+async function act(action, cid) {
+  busy[cid] = true; refresh();
+  log(logEl, `${cid}: ${action}…`);
+  const r = await apiPost(`/api/live/${action}/${cid}`);
+  busy[cid] = false;
+  if (!r.ok) log(logEl, `${cid}: ${action} FAILED (${r.status}) — ${errText(r.body)}`);
+  else if (action === "aggregate") log(logEl, `${cid}: aggregated ${r.body.manifest.num_clients} client(s) into round ${r.body.manifest.round_id}`);
+  else if (action === "publish") log(logEl, `${cid}: published ${r.body.version.name} v${r.body.version.version}`);
+  else log(logEl, `${cid}: registry says ${r.body.decision.action.toUpperCase()} — ${r.body.decision.reason}`);
+  refresh();
+}
+
+document.getElementById("register").onclick = async () => {
+  const r = await apiPost("/api/live/register");
+  const msg = document.getElementById("regmsg");
+  if (!r.ok) { msg.innerHTML = `<span class="err">${esc(errText(r.body))}</span>`; log(logEl, `register FAILED — ${errText(r.body)}`); return; }
+  msg.textContent = Object.entries(r.body.registered).map(([c, m]) => `${c}: ${m.join(", ")}`).join("  ·  ");
+  log(logEl, "clusters registered — edge laptops can upload now");
+  refresh();
+};
+
+plan(); refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>
