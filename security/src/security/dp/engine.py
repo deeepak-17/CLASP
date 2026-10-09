@@ -112,9 +112,10 @@ def make_private(
                 max_grad_norm=config.max_grad_norm,
             )
         )
-        actual_sigma = privacy_engine.accountant.noise_multiplier if hasattr(
-            privacy_engine, "accountant"
-        ) else "(unknown)"
+        # The calibrated sigma lives on the DP optimizer. Opacus 1.6's default
+        # PRV accountant has no noise_multiplier attribute, so reading it from
+        # the accountant raised AttributeError on every epochs= call.
+        actual_sigma = wrapped_optimizer.noise_multiplier
         logger.info(
             "DP-SGD initialized (auto-calibrated): target_epsilon=%s, "
             "target_delta=%s, epochs=%d, calibrated_sigma=%s, "

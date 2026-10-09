@@ -30,6 +30,39 @@ def _tiny_loader(n: int = 32, dim: int = 8) -> DataLoader:
     return DataLoader(TensorDataset(x, y), batch_size=4)
 
 
+class TestMakePrivateCalibrated:
+    """With epochs=, sigma is calibrated so the run stays within target_epsilon (D7)."""
+
+    def test_epochs_path_calibrates_sigma(self) -> None:
+        model = _tiny_model()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        cfg = DPConfig(enabled=True, max_grad_norm=1.0, target_epsilon=8.0, delta=1e-5)
+
+        model_dp, opt_dp, _ = make_private(model, optimizer, _tiny_loader(), cfg, epochs=2)
+        assert opt_dp.noise_multiplier > 0
+        assert opt_dp.noise_multiplier != cfg.noise_multiplier  # calibrated, not the default
+        assert get_privacy_engine(model_dp) is not None
+
+    def test_epochs_path_spends_at_most_the_target(self) -> None:
+        model = _tiny_model()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        loader = _tiny_loader()
+        cfg = DPConfig(enabled=True, max_grad_norm=1.0, target_epsilon=8.0, delta=1e-5)
+        epochs = 2
+
+        model_dp, opt_dp, loader_dp = make_private(model, optimizer, loader, cfg, epochs=epochs)
+        loss_fn = nn.CrossEntropyLoss()
+        for _ in range(epochs):
+            for x, y in loader_dp:
+                if len(x) == 0:  # Poisson sampling can draw an empty batch
+                    continue
+                opt_dp.zero_grad()
+                loss_fn(model_dp(x), y).backward()
+                opt_dp.step()
+        spent = get_privacy_engine(model_dp).get_epsilon(cfg.delta)
+        assert 0 < spent <= cfg.target_epsilon + 1e-6
+
+
 class TestMakePrivateEnabled:
     """When DP is enabled, make_private wraps model and optimizer."""
 
