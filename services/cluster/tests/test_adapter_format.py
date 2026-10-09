@@ -192,3 +192,16 @@ def test_delta_w_defaults_to_layer_zero_and_matches_explicit_layer():
         adapter.delta_w("q_proj"), adapter.delta_w("q_proj", layer=0)
     )
     assert not np.array_equal(adapter.delta_w("q_proj", layer=0), adapter.delta_w("q_proj", layer=1))
+
+
+def test_validate_rejects_non_finite_tensors():
+    import numpy as np
+    import pytest
+
+    from cluster.adapter_format import AdapterFormatError, random_adapter
+
+    for bad in (np.nan, np.inf, -np.inf):
+        ad = random_adapter(8, 8, rank=4, seed=0)
+        ad.modules[0]["q_proj"]["lora_B"][0, 0] = bad
+        with pytest.raises(AdapterFormatError, match="non-finite"):
+            ad.validate()
