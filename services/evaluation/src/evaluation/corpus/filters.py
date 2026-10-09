@@ -64,6 +64,7 @@ def _match_segments(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
     if not pattern:
         return not parts
     head, rest = pattern[0], pattern[1:]
+    # '**' may stand for zero or more path segments, so try every split point.
     if head == "**":
         return any(_match_segments(parts[i:], rest) for i in range(len(parts) + 1))
     return bool(parts) and fnmatchcase(parts[0], head) and _match_segments(parts[1:], rest)

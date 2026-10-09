@@ -97,6 +97,7 @@ def grouped_bars(
     left, right, top, bottom = 64, 16, 80, 44
     pw, ph = width - left - right, height - top - bottom
 
+    # Map a data value to a pixel y (SVG y grows downward).
     def y(v: float) -> float:
         return top + ph * (y_hi - v) / (y_hi - y_lo)
 
@@ -119,6 +120,7 @@ def grouped_bars(
             y0, y1 = sorted((y(0.0), y(v)))
             h = max(y1 - y0, 0.5)
             r = min(4.0, h / 2, bar / 2)
+            # Draw each bar as a path so only the far end is rounded.
             # Rounded only at the data end, flat on the zero line.
             if v >= 0:
                 path = (f"M{x0:.1f},{y1:.1f} V{y0 + r:.1f} Q{x0:.1f},{y0:.1f} {x0 + r:.1f},{y0:.1f} "

@@ -99,6 +99,7 @@ def _in_project_block(paths, cfg: dict[str, Any]) -> dict[str, Any]:
         )
     bands = {}
     for client, values in cfg["d5_baseline_repeats"].items():
+        # D5 band = spread of the 3 repeated baseline evals (same function the edge lane uses).
         band, note = d5_noise_band([{"edit_similarity": float(v)} for v in values])
         bands[client] = {"repeats": [float(v) for v in values], "band": round(band, 6), "note": note}
     return {
@@ -195,6 +196,7 @@ def main(args: argparse.Namespace) -> int:
     anchor_path = resolve_path(guard_cfg["baseline_anchor"])
     base = _per_task(read_json(anchor_path))
 
+    # Noise of the HumanEval guard, measured from the scored base-model anchor.
     guard = guard_noise_report(
         list(base.values()),
         tolerance=float(guard_cfg["tolerance_pass_at_1"]),

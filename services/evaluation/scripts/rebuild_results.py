@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(args: argparse.Namespace) -> int:
     root = project_paths().root
     lines = ["", "CLASP-P5 · rebuild results", "=" * 68]
+    # Run each step as its own process, in order; stop at the first failure.
     for name, argv in steps(args.label):
         proc = subprocess.run(
             [sys.executable, str(SCRIPTS / argv[0]), *argv[1:]],

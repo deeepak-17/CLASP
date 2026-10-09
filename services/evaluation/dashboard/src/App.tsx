@@ -14,6 +14,7 @@ export default function App() {
   return (
     <AppShell>
       <Routes>
+        {/* Each page reads one JSON feed from public/data/ (copied from services/evaluation/results/ by npm run sync-data). */}
         <Route path="/" element={<Overview />} />
         <Route path="/in-project" element={<InProject />} />
         <Route path="/personalization" element={<Personalization />} />

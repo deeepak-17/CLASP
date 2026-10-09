@@ -76,6 +76,7 @@ def _pass_at_1(guard_side: Mapping[str, Any] | None) -> float | None:
 
 def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """One round manifest -> one ``rounds.json`` round entry."""
+    # Read one demo_round manifest and keep only what the Rounds page shows.
     guard = _get(manifest, "humaneval_guard")
     noise_band = float(_get(manifest, "config", "noise_band"))
     clusters_out: list[dict[str, Any]] = []
@@ -92,6 +93,7 @@ def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
                 "sha256": meta.get("sha256"),
                 "in_project": _in_project(evaluation.get(label)),
             }
+        # Delta = candidate edit similarity - baseline; None when either side was not measured.
         base_ip = entry_versions["baseline"]["in_project"]
         cand_ip = entry_versions["candidate"]["in_project"]
         delta = (

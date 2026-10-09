@@ -100,7 +100,9 @@ def main(args: argparse.Namespace) -> int:
     manifest = read_json(args.generation_manifest) if args.generation_manifest else None
 
     with Stopwatch("score") as watch:
+        # Execute every sample against its HumanEval tests in the sandbox.
         outcomes = score_samples(samples, tasks, timeout_seconds=args.timeout, sandbox=args.sandbox)
+    # anchor.json = pass@1 + per-task outcomes; edge.promote.resolve_guard reads this file.
     anchor = build_anchor(outcomes, samples_path=args.samples, generation_manifest=manifest)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

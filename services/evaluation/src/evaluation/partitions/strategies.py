@@ -109,6 +109,7 @@ class PartitionStrategy(ABC):
         return sorted(records, key=lambda r: r.file_id)
 
 
+# Used for D1: one client per repository (clusters = project groups).
 class ProjectLevelStrategy(PartitionStrategy):
     """One shard per project. **The Week-2 deliverable.**
 
@@ -157,6 +158,8 @@ class ProjectLevelStrategy(PartitionStrategy):
         return assignments
 
 
+# Alternative split for the project-vs-developer comparison report: "developer" slices are
+# subpackages (module path) or seeded hash chunks — the corpus has no real authorship data.
 class PerDeveloperStrategy(PartitionStrategy):
     """Per-developer (individual-style) partitioning. **The Week-4 deliverable.**
 

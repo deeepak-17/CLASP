@@ -137,6 +137,7 @@ def eval_result_wire(
     result that feeds promotion must carry the band measured from repeated
     baseline evaluations (D5), so a caller cannot send one by omission.
     """
+    # This dict is exactly what the registry's POST /promote expects under "eval".
     if baseline_noise_band < 0.0 or math.isnan(baseline_noise_band):
         raise ContractViolationError(f"baseline_noise_band must be >= 0, got {baseline_noise_band}")
     return {
@@ -175,6 +176,7 @@ def to_contracts_eval_result(wire: Mapping[str, Any]):
     """
     import contracts as c
 
+    # Same parser the registry uses, so if it parses here it parses there.
     return c.EvalResult.from_json(dict(wire))
 
 

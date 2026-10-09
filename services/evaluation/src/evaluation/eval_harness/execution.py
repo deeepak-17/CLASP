@@ -167,6 +167,7 @@ def docker_command(host_dir: Path | str, timeout_seconds: float, *, name: str, i
     """The ``docker run`` invocation for one program in ``host_dir/candidate.py``."""
     return [
         "docker", "run", "--rm", "--name", name,
+        # No network: generated code cannot download or send anything.
         "--network", "none",
         "--read-only",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
@@ -181,6 +182,7 @@ def docker_command(host_dir: Path | str, timeout_seconds: float, *, name: str, i
         "-v", f"{Path(host_dir).resolve()}:/sandbox:ro",
         "-w", "/tmp",
         image,
+        # `timeout` inside the container kills a runaway program at the wall-clock limit.
         "timeout", "-s", "KILL", f"{timeout_seconds:g}",
         "python", "/sandbox/candidate.py",
     ]
@@ -207,11 +209,13 @@ def execute_program(source: str, *, timeout_seconds: float = 10.0, sandbox: str 
         executed program* — a syntax error, an infinite loop (via timeout)
         and a failed assertion are all ordinary "did not pass" outcomes.
     """
+    # Pick the isolation once per call: 'docker' (no network) or 'process' (fallback).
     backend = resolve_sandbox(sandbox)
     with tempfile.TemporaryDirectory(prefix="clasp-p5-exec-") as tmpdir:
         script_path = Path(tmpdir) / "candidate.py"
         script_path.write_text(source, encoding="utf-8")
         if backend == "docker":
+            # The container runs as user 'nobody', so the mounted program must be world-readable.
             script_path.chmod(0o644)
             Path(tmpdir).chmod(0o755)
             return _run_docker(tmpdir, timeout_seconds)
@@ -270,6 +274,7 @@ def _run_docker(tmpdir: str, timeout_seconds: float) -> ExecutionOutcome:
             timeout=timeout_seconds + _DOCKER_GRACE_SECONDS,
         )
     except subprocess.TimeoutExpired:
+        # The docker client itself hung: force-remove the container so nothing keeps running.
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)
         return ExecutionOutcome(
             passed=False,

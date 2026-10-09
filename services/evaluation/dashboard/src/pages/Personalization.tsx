@@ -13,6 +13,7 @@ function reductionByClient(feed: PersonalizationFeed): Record<string, number | s
     for (const c of round.clients) {
       const row = rows.get(c.client_id) ?? { client: shortClient(c.client_id) };
       // Positive = the composite lowers perplexity vs the frozen base.
+      // Bar height = base - composite perplexity, so taller = bigger improvement.
       row[`r${round.round}`] = Number((c.base_ppl - c.composite_ppl).toFixed(4));
       rows.set(c.client_id, row);
     }
@@ -31,6 +32,7 @@ export function Personalization() {
   const rounds = feed.rounds.map((r) => r.round);
   const last = feed.rounds[feed.rounds.length - 1];
   const first = feed.rounds[0];
+  // Latest round drives the tiles; the first round is shown in the hints for contrast.
   const comparison = feed.comparisons[feed.comparisons.length - 1];
 
   return (

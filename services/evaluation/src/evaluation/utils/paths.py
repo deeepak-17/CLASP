@@ -31,6 +31,7 @@ def _discover_root() -> Path:
     3. Three levels above the package (``src/evaluation`` -> module root), as a
        last resort.
     """
+    # Module root = services/evaluation; every relative path in configs resolves from here.
     override = os.environ.get(_ENV_ROOT)
     if override:
         return Path(override).expanduser().resolve()

@@ -48,6 +48,7 @@ def _client_row(client_id: str, block: Mapping[str, Any]) -> dict[str, Any]:
     def split(key: str) -> Any:
         return _get(block, "full_split", key)
 
+    # Three models on the same held-out tokens: frozen base, client-only adapter, full composite.
     base = float(split("base_ppl"))
     client_only = float(split("client_only_ppl"))
     composite = float(split("composite_ppl"))
@@ -66,6 +67,7 @@ def _client_row(client_id: str, block: Mapping[str, Any]) -> dict[str, Any]:
         "alpha_ref_ppl": float(split("alpha_ref_ppl")),
         "personalization_delta_ppl": float(_get(block, "personalization_delta_ppl")),
         "cluster_contribution_at_alpha_ref": float(_get(block, "cluster_contribution_at_alpha_ref")),
+        # Perplexity: lower is better, so improved means the composite beats the base.
         "improved": composite < base,
         "decision": promotion.get("decision"),
         "decision_is_authoritative": bool(promotion.get("decision_is_authoritative", False)),
@@ -79,6 +81,7 @@ def summarize_round(manifest: Mapping[str, Any], *, label: str | None = None) ->
     if not clients:
         raise EvaluationError(f"edge round manifest for round {round_no} has no clients")
     deltas = [c["personalization_delta_ppl"] for c in clients]
+    # Cluster contribution = composite - client-only; negative means the cluster layer helps.
     contributions = [c["cluster_contribution_at_alpha_ref"] for c in clients]
     timings = manifest.get("timings") or {}
     return {
@@ -107,6 +110,7 @@ def summarize_round(manifest: Mapping[str, Any], *, label: str | None = None) ->
 
 def compare_rounds(earlier: Mapping[str, Any], later: Mapping[str, Any]) -> dict[str, Any]:
     """Per-client change between two summarized rounds (clients present in both)."""
+    # Match clients across rounds by id; a client missing from either round is skipped.
     before = {c["client_id"]: c for c in earlier["clients"]}
     rows = []
     for client in later["clients"]:

@@ -39,6 +39,7 @@ def _files(root: Path, dirs: Iterable[str]) -> list[Path]:
 
 
 def build_manifest(root: Path, dirs: Sequence[str] = ARCHIVED_DIRS, *, label: str = "") -> dict[str, Any]:
+    # Fingerprint every file: sha256 + size, keyed by path relative to services/evaluation.
     files = {
         str(p.relative_to(root)): {"sha256": sha256_file(p), "bytes": p.stat().st_size}
         for p in _files(root, dirs)
@@ -57,6 +58,7 @@ def verify_manifest(manifest: dict[str, Any], root: Path) -> dict[str, list[str]
     """``{"changed": [...], "missing": [...], "added": [...]}`` relative to ``manifest``."""
     recorded: dict[str, dict[str, Any]] = manifest["files"]
     current = {str(p.relative_to(root)): p for p in _files(root, manifest["directories"])}
+    # Re-hash what is on disk now and compare with what was archived.
     changed = [rel for rel, meta in recorded.items() if rel in current and sha256_file(current[rel]) != meta["sha256"]]
     return {
         "changed": sorted(changed),

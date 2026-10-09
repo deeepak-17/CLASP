@@ -131,6 +131,7 @@ def main(args: argparse.Namespace) -> int:
     else:
         sources = [paths.root / rel for rel, _ in DEFAULT_ROUNDS]
         labels = [label for _, label in DEFAULT_ROUNDS]
+    # Read the edge round manifests -> per-client deltas + round-over-round comparison.
     feed = build_feed(
         (read_json(p) for p in sources),
         labels=labels,

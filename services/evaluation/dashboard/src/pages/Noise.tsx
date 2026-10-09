@@ -20,6 +20,7 @@ export function Noise() {
 
   const r = state.data;
   const g = r.humaneval_guard;
+  // Every number on this page comes from results/noise_report.json (scripts/build_noise_report.py).
   const t = r.locked_thresholds;
 
   return (

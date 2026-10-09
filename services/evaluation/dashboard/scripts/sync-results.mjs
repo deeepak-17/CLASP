@@ -63,6 +63,7 @@ if (existsSync(ROUNDS_SOURCE)) {
 // Personalization, lineage and noise feeds (scripts/build_personalization_report.py,
 // scripts/export_lineage.py, scripts/build_noise_report.py). Optional: each page
 // shows how to produce its feed when the file is absent.
+// Copy each optional feed if it exists; remove a stale copy if the source is gone.
 for (const name of ["personalization.json", "lineage.json", "noise_report.json"]) {
   const source = resolve(MODULE_ROOT, "results", name);
   const dest = resolve(DEST_DIR, name);

@@ -118,6 +118,7 @@ def score_samples(
     sandbox: str = "auto",
 ) -> list[SampleOutcome]:
     """Execute every sample against its task's tests. Unknown task ids are an error."""
+    # Every sample must belong to a known HumanEval task, otherwise the anchor would be meaningless.
     unknown = sorted({s["task_id"] for s in samples} - tasks.keys())
     if unknown:
         raise EvaluationError(
@@ -126,6 +127,7 @@ def score_samples(
     outcomes: list[SampleOutcome] = []
     for sample in samples:
         task = tasks[sample["task_id"]]
+        # Build prompt + completion + HumanEval's check() call, then run it in the sandbox.
         program = assemble_program(task, sample)
         result = execute_program(program, timeout_seconds=timeout_seconds, sandbox=sandbox)
         outcomes.append(
@@ -179,6 +181,7 @@ def anchor_result_record(
             num_tasks=n,
             num_samples_per_task=max(1, n_samples // n),
             created_at=anchor["scored_at"],
+            # Same samples -> same run_id, so re-scoring replaces the record instead of duplicating it.
             run_id=f"anchor-{anchor['samples']['sha256'][:12]}",
         ),
         model_checkpoint=model_checkpoint,
@@ -233,6 +236,7 @@ def build_anchor(
             f"Samples do not match the manifest's frozen subset (missing {missing[:5]}, extra {extra[:5]})"
         )
 
+    # pass@1 per task with the unbiased estimator, then averaged over tasks.
     per_task_p1 = [pass_at_k(len(v), sum(o.passed for o in v), 1) for v in (by_task[t] for t in task_ids)]
     solved = sum(1 for t in task_ids if any(o.passed for o in by_task[t]))
     samples_bytes = Path(samples_path).read_bytes()

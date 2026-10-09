@@ -47,6 +47,7 @@ export function Lineage() {
   const feed = state.data;
   const columns = lineageColumns(feed);
   const current = feed.nodes.find((n) => n.id === selected) ?? null;
+  // Clicking an adapter shows the edges pointing into it (what it was built from).
   const parents = current ? parentsOf(feed, current.id) : [];
 
   return (

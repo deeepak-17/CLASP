@@ -150,14 +150,17 @@ class CorpusCollector:
     ) -> tuple[list[CorpusRecord], SourceStats]:
         """Acquire, discover, filter and normalise one source repository."""
         _LOG.info("Collecting cluster '%s' (%s)", source.cluster_id, source.project_label)
+        # 1) clone/fetch the repository at its pinned ref.
         acquired: AcquiredSource = self._acquirer.acquire(source, raw_dir)
 
+        # 2) list candidate .py files (include globs).
         candidates = self._selector.discover(acquired.root, source.subpaths)
         _LOG.info("  discovered %d candidate file(s)", len(candidates))
 
         records: list[CorpusRecord] = []
         for path in candidates:
             relative_path = self._relative_path(path, acquired.root)
+            # 3) apply filters: exclude globs, size, min code lines, duplicates; skips are counted per reason.
             outcome = self._selector.evaluate(path, relative_path)
             if isinstance(outcome, SkipReason):
                 continue

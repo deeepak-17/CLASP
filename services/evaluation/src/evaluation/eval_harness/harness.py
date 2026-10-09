@@ -165,6 +165,7 @@ class EvaluationHarness:
             limit: Per-benchmark task cap, overriding ``run.limit``.
             write_artifact: Write the run JSON to ``results/``.
         """
+        # Benchmark run = for every enabled benchmark (HumanEval, MBPP): load tasks -> prompt model -> (optionally) execute -> pass@k.
         effective_limit = limit if limit is not None else self._config.run.limit
         run_id = f"{self._config.run.run_id_prefix}-{file_timestamp()}"
 
@@ -187,6 +188,7 @@ class EvaluationHarness:
         )
 
         with Stopwatch("harness") as watch:
+            # One adapter per benchmark; each knows how to build prompts and assemble runnable programs.
             for adapter in self._adapters:
                 summary, outcomes = self._run_benchmark(adapter, effective_limit)
                 run.summaries.append(summary)
@@ -212,6 +214,7 @@ class EvaluationHarness:
     ) -> tuple[BenchmarkRunSummary, list[TaskOutcome]]:
         """Run every task of one benchmark."""
         _LOG.info("--- %s ---", adapter.name.value)
+        # Tasks come from the benchmark's tasks.jsonl (or the bundled sample file if it is missing).
         tasks = adapter.load_tasks(limit=limit)
 
         outcomes: list[TaskOutcome] = []
@@ -229,6 +232,7 @@ class EvaluationHarness:
                             f"{outcome.error}"
                         )
 
+        # pass@k is only computed when scoring.execution_enabled is true (programs were actually run).
         succeeded = sum(1 for outcome in outcomes if outcome.ok)
         scoring = self._config.scoring
         aggregate: AggregatePassAtK | None = None
@@ -296,6 +300,7 @@ class EvaluationHarness:
             # Assemble every program now. It is cheap, and it surfaces
             # adapter/format mismatches during the dry run rather than at
             # execution time when a sandbox failure would be ambiguous.
+            # program = prompt + model completion + the benchmark's own tests.
             programs = [adapter.assemble_program(task, completion) for completion in completions]
 
             passed: list[bool] | None = None

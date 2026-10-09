@@ -20,6 +20,7 @@ export function useFeed<T>(file: string, guard: (x: unknown) => x is T, guardNam
     async function load() {
       try {
         const response = await fetch(url, { cache: "no-store" });
+        // 404 = the exporter has not been run yet: show how to produce the file instead of an error.
         if (response.status === 404) {
           if (!cancelled) setState({ status: "absent", file });
           return;

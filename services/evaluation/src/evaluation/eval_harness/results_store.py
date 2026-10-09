@@ -195,6 +195,7 @@ def append_results(records: list[ResultRecord], path: Path | str | None = None) 
         record.validate()
 
     index = load_results_index(target)
+    # Key = (run_id, benchmark): re-running the same run updates its record instead of adding a copy.
     by_key = {(r.eval_result.run_id, r.eval_result.benchmark.value): i for i, r in enumerate(index.records)}
     for record in records:
         key = (record.eval_result.run_id, record.eval_result.benchmark.value)

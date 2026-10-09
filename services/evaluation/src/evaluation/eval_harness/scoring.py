@@ -100,6 +100,8 @@ def pass_at_k(n: int, c: int, k: int) -> float:
             f"pass@{k} requires at least {k} sample(s) but only n={n} were generated "
             f"(insufficient samples); lower k or raise run.num_samples_per_task"
         )
+    # Unbiased pass@k (Chen et al. 2021): 1 - P(all k picks fail) = 1 - C(n-c, k) / C(n, k).
+    # n = samples generated, c = samples that passed.
     return 1.0 - math.comb(n - c, k) / math.comb(n, k)
 
 

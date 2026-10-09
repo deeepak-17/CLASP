@@ -309,6 +309,7 @@ class InProjectEvaluator:
         """Generate and score one completion per example. Never raises per-example."""
         scores: list[ExampleScore] = []
         for example in examples:
+            # One model call per example; a failed call scores as an empty prediction, it never aborts the run.
             prediction, error = self._complete(example)
             scores.append(
                 ExampleScore(
@@ -395,6 +396,7 @@ def evaluate_client_in_project(
     ``held_out_fraction`` — the client is never scored on a file it trained on.
     """
     config = config or InProjectConfig()
+    # Step 1: load every file in this client's partition shard.
     records = load_shard_records(manifest, client_id)  # raises ContractViolationError if unknown
     missing = [r.file_id for r in records if r.content is None]
     if missing:
@@ -403,9 +405,11 @@ def evaluate_client_in_project(
             "cannot run in-project completion (re-materialize the shard with content)"
         )
 
+    # Step 2: take the same 10% held-out files the edge lane never trained on (same seed + fraction).
     _, held_out = split_held_out(
         records, client_id=client_id, seed=config.seed, fraction=config.held_out_fraction
     )
+    # Step 3: turn held-out files into next-line completion problems.
     examples = build_completion_examples(held_out, config=config)
     _LOG.info(
         "in-project eval %s: %d held-out file(s) -> %d completion example(s)",
@@ -414,6 +418,7 @@ def evaluate_client_in_project(
         len(examples),
     )
     shard = manifest.shard_for(client_id)
+    # Step 4: ask the model for each next line and score it (edit similarity + exact match).
     return InProjectEvaluator(client, config).evaluate(
         client_id=client_id,
         cluster_id=shard.cluster_id,

@@ -84,11 +84,13 @@ class Partitioner:
         paths = project_paths()
         corpus_path = Path(self._config.input.corpus_path)
 
+        # Input: the collected corpus (one record per source file).
         records = load_corpus_records(corpus_path)
         _LOG.info("Loaded %d corpus record(s) from %s", len(records), paths.relative(corpus_path))
         self._warn_if_synthetic()
 
         with Stopwatch("partition") as watch:
+            # The strategy decides which client gets which files (project-level: one client per repo).
             assignments = self._strategy.assign(records)
 
             shard_paths: dict[str, Path] = {}
@@ -118,6 +120,7 @@ class Partitioner:
                         num_code_lines=assignment.num_code_lines,
                         total_bytes=assignment.total_bytes,
                         files_path=paths.relative(shard_path),
+                        # Shard checksum, so anyone can verify a shard was not altered.
                         content_sha256=self._shard_digest(assignment),
                     )
                 )

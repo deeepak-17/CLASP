@@ -75,6 +75,7 @@ def build_lineage(manifests: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         cluster_ids: dict[str, str] = {}
         for cluster, block in sorted(clusters.items()):
             provenance = block.get("provenance")
+            # Round 2+: the cluster adapter came from the registry (name, version, sha256 recorded); round 1: the edge aggregated it itself.
             node_id = _cluster_node(round_no, cluster, provenance)
             cluster_ids[cluster] = node_id
             if provenance:
@@ -123,6 +124,7 @@ def build_lineage(manifests: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         for client_id, block in sorted(clients.items()):
             cluster = block["cluster"]
             client_node = _client_node(round_no, client_id)
+            # D3: if the client trained on base + alpha*cluster, link that cluster as its parent.
             d3 = (block.get("training") or {}).get("d3")
             trained_on = "base"
             if d3:
@@ -137,6 +139,7 @@ def build_lineage(manifests: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                 trained_on=trained_on,
             )
             split = block.get("full_split") or {}
+            # The evaluated model of this round = client adapter + cluster adapter.
             composite = f"r{round_no}:composite:{client_id}"
             graph.node(
                 composite,

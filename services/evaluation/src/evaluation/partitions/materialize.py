@@ -107,9 +107,11 @@ def split_held_out(
             f"Client '{client_id}' has only {n} file(s); cannot hold out {fraction:.0%} "
             "and still leave a non-empty training set"
         )
+    # 10% of files (at least 1, never all) go to held_out/ for in-project eval.
     held_out_count = round(n * fraction)
     held_out_count = max(1, min(held_out_count, n - 1))
 
+    # Sort by a seeded hash: a fixed, reproducible but unbiased choice of which files are held out.
     ordered = sorted(records, key=lambda r: _holdout_sort_key(seed, client_id, r.file_id))
     held_out, kept = ordered[:held_out_count], ordered[held_out_count:]
 
@@ -174,6 +176,7 @@ def materialize_client_repo(
     if not dry_run:
         ensure_dir(repo_dir)
         ensure_dir(held_out_dir)
+        # repo/ = training files, held_out/ = eval files; the two never overlap.
         for record in kept:
             _safe_write(repo_dir, record.relative_path, record.content)
         for record in held_out:
