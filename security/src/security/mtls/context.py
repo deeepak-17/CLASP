@@ -2,18 +2,12 @@
 
 TLS version policy
 ~~~~~~~~~~~~~~~~~~
-Both ``server_ssl_context`` and ``client_ssl_context`` set the minimum TLS
-version to **TLS 1.2** (not 1.3).  This is a deliberate choice:
-
-* TLS 1.2 is still considered secure and is required by NIST SP 800-52r2.
-* Many production load-balancers and embedded devices do not yet support
-  TLS 1.3; enforcing 1.3-only would break interoperability.
-* If TLS 1.3-only is desired (e.g. for the edge↔cluster channel), callers
-  can override ``context.minimum_version = ssl.TLSVersion.TLSv1_3`` after
-  obtaining the context.
-
-The previous security branch used TLS 1.3 as the minimum.  This was relaxed
-to 1.2 for broader compatibility; see the PR discussion for details.
+Both ``server_ssl_context`` and ``client_ssl_context`` require **TLS 1.3**.
+That is one D7 policy for every CLASP channel: the registry's server
+(``registry.serve``) and the edge's client already require 1.3, and every
+CLASP service runs on Python 3.11 / OpenSSL 3, so there is no legacy peer that
+needs 1.2. A context from this module can talk to the registry and the edge
+without being loosened or tightened by the caller.
 """
 from __future__ import annotations
 
@@ -37,7 +31,7 @@ def server_ssl_context(
         An ssl.SSLContext configured for server-side mTLS.
     """
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
     
     context.verify_mode = ssl.CERT_REQUIRED
     
@@ -63,7 +57,7 @@ def client_ssl_context(
         An ssl.SSLContext configured for client-side mTLS.
     """
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
     
     context.verify_mode = ssl.CERT_REQUIRED
     

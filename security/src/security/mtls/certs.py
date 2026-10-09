@@ -129,15 +129,24 @@ def verify_cert(
     cert: x509.Certificate,
     ca_cert: x509.Certificate,
 ) -> bool:
-    """Verifies that a certificate was signed by the given CA.
-    
+    """Verifies that a certificate was issued by the given CA and is valid now.
+
+    Checks the issuer name matches the CA's subject, the current time is inside
+    the certificate's validity window, and the CA's signature is valid.
+
     Args:
         cert: The certificate to verify.
         ca_cert: The CA certificate.
-        
+
     Returns:
-        True if the signature is valid, False otherwise.
+        True if all checks pass, False otherwise.
     """
+    if cert.issuer != ca_cert.subject:
+        return False
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if not (cert.not_valid_before_utc <= now <= cert.not_valid_after_utc):
+        return False
+
     ca_public_key = ca_cert.public_key()
     
     if not isinstance(ca_public_key, rsa.RSAPublicKey):
