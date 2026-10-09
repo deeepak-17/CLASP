@@ -1130,17 +1130,23 @@ def list_clusters() -> dict[str, object]:
     # answers even while an aggregate is running.
     clusters = dict(_clusters)
     membership = dict(_membership)
-    return {
-        "clusters": {
-            cid: {
-                "round_id": st.round_id,
-                "pending_uploads": len(st.uploads),
-                "has_active_adapter": st.active is not None,
-                "members": sorted(c for c, owner in membership.items() if owner == cid),
-            }
-            for cid, st in sorted(clusters.items())
+    out = {}
+    for cid, st in sorted(clusters.items()):
+        uploaded = sorted(st.uploads)  # one snapshot; len() is taken from it too
+        active = st.active  # one atomic read
+        out[cid] = {
+            "round_id": st.round_id,
+            "pending_uploads": len(uploaded),
+            "has_active_adapter": active is not None,
+            "members": sorted(c for c, owner in membership.items() if owner == cid),
+            # Who has uploaded into the round that is buffering now — what the
+            # demo panel shows arriving, as opposed to ``members`` (assigned).
+            "uploaded_clients": uploaded,
+            # Who the active aggregate was built from (empty before the first).
+            "aggregated_clients": list(active.source_clients) if active is not None else [],
+            "aggregated_round_id": active.round_id if active is not None else None,
         }
-    }
+    return {"clusters": out}
 
 
 @app.put("/clusters/{cluster_id}/members")
