@@ -1095,8 +1095,13 @@ def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) 
         # recorded in the registry with epsilon = null.
         meta["privacy"] = {"epsilon": broadcast.epsilon}
 
+    from cluster.tls import outbound_ssl_context
+
+    # Under mTLS (CLASP_TLS_* set, see cluster.serve) the registry gets the
+    # cluster's certificate and must present one the CLASP CA signed.
+    tls = outbound_ssl_context(_os.environ) if req.registry_url.startswith("https") else None
     try:
-        with httpx.Client(timeout=req.timeout_s) as http:
+        with httpx.Client(timeout=req.timeout_s, verify=tls if tls is not None else True) as http:
             resp = http.post(
                 f"{req.registry_url.rstrip('/')}/adapters/{name}/versions",
                 files={"file": (f"{name}.safetensors", payload,

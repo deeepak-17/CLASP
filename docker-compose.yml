@@ -43,9 +43,10 @@ services:
     environment:
       CLASP_REGISTRY_URL: http://registry:8004
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8002/healthz').status==200 else sys.exit(1)"]
+      # TLS-aware: probes over mTLS when CLASP_TLS_* is set.
+      test: ["CMD", "python", "-m", "cluster.healthcheck"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 5
       start_period: 5s
     restart: unless-stopped
