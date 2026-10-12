@@ -57,6 +57,7 @@ def bootstrap_mean_ci(
     # Resample the values with replacement many times; the spread of the resampled means is the interval.
     rng = random.Random(seed)
     n = len(values)
+    # [Step 5] Bootstrap: resample 10,000 times.
     means = sorted(fmean(rng.choices(values, k=n)) for _ in range(n_resamples))
     tail = (1.0 - confidence) / 2.0
     lo = means[int(math.floor(tail * (n_resamples - 1)))]
@@ -105,6 +106,7 @@ def paired_min_detectable_drop(discordance: float, n: int, *, z: float = Z_95) -
     if not 0.0 <= discordance <= 1.0:
         raise EvaluationError(f"discordance must be in [0, 1], got {discordance}")
     # Paired test: only items whose pass/fail flips between the two models add noise.
+    # [Step 5] Floor = 1.96 · √(d / n) → 13.9 pts at n=20, 4.8 at 164.
     return z * math.sqrt(discordance / n)
 
 
@@ -118,10 +120,13 @@ def required_items_paired(drop: float, discordance: float, *, z: float = Z_95) -
 def classify_guard_drop(drop: float, *, tolerance: float, noise_floor: float) -> str:
     """``regression`` | ``within_noise`` | ``pass`` for a baseline-minus-candidate drop."""
     # Within D5's tolerance -> pass; beyond it but inside the noise floor -> not enough evidence either way.
+    # [Step 5] Drop ≤ 2 pts → pass.
     if drop <= tolerance:
         return "pass"
+    # [Step 5] Above 2 pts but inside the floor → within_noise.
     if drop <= noise_floor:
         return "within_noise"
+    # [Step 5] Above the floor → regression.
     return "regression"
 
 
@@ -139,6 +144,7 @@ def guard_noise_report(
         raise EvaluationError("guard noise report needs at least one scored task")
     scores = [1.0 if passed else 0.0 for passed in per_task_passed]
     p = fmean(scores)
+    # [Step 5] 95% bootstrap interval of pass@1.
     lo, hi = bootstrap_mean_ci(scores, seed=seed)
     rows = []
     # Discordance is unknown until a candidate is scored, so report the floor for a few plausible values.

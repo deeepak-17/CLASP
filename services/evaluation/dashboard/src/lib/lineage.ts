@@ -34,6 +34,7 @@ export interface LineageFeed {
   sources?: string[];
 }
 
+// Shape check for lineage.json: every node has an id and kind, and every edge points at real nodes.
 export function isLineageFeed(x: unknown): x is LineageFeed {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
@@ -68,6 +69,7 @@ export function lineageColumns(feed: LineageFeed): { title: string; nodes: Linea
   return columns;
 }
 
+// The adapters a given adapter was built from (incoming edges).
 export function parentsOf(feed: LineageFeed, id: string): { node: LineageNode; kind: LineageEdge["kind"] }[] {
   const byId = new Map(feed.nodes.map((n) => [n.id, n]));
   return feed.edges.filter((e) => e.target === id).map((e) => ({ node: byId.get(e.source)!, kind: e.kind }));

@@ -31,8 +31,10 @@ export interface InProjectData {
   takeaway: string;
 }
 
+// File copied into public/data/ by sync-results.mjs.
 const DATA_URL = `${import.meta.env.BASE_URL}data/in_project_metric.json`;
 
+// Shape check: the page only draws data that has the expected fields.
 function isInProjectData(x: unknown): x is InProjectData {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
@@ -62,6 +64,7 @@ export function useInProject(): InProjectState {
 
     async function load() {
       try {
+        // [Step 7] In-Project page reads in_project_metric.json.
         const response = await fetch(DATA_URL, { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${DATA_URL}`);
         const parsed: unknown = await response.json();

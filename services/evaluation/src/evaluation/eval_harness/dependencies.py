@@ -192,6 +192,7 @@ def check_dependency(spec: DependencySpec) -> DependencyStatus:
     belongs here in detection, not in the repository layout.)
     """
     try:
+        # Check whether the library can be imported, without importing it.
         found = importlib.util.find_spec(spec.import_name)
     except (ImportError, ValueError):
         found = None
@@ -224,6 +225,7 @@ def check_dependency(spec: DependencySpec) -> DependencyStatus:
 
     version_ok = True
     if spec.min_version and version:
+        # Compare the installed version with the minimum required.
         version_ok = _parse_version(version) >= _parse_version(spec.min_version)
 
     return DependencyStatus(spec=spec, installed=True, version=version, version_ok=version_ok)
@@ -273,6 +275,7 @@ def check_dependencies(
     specs: tuple[DependencySpec, ...] = DEPENDENCIES,
 ) -> DependencyCheckResult:
     """Run the full preflight and log a one-line verdict."""
+    # Python itself must be 3.11 or newer.
     python_ok = sys.version_info[:2] >= MIN_PYTHON
     if not python_ok:
         _LOG.error(

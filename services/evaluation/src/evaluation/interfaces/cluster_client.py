@@ -88,6 +88,7 @@ class MockClusterClient:
 
         client_ids = [shard.client_id for shard in manifest.shards]
 
+        # Federated averaging needs at least 2 clients.
         if manifest.num_clients < 2:
             errors.append(
                 f"Federated aggregation needs >= 2 clients; manifest declares {manifest.num_clients}"
@@ -99,10 +100,12 @@ class MockClusterClient:
         if len(set(client_ids)) != len(client_ids):
             errors.append("Duplicate client_id values in manifest")
 
+        # A client with no files cannot train — reject the plan.
         empty = [shard.client_id for shard in manifest.shards if shard.num_files == 0]
         if empty:
             errors.append(f"Empty shard(s) would stall a Flower round: {', '.join(empty)}")
 
+        # Client count different from what P2 expects -> warning (this flagged 6 vs 3 in Week 2).
         if manifest.num_clients != self.expected_client_count:
             warnings.append(
                 f"Cluster Layer currently simulates {self.expected_client_count} client(s) "

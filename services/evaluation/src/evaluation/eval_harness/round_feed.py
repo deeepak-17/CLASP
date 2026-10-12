@@ -78,11 +78,13 @@ def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """One round manifest -> one ``rounds.json`` round entry."""
     # Read one demo_round manifest and keep only what the Rounds page shows.
     guard = _get(manifest, "humaneval_guard")
+    # Noise band the round used: an in-project gain must exceed it.
     noise_band = float(_get(manifest, "config", "noise_band"))
     clusters_out: list[dict[str, Any]] = []
     for cluster_id, block in sorted(_get(manifest, "clusters").items()):
         versions = _get(block, "seam_a_b", "versions")
         evaluation = block.get("evaluation") or {}
+        # What the registry actually decided for this cluster (promote/rollback).
         decision = _get(block, "seam_c2", "decision")
         entry_versions: dict[str, Any] = {}
         for label in _LABELS:
@@ -145,6 +147,7 @@ def d5_alerts(round_entry: Mapping[str, Any]) -> list[dict[str, Any]]:
         delta = cluster["edit_similarity_delta"]
         if delta is None:
             reasons.append(("in_project_unmeasured", "in-project metric not measured on both versions"))
+        # D5 rule 1: in-project gain must be larger than the noise band.
         elif delta <= band:
             reasons.append(
                 ("in_project_not_improved", f"edit_similarity delta {delta:+.4f} does not clear band {band:.4f}")
@@ -153,15 +156,18 @@ def d5_alerts(round_entry: Mapping[str, Any]) -> list[dict[str, Any]]:
             reasons.append(("guard_unavailable", "HumanEval guard not scored for candidate and baseline"))
         else:
             drop = guard["baseline_pass_at_1"] - guard["candidate_pass_at_1"]
+            # D5 rule 2: HumanEval must not drop by more than 2 points.
             if drop > GUARD_PASS_AT_1_TOLERANCE:
                 reasons.append(
                     ("guard_regression", f"HumanEval pass@1 dropped {drop:.4f} (> {GUARD_PASS_AT_1_TOLERANCE:.2f})")
                 )
+        # Recompute D5's decision ourselves...
         predicted = "rollback" if reasons else "promote"
         actual = cluster["decision"]["action"]
         common = {"round": round_entry["round"], "cluster_id": cluster["cluster_id"]}
         for kind, message in reasons:
             alerts.append({**common, "kind": kind, "message": message})
+        # ...and raise an alert if it disagrees with the registry's decision.
         if predicted != actual:
             alerts.append(
                 {
@@ -184,6 +190,7 @@ def round_over_round_alerts(rounds: Sequence[Mapping[str, Any]]) -> list[dict[st
                 continue
             current = ip["edit_similarity"]
             before = previous.get(cluster["cluster_id"])
+            # Alert when a cluster's quality falls compared with the previous round.
             if before is not None and current < before:
                 alerts.append(
                     {

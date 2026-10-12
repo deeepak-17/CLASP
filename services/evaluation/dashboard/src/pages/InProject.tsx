@@ -2,6 +2,7 @@ import { ErrorState, LoadingState } from "../components/DataState";
 import { fixed4, pct, useInProject } from "../lib/inProject";
 
 export function InProject() {
+  // In-Project page: reads in_project_metric.json (next-line completion scores).
   const state = useInProject();
 
   if (state.status === "loading") return <LoadingState />;
@@ -9,6 +10,7 @@ export function InProject() {
 
   const d = state.data;
   const completion = d.in_project_completion.rows;
+  // Highlight the version with the best edit similarity.
   const best = completion.reduce((a, b) => (b.edit_similarity > a.edit_similarity ? b : a));
   const bold = (isBest: boolean, text: string) => (
     <span style={{ fontWeight: isBest ? 700 : 400 }}>{text}</span>

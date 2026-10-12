@@ -4,11 +4,13 @@ import type { ResultRecord } from "./types";
 
 /** Stable identity of one record: a run can score several benchmarks, and a
  * benchmark can appear in several runs (e.g. a DEMO_TEST mock and a REAL anchor). */
+// Unique key per record: run id + benchmark.
 export function recordKey(r: ResultRecord): string {
   return `${r.eval_result.run_id ?? "run"}-${r.eval_result.benchmark}`;
 }
 
 /** Human label that never lets a REAL and a DEMO_TEST number share a name. */
+// Chart label; mock-model records are marked as DEMO.
 export function recordLabel(r: ResultRecord): string {
   return r.run_metadata.provenance === "REAL"
     ? `${r.eval_result.benchmark} · REAL (${r.eval_result.num_tasks} tasks)`

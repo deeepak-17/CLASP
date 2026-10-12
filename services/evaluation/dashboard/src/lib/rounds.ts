@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { isRoundsFeed, type RoundsFeed } from "./roundsFeed";
 
+// rounds.json is optional: it exists only after export_round_feed.py has been run.
 const DATA_URL = `${import.meta.env.BASE_URL}data/rounds.json`;
 
 export type RoundsState =
@@ -18,6 +19,7 @@ export function useRounds(): RoundsState {
     let cancelled = false;
     async function load() {
       try {
+        // [Step 7] Rounds page reads rounds.json (empty state if absent).
         const response = await fetch(DATA_URL, { cache: "no-store" });
         if (response.status === 404) {
           if (!cancelled) setState({ status: "missing" });

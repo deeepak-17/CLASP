@@ -64,6 +64,7 @@ def main(args: argparse.Namespace) -> int:
     if args.benchmark:
         selected = parse_benchmark_name(args.benchmark)
         benchmarks = {
+            # --benchmark: enable only the named benchmark.
             key: replace(value, enabled=(key == selected.value.lower()))
             for key, value in config.benchmarks.items()
         }
@@ -71,6 +72,7 @@ def main(args: argparse.Namespace) -> int:
         _LOG.info("Restricted run to %s", selected.value)
 
     harness = EvaluationHarness(config)
+    # Run the harness on a few tasks: prompts -> mock model -> assembled programs.
     run = harness.run(limit=args.limit, write_artifact=not args.no_artifact)
     paths = project_paths()
 

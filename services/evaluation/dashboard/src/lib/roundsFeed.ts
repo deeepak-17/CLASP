@@ -102,6 +102,7 @@ function isRoundEntry(x: unknown): x is RoundEntry {
   );
 }
 
+// Shape check for rounds.json: rounds, clusters, guard and alerts.
 export function isRoundsFeed(x: unknown): x is RoundsFeed {
   if (!isObj(x)) return false;
   return (
@@ -115,6 +116,7 @@ export function isRoundsFeed(x: unknown): x is RoundsFeed {
 }
 
 /** One row per round: round + candidate edit_similarity per cluster (null when unmeasured). */
+// One row per round with each cluster's candidate edit similarity.
 export function candidateTrend(feed: RoundsFeed): Array<Record<string, number | null>> {
   return feed.rounds.map((r) => {
     const row: Record<string, number | null> = { round: r.round };

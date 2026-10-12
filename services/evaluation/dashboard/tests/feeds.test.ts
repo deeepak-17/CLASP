@@ -12,6 +12,7 @@ import type { ResultsIndex } from "../src/lib/types.ts";
 const load = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`../../results/${name}`, import.meta.url), "utf8"));
 
+// [Step 7] Committed feeds must pass the page's own shape checks.
 test("personalization.json satisfies its guard", () => {
   const feed = load("personalization.json");
   assert.ok(isPersonalizationFeed(feed));
@@ -35,6 +36,7 @@ test("noise_report.json satisfies its guard", () => {
   assert.ok(isNoiseReport(load("noise_report.json")));
 });
 
+// [Step 7] Wrong shapes are rejected.
 test("guards reject wrong shapes", () => {
   assert.equal(isPersonalizationFeed({ feed_version: "2.0.0", rounds: [], comparisons: [] }), false);
   assert.equal(

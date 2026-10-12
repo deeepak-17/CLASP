@@ -49,6 +49,7 @@ ROUND2 = _manifest(2, {
 })
 
 
+# Counts of improved clients and of clients the cluster layer helps.
 def test_summary_counts_improvement_and_cluster_effect() -> None:
     entry = summarize_round(ROUND2)
     assert entry["summary"]["n_improved"] == 2
@@ -57,6 +58,7 @@ def test_summary_counts_improvement_and_cluster_effect() -> None:
     assert entry["summary"]["mean_delta_ppl"] == pytest.approx((-0.25 - 0.12) / 2)
 
 
+# Round 1 -> round 2 change per client.
 def test_compare_rounds_reports_composite_change_per_client() -> None:
     comp = compare_rounds(summarize_round(ROUND1), summarize_round(ROUND2))
     by_client = {r["client_id"]: r for r in comp["clients"]}
@@ -79,6 +81,7 @@ def test_missing_key_names_its_path() -> None:
         summarize_round(broken)
 
 
+# The committed round manifests reproduce the reported numbers (6/6 improved).
 def test_real_rounds_reproduce_the_published_finding() -> None:
     """The vendored edge manifests: cluster layer harmful in round 1, helpful in round 2."""
     root = project_paths().eval_results / "edge_rounds"

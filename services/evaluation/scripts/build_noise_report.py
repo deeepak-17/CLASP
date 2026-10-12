@@ -197,6 +197,7 @@ def main(args: argparse.Namespace) -> int:
     base = _per_task(read_json(anchor_path))
 
     # Noise of the HumanEval guard, measured from the scored base-model anchor.
+    # [Step 5] Noise of the HumanEval guard from the base anchor.
     guard = guard_noise_report(
         list(base.values()),
         tolerance=float(guard_cfg["tolerance_pass_at_1"]),
@@ -204,6 +205,7 @@ def main(args: argparse.Namespace) -> int:
         seed=int(boot["seed"]),
     )
     assumed = float(guard_cfg["assumed_discordance"])
+    # [Step 5] Noise floor at 20 tasks.
     floor_now = paired_min_detectable_drop(assumed, guard["n_tasks"])
     floor_full = paired_min_detectable_drop(assumed, guard["full_benchmark_size"])
     statements = [
@@ -237,6 +239,7 @@ def main(args: argparse.Namespace) -> int:
         result["sources"]["candidate_anchor"] = paths.relative(args.candidate_anchor)
 
     out = args.out or paths.eval_results / "noise_report.json"
+    # [Step 6] results/noise_report.json (+ reports/eval_noise_report.md)
     write_json(out, result)
     lines = [
         "",

@@ -92,17 +92,21 @@ def _record(anchor: dict, out: Path) -> Path:
 def main(args: argparse.Namespace) -> int:
     config = load_evaluation_config(args.config)
     adapter = build_adapter(BenchmarkName.HUMANEVAL, config)
+    # [Step 5] Load the 164 real HumanEval tasks.
     tasks = {task.task_id: task for task in adapter.load_tasks()}
     if len(tasks) < 164:
         emit([f"  WARNING: only {len(tasks)} HumanEval tasks loaded — run scripts/fetch_benchmark_data.py first."])
 
+    # [Step 5] Load the model's samples from P1.
     samples = load_samples(args.samples)
     manifest = read_json(args.generation_manifest) if args.generation_manifest else None
 
     with Stopwatch("score") as watch:
         # Execute every sample against its HumanEval tests in the sandbox.
+        # [Step 5] Run every sample.
         outcomes = score_samples(samples, tasks, timeout_seconds=args.timeout, sandbox=args.sandbox)
     # anchor.json = pass@1 + per-task outcomes; edge.promote.resolve_guard reads this file.
+    # [Step 5] Build the anchor file.
     anchor = build_anchor(outcomes, samples_path=args.samples, generation_manifest=manifest)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -37,6 +37,7 @@ def _nice_ticks(lo: float, hi: float, count: int = 5) -> list[float]:
         hi = lo + 1.0
     raw = (hi - lo) / count
     mag = 10 ** math.floor(math.log10(raw))
+    # Pick a round axis step (1, 2, 2.5 or 5 x a power of ten) so tick labels are readable.
     step = next(m * mag for m in (1, 2, 2.5, 5, 10) if m * mag >= raw)
     start = math.floor(lo / step) * step
     ticks = []
@@ -91,6 +92,7 @@ def grouped_bars(
     if len(series) > len(PALETTE):
         raise ValueError(f"at most {len(PALETTE)} series")
     values = [v for s in series for v in s.values if v is not None]
+    # The value axis always includes 0, so negative bars (e.g. perplexity drops) extend below it.
     lo, hi = min(0.0, *values), max(0.0, *values)
     ticks = _nice_ticks(lo, hi)
     y_lo, y_hi = ticks[0], ticks[-1]
@@ -128,6 +130,7 @@ def grouped_bars(
             else:
                 path = (f"M{x0:.1f},{y0:.1f} V{y1 - r:.1f} Q{x0:.1f},{y1:.1f} {x0 + r:.1f},{y1:.1f} "
                         f"H{x0 + bar - r:.1f} Q{x0 + bar:.1f},{y1:.1f} {x0 + bar:.1f},{y1 - r:.1f} V{y0:.1f} Z")
+            # One rounded bar per series value, with a hover tooltip.
             body.append(f'<path d="{path}" fill="{PALETTE[si]}"><title>{escape(f"{cat} · {s.name}: {fmt(v)}")}'
                         "</title></path>")
         body.append(_text(left + group * ci + group / 2, top + ph + 18, cat, size=12, fill=INK_SECONDARY))
@@ -179,6 +182,7 @@ def lines(
     if y_label:
         body.append(f'<text transform="translate(14 {top + ph / 2:.1f}) rotate(-90)" font-size="11" '
                     f'fill="{INK_MUTED}" text-anchor="middle">{escape(y_label)}</text>')
+    # Optional dashed reference line (e.g. the 2-point guard tolerance).
     if reference:
         ry = py(reference[0])
         body.append(f'<line x1="{left}" x2="{left + pw}" y1="{ry:.1f}" y2="{ry:.1f}" stroke="{INK_SECONDARY}" '
@@ -187,6 +191,7 @@ def lines(
     for si, s in enumerate(series):
         pts = [(px(xv), py(v)) for xv, v in zip(xs, s.values) if v is not None]
         d = " ".join(f"{'M' if i == 0 else 'L'}{x:.1f},{yv:.1f}" for i, (x, yv) in enumerate(pts))
+        # Draw each series as a line through its points.
         body.append(f'<path d="{d}" fill="none" stroke="{PALETTE[si]}" stroke-width="2"/>')
         for (x, yv), xv, v in zip(pts, xs, s.values):
             body.append(f'<circle cx="{x:.1f}" cy="{yv:.1f}" r="4" fill="{PALETTE[si]}" stroke="{SURFACE}" '

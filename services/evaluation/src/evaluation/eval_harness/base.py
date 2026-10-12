@@ -60,12 +60,14 @@ class BenchmarkAdapter(ABC):
         one that failed.
         """
         path = self._resolve_tasks_path()
+        # Read every benchmark task from its tasks.jsonl file.
         tasks = [self._parse(record, path) for record in read_jsonl(path)]
 
         if not tasks:
             raise EvaluationError(f"No tasks loaded for {self.name.value} from {path}")
 
         if limit is not None:
+            # --limit: evaluate only the first N tasks (quick runs).
             tasks = tasks[:limit]
 
         _LOG.info(
@@ -92,6 +94,7 @@ class BenchmarkAdapter(ABC):
         for marker in stop_sequences:
             index = completion.find(marker)
             if index != -1:
+                # Cut the model's output at the first stop sequence (e.g. the start of the next function).
                 earliest = min(earliest, index)
         return completion[:earliest]
 
@@ -101,6 +104,7 @@ class BenchmarkAdapter(ABC):
         if configured and Path(configured).is_file():
             return Path(configured)
 
+        # If the real task file was never downloaded, fall back to the 5 bundled sample tasks (and log it).
         fallback = self._config.sample_tasks_path or self.default_sample_path()
         if configured:
             _LOG.warning(
@@ -122,6 +126,7 @@ class BenchmarkAdapter(ABC):
 
     def _parse(self, record: dict, path: Path) -> EvalTask:
         task = task_from_dict(record)
+        # Refuse a task file that belongs to the other benchmark.
         if task.benchmark is not self.name:
             raise EvaluationError(
                 f"{path}: task '{task.task_id}' declares benchmark "

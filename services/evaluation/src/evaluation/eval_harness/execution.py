@@ -180,12 +180,15 @@ def docker_command(host_dir: Path | str, timeout_seconds: float, *, name: str, i
     return [
         "docker", "run", "--rm", "--name", name,
         # No network: generated code cannot download or send anything.
+        # [Step 5] No network inside the container.
         "--network", "none",
+        # [Step 5] Read-only filesystem.
         "--read-only",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "--user", "65534:65534",
+        # [Step 5] Memory limit.
         "--memory", "512m", "--memory-swap", "512m",
         "--cpus", "1",
         "--pids-limit", "64",
@@ -222,24 +225,30 @@ def execute_program(source: str, *, timeout_seconds: float = 10.0, sandbox: str 
         and a failed assertion are all ordinary "did not pass" outcomes.
     """
     # Pick the isolation once per call: 'docker' (no network) or 'process' (fallback).
+    # [Step 5] Choose docker (isolated) or process (fallback).
     backend = resolve_sandbox(sandbox)
     # Random per-run sentinel printed after the tests: only a program that really
     # reaches the end passes (an early sys.exit(0) never prints it).
+    # [Step 5] Random secret marker for this run.
     sentinel = f"__CLASP_PASSED_{uuid.uuid4().hex}__"
     with tempfile.TemporaryDirectory(prefix="clasp-p5-exec-") as tmpdir:
         script_path = Path(tmpdir) / "candidate.py"
         body = source if source.endswith("\n") else source + "\n"
+        # [Step 5] Marker printed AFTER the tests.
         script_path.write_text(f"{body}\nprint({sentinel!r}, flush=True)\n", encoding="utf-8")
         if backend == "docker":
             # The container runs as user 'nobody', so the mounted program must be world-readable.
             script_path.chmod(0o644)
             Path(tmpdir).chmod(0o755)
+            # [Step 5] Docker path.
             return _run_docker(tmpdir, timeout_seconds, sentinel)
+        # [Step 5] Process fallback path.
         return _run_process(script_path, tmpdir, timeout_seconds, sentinel)
 
 
 def _reached_end(returncode: int | None, stdout: str, sentinel: str) -> bool:
     """Passed = clean exit AND the sentinel is the last thing the program printed."""
+    # [Step 5] PASS = exit 0 AND marker printed last.
     return returncode == 0 and stdout.rstrip().endswith(sentinel)
 
 
@@ -257,6 +266,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
 def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float, sentinel: str) -> ExecutionOutcome:
     # Restricted environment: no inherited API keys/tokens, minimal PATH
     # so the candidate cannot invoke arbitrary tools found via a broad PATH.
+    # [Step 5] No inherited secrets, minimal PATH.
     env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
     start = time.perf_counter()
     try:
@@ -268,6 +278,7 @@ def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float, sentine
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            # [Step 5] Own process group (so children can be killed).
             start_new_session=True,
             preexec_fn=_preexec_fn_for_platform(),
         )
@@ -280,6 +291,7 @@ def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float, sentine
             stderr_tail=_truncate(f"{type(exc).__name__}: {exc}"),
         )
     try:
+        # [Step 5] Wall-clock timeout.
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
@@ -294,6 +306,7 @@ def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float, sentine
     # The program finished, but a background child it started may still be alive.
     _kill_group(proc)
     return ExecutionOutcome(
+        # [Step 5] Decide pass/fail.
         passed=_reached_end(proc.returncode, stdout, sentinel),
         timed_out=False,
         exit_code=proc.returncode,

@@ -58,7 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(args: argparse.Namespace) -> int:
     config = load_partition_config(args.config)
+    # [Step 2] Create the partitioner from configs/partition.yaml.
     partitioner = Partitioner(config)
+    # [Step 2] Run it.
     result = partitioner.run(dry_run=args.dry_run)
     manifest = result.manifest
     paths = project_paths()
@@ -99,6 +101,7 @@ def main(args: argparse.Namespace) -> int:
             shard.client_id: load_shard_records(manifest, shard.client_id)
             for shard in manifest.shards
         }
+        # [Step 2] Per-cluster statistics → reports/partition_metadata.md.
         metadata = build_partition_metadata(
             manifest, shard_records, manifest_path=result.manifest_path
         )

@@ -24,6 +24,7 @@ from evaluation.utils.config import load_logging_config
 from evaluation.utils.errors import ClaspP5Error
 from evaluation.utils.logging_utils import configure_from_mapping, get_logger
 
+# Exit codes every script uses: 0 = success, 1 = failure, 130 = interrupted (Ctrl+C).
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_INTERRUPTED = 130
@@ -62,6 +63,7 @@ def setup_logging(args: argparse.Namespace) -> None:
     config = load_logging_config()
     mapping = config.as_mapping()
     if getattr(args, "log_level", None):
+        # --log-level on the command line overrides configs/logging.yaml.
         mapping["level"] = args.log_level
     if getattr(args, "log_file", None):
         mapping["log_file"] = str(args.log_file)
@@ -74,9 +76,11 @@ def run_cli(
 ) -> int:
     """Invoke ``main`` inside the standard error boundary."""
     try:
+        # Every script's main() runs inside this wrapper...
         return main(args)
     except ClaspP5Error as exc:
         _LOG.error("%s: %s", type(exc).__name__, exc)
+        # ...so a known project error prints one clear message instead of a traceback.
         return EXIT_FAILURE
     except KeyboardInterrupt:  # pragma: no cover - interactive only
         _LOG.warning("Interrupted by user")
@@ -93,6 +97,7 @@ def emit(lines: Sequence[str]) -> None:
     be piped without its log stream contaminating the output.
     """
     for line in lines:
+        # The human-readable summary goes to stdout (logs go to stderr).
         print(line, file=sys.stdout)
     sys.stdout.flush()
 

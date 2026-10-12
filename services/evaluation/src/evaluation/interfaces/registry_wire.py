@@ -100,6 +100,7 @@ def in_project_wire(metrics: InProjectMetrics, *, perplexity: float | None = Non
     raises rather than inventing one.
     """
     ppl = perplexity if perplexity is not None else metrics.perplexity
+    # [Step 6] Perplexity is required on the wire; never invented.
     if ppl is None:
         raise ContractViolationError(
             "contracts v1.0 InProjectMetrics requires perplexity; P5 does not measure it — "
@@ -138,6 +139,7 @@ def eval_result_wire(
     baseline evaluations (D5), so a caller cannot send one by omission.
     """
     # This dict is exactly what the registry's POST /promote expects under "eval".
+    # [Step 6] Every promotion result must carry a valid noise band.
     if baseline_noise_band < 0.0 or math.isnan(baseline_noise_band):
         raise ContractViolationError(f"baseline_noise_band must be >= 0, got {baseline_noise_band}")
     return {
@@ -150,6 +152,7 @@ def eval_result_wire(
         "in_project": dict(in_project),
         "guard": [dict(g) for g in guard],
         "baseline_in_project": dict(baseline_in_project) if baseline_in_project is not None else None,
+        # [Step 6] Band included in the EvalResult.
         "baseline_noise_band": float(baseline_noise_band),
         "seed": int(seed),
     }
@@ -163,6 +166,7 @@ def promote_body(
     ``baseline_guard`` is the previous active version's guard metrics — an
     API-boundary extension the registry documents next to the endpoint.
     """
+    # [Step 6] POST /adapters/{name}/promote body.
     return {"eval": dict(eval_result), "baseline_guard": [dict(g) for g in baseline_guard]}
 
 
@@ -177,6 +181,7 @@ def to_contracts_eval_result(wire: Mapping[str, Any]):
     import contracts as c
 
     # Same parser the registry uses, so if it parses here it parses there.
+    # [Step 6] Parsed with the registry's own parser (contracts v1.1).
     return c.EvalResult.from_json(dict(wire))
 
 

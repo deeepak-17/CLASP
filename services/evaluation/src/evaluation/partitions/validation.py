@@ -213,12 +213,19 @@ class PartitionValidator:
         """
         result = PartitionValidationResult()
 
+        # [Step 2] Manifest counts = files on disk.
         self._check_manifest_consistency(manifest, shard_records, result)
+        # [Step 2] No file id in two clients.
         self._check_disjointness(shard_records, result)
+        # [Step 2] No identical content in two clients.
         self._check_content_disjointness(shard_records, result)
+        # [Step 2] Each client holds only its own project.
         self._check_project_purity(manifest, shard_records, result)
+        # [Step 2] No near-empty client.
         self._check_min_shard_size(manifest, result)
+        # [Step 2] Every corpus file assigned exactly once.
         self._check_coverage(shard_records, corpus_records, result)
+        # [Step 2] Balance warnings: Gini, imbalance ratio, CV.
         self._check_balance(manifest, result)
 
         if self._config.fail_on_warning and result.warnings:
@@ -275,6 +282,7 @@ class PartitionValidator:
             for record in records:
                 previous = owner.get(record.file_id)
                 if previous is not None and previous != client_id:
+                    # [Step 2] Where an overlap would be reported.
                     collisions.append(f"{record.file_id} in both '{previous}' and '{client_id}'")
                 else:
                     owner[record.file_id] = client_id

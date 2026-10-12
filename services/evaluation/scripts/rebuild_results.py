@@ -44,13 +44,20 @@ SCRIPTS = Path(__file__).resolve().parent
 
 def steps(label: str) -> list[tuple[str, list[str]]]:
     return [
+        # [Step 6] 1. guard anchor (step 5B).
         ("guard anchor", ["score_humaneval_samples.py", "--samples", "results/humaneval_guard/base_samples.jsonl",
                           "--out", "results/humaneval_guard/base_anchor.json", "--no-report", "--record-result"]),
+        # [Step 6] 2. personalization (5E).
         ("personalization", ["build_personalization_report.py"]),
+        # [Step 6] 3. lineage.
         ("lineage", ["export_lineage.py"]),
+        # [Step 6] 4. noise (5D).
         ("noise", ["build_noise_report.py"]),
+        # [Step 6] 5. report figures.
         ("figures", ["build_report_figures.py"]),
+        # [Step 6] 6. slide numbers.
         ("slides data", ["build_slides_data.py"]),
+        # [Step 6] 7. archive checksums.
         ("archive", ["archive_results.py", "--label", label]),
     ]
 
@@ -65,6 +72,7 @@ def main(args: argparse.Namespace) -> int:
     root = project_paths().root
     lines = ["", "CLASP-P5 · rebuild results", "=" * 68]
     # Run each step as its own process, in order; stop at the first failure.
+    # [Step 6] Run in order; stop at the first failure.
     for name, argv in steps(args.label):
         proc = subprocess.run(
             [sys.executable, str(SCRIPTS / argv[0]), *argv[1:]],

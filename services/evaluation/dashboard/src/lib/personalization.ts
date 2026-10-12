@@ -69,6 +69,7 @@ function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null;
 }
 
+// [Step 7] Shape check for personalization.json.
 export function isPersonalizationFeed(x: unknown): x is PersonalizationFeed {
   if (!isObject(x) || typeof x.feed_version !== "string" || !x.feed_version.startsWith("1.")) return false;
   if (!Array.isArray(x.rounds) || !Array.isArray(x.comparisons)) return false;
@@ -100,6 +101,7 @@ export function contributionByClient(feed: PersonalizationFeed): Record<string, 
   for (const round of feed.rounds) {
     for (const c of round.clients) {
       const row = rows.get(c.client_id) ?? { client: shortClient(c.client_id) };
+      // [Step 7] Cluster contribution per round (before/after D3 chart).
       row[`r${round.round}`] = c.cluster_contribution_at_alpha_ref;
       rows.set(c.client_id, row);
     }

@@ -101,6 +101,7 @@ class AdapterRef:
     def uri(self) -> str:
         """Stable string form, e.g. ``cluster/flask@3``."""
         scope = self.cluster_id or self.name
+        # Adapter address used everywhere, e.g. cluster/web@3.
         return f"{self.kind.value}/{scope}@{self.version}"
 
     def to_dict(self) -> dict[str, Any]:
@@ -190,6 +191,7 @@ class InProjectMetrics:
         for name in ("edit_similarity", "exact_match"):
             value = float(getattr(self, name))
             if not 0.0 <= value <= 1.0:
+                # Edit similarity and exact match are fractions, so they must be between 0 and 1.
                 raise ContractViolationError(f"InProjectMetrics.{name} must lie in [0, 1], got {value}")
         if self.n_examples < 0:
             raise ContractViolationError(f"InProjectMetrics.n_examples must be >= 0, got {self.n_examples}")
@@ -252,6 +254,7 @@ class EvalResult:
                 raise ContractViolationError(f"pass@k requires k >= 1, got {k}")
             if not 0.0 <= float(value) <= 1.0:
                 raise ContractViolationError(f"pass@{k} must lie in [0, 1], got {value}")
+        # The D5 noise band is a spread (max - min), so it can never be negative.
         if self.baseline_noise_band < 0.0:
             raise ContractViolationError(
                 f"baseline_noise_band must be >= 0, got {self.baseline_noise_band}"
@@ -363,6 +366,7 @@ class PartitionManifest:
     contract_version: str = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
+        # The manifest's declared counts must agree with its shard list.
         if self.num_clients != len(self.shards):
             raise ContractViolationError(
                 f"num_clients ({self.num_clients}) disagrees with shard count ({len(self.shards)})"
@@ -382,6 +386,7 @@ class PartitionManifest:
         for shard in self.shards:
             if shard.client_id == client_id:
                 return shard
+        # Asking for a client that is not in the partition is an error, not an empty result.
         raise ContractViolationError(f"No shard for client_id '{client_id}'")
 
     def to_dict(self) -> dict[str, Any]:

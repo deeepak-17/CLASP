@@ -94,6 +94,7 @@ class ComplianceRun:
 
 def check_manifest_schema(run: ComplianceRun, manifest_path: Path) -> PartitionManifest | None:
     """Check 1 — the partition manifest satisfies its published schema."""
+    # Check 1: the partition manifest matches its JSON schema.
     report = validate_file("partition_manifest", manifest_path)
     run.add(report)
     if not report.ok:
@@ -108,6 +109,7 @@ def check_provenance(run: ComplianceRun, manifest: PartitionManifest, corpus_man
     if corpus_manifest_path and Path(corpus_manifest_path).is_file():
         corpus_manifest = read_json(corpus_manifest_path)
         recorded = corpus_manifest.get("corpus_sha256")
+        # Check 2: the manifest points at the exact corpus that was collected (checksums match).
         if recorded != manifest.corpus_sha256:
             run.fail(
                 "Partition manifest corpus_sha256 does not match the corpus manifest "
@@ -131,6 +133,7 @@ def check_provenance(run: ComplianceRun, manifest: PartitionManifest, corpus_man
         if not shard_path.is_file():
             run.fail(f"Shard file declared in the manifest is missing: {shard.files_path}")
             continue
+        # Every shard file must hold exactly the number of files the manifest declares.
         actual = sum(1 for _ in read_jsonl(shard_path))
         if actual != shard.num_files:
             run.fail(
@@ -144,6 +147,7 @@ def check_provenance(run: ComplianceRun, manifest: PartitionManifest, corpus_man
 def check_cluster_consumer(run: ComplianceRun, manifest: PartitionManifest, expected: int, maximum: int) -> None:
     """Check 3 — P2's Cluster Layer would accept this plan."""
     client = MockClusterClient(expected_client_count=expected, max_client_count=maximum)
+    # Check 3: P2's cluster layer would accept this plan.
     acceptance = client.register_partition_plan(manifest)
 
     for error in acceptance.errors:
@@ -175,6 +179,7 @@ def check_registry_reader(run: ComplianceRun, manifest: PartitionManifest) -> No
         )
     )
 
+    # Check 4: P5 can read back what P4's registry stores.
     latest = registry.latest(cluster_id, AdapterKind.CLUSTER)
     if latest.adapter != ref:
         run.fail("MockRegistryClient.latest() did not return the snapshot that was written")
@@ -185,6 +190,7 @@ def check_registry_reader(run: ComplianceRun, manifest: PartitionManifest) -> No
 def check_eval_result_shape(run: ComplianceRun, manifest: PartitionManifest) -> None:
     """Check 5 — the EvalResult P5 will publish matches the contract."""
     cluster_id = manifest.cluster_ids[0]
+    # Check 5: the EvalResult P5 sends to P4 matches the contract.
     result = EvalResult(
         adapter=AdapterRef(name=cluster_id, version=1, kind=AdapterKind.CLUSTER, cluster_id=cluster_id),
         benchmark=BenchmarkName.HUMANEVAL,

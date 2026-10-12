@@ -1,6 +1,7 @@
 # CLASP evaluation dashboard — static build served by nginx.
 # Build context is the repository root (docker-compose.yml), so the build can
 # read services/evaluation/results/, which `npm run build` copies into the app.
+# [Step 7] Stage 1: build the app with Node.
 FROM node:20.17-alpine AS build
 WORKDIR /src/services/evaluation
 COPY services/evaluation/dashboard/package.json services/evaluation/dashboard/package-lock.json dashboard/
@@ -9,6 +10,7 @@ COPY services/evaluation/results results
 COPY services/evaluation/dashboard dashboard
 RUN cd dashboard && npm run build
 
+# [Step 7] Stage 2: serve the static build with nginx.
 FROM nginx:1.27-alpine
 COPY --from=build /src/services/evaluation/dashboard/dist /usr/share/nginx/html
 EXPOSE 80

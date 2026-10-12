@@ -31,6 +31,7 @@ const SLOT = ["var(--series-humaneval)", "var(--series-mbpp)", "var(--series-3)"
  * a benchmark doesn't report is simply absent from that bar group (Recharts
  * renders nothing for a missing key, not a zero-value bar).
  */
+// [Step 7] Recharts line chart: one line per results record.
 export function PassAtKChart({ records }: PassAtKChartProps) {
   // One series per record (not per benchmark): two runs of the same benchmark —
   // e.g. a DEMO_TEST mock and a REAL anchor — must never overwrite each other.
@@ -41,6 +42,7 @@ export function PassAtKChart({ records }: PassAtKChartProps) {
     return <div className="empty-state">No pass@k values are present in results.json.</div>;
   }
 
+  // One bar group per k; a record without that k simply has no bar (never a fake 0).
   const data = ks.map((k) => {
     const row: Record<string, number | string> = { k: `k = ${k}` };
     for (const s of series) {

@@ -36,6 +36,7 @@ corpus:
   # ---------------------------------------------------------------------
   acquisition:
     mode: "${CLASP_P5_ACQUISITION_MODE:git}"
+    # [Step 1] Shallow clone depth.
     git_depth: 1
     timeout_seconds: 600
     # Refuse to proceed on a dirty/failed clone rather than silently
@@ -50,6 +51,7 @@ corpus:
   filters:
     include_globs:
       - "**/*.py"
+    # [Step 1] Start of the list of excluded paths (tests, docs…).
     exclude_globs:
       - "**/tests/**"
       - "**/test/**"
@@ -71,8 +73,10 @@ corpus:
       - "**/_version.py"
     # Files below this many code lines carry too little signal to be worth a
     # training step (mostly __init__ re-export shims).
+    # [Step 1] Minimum code lines per file.
     min_code_lines: 10
     # Guards against vendored blobs and generated parser tables.
+    # [Step 1] Maximum size = 256 KiB.
     max_file_bytes: 262144
     # Drop byte-identical files. Vendored copies across projects would
     # otherwise leak content between clusters and corrupt the isolation claim.
@@ -98,6 +102,7 @@ corpus:
     - cluster_id: "requests"
       project_label: "Requests"
       repo_url: "https://github.com/psf/requests.git"
+      # [Step 1] Example pinned version (Requests).
       ref: "v2.32.3"
       license: "Apache-2.0"
       subpaths: ["src/requests"]

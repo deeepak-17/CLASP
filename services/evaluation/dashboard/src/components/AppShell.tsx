@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 
+// Sidebar links: one per dashboard page (route -> label), in demo order.
 const NAV_ITEMS = [
   { to: "/", label: "Overview", end: true },
   { to: "/in-project", label: "In-Project Metric" },

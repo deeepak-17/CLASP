@@ -33,6 +33,7 @@ def atomic_write_text(path: Path | str, text: str) -> Path:
     target = Path(path).expanduser()
     ensure_dir(target.parent)
 
+    # Write to a temporary file first, so a crash never leaves a half-written file.
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
@@ -40,6 +41,7 @@ def atomic_write_text(path: Path | str, text: str) -> Path:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        # Atomic swap: readers see either the old file or the complete new one.
         os.replace(tmp_path, target)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
@@ -49,6 +51,7 @@ def atomic_write_text(path: Path | str, text: str) -> Path:
 
 def write_json(path: Path | str, payload: Any, *, indent: int = 2, sort_keys: bool = False) -> Path:
     """Serialise ``payload`` as UTF-8 JSON and write it atomically."""
+    # Every JSON result in the project is written through here (UTF-8, atomic).
     text = json.dumps(payload, indent=indent, sort_keys=sort_keys, ensure_ascii=False, default=_json_default)
     return atomic_write_text(path, text + "\n")
 
@@ -76,6 +79,7 @@ def write_jsonl(path: Path | str, records: Iterable[Any]) -> int:
     in this project are on the order of thousands of records, so this is a
     deliberate simplicity/robustness trade-off rather than an oversight.
     """
+    # One JSON object per line (JSONL) — used for corpus.jsonl and shard files.
     lines = [json.dumps(record, ensure_ascii=False, default=_json_default) for record in records]
     atomic_write_text(path, "".join(f"{line}\n" for line in lines))
     return len(lines)
@@ -101,6 +105,7 @@ def read_jsonl(path: Path | str) -> Iterator[dict[str, Any]]:
             try:
                 yield json.loads(stripped)
             except json.JSONDecodeError as exc:
+                # Report the exact file and line number of a corrupt row.
                 raise ClaspP5Error(f"Malformed JSONL at {target}:{lineno}: {exc}") from exc
 
 
@@ -115,6 +120,7 @@ def sha256_file(path: Path | str) -> str:
     target = Path(path).expanduser()
     try:
         with target.open("rb") as handle:
+            # Hash large files in 1 MiB chunks so memory stays small.
             for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
                 digest.update(chunk)
     except FileNotFoundError as exc:

@@ -87,6 +87,7 @@ LIVE_ROUND = _manifest(
 )
 
 
+# Reading a round manifest into the dashboard feed.
 class TestSummarizeRound:
     def test_reads_versions_metrics_and_decision(self) -> None:
         entry = summarize_round(LIVE_ROUND)
@@ -115,6 +116,7 @@ class TestSummarizeRound:
             summarize_round(broken)
 
 
+# Our recomputation of D5 matches the registry: promote, guard regression, noise band, disagreement.
 class TestD5Alerts:
     def test_live_round_alerts_agree_with_the_registry(self) -> None:
         alerts = d5_alerts(summarize_round(LIVE_ROUND))
@@ -147,6 +149,7 @@ class TestD5Alerts:
         assert GUARD_PASS_AT_1_TOLERANCE == promotion.GUARD_PASS_AT_1_TOLERANCE
 
 
+# Rounds are ordered, duplicates refused, round-over-round drops flagged.
 class TestBuildFeed:
     def test_rounds_sorted_and_round_over_round_drop(self) -> None:
         r2 = _manifest(2, {"web": _cluster("web", 0.54, 0.52, "rollback")})
@@ -169,6 +172,7 @@ def _blob(value: float) -> bytes:
     return struct.pack("<Q", len(header)) + header + data
 
 
+# The feed reads the exact manifest that scripts/demo_round.py writes.
 def test_feed_reads_what_the_real_producers_write(tmp_path, monkeypatch) -> None:
     """seam_c2 / humaneval_guard built by edge.promote against the real registry app."""
     promote = pytest.importorskip("edge.promote")

@@ -1,6 +1,6 @@
 {
   "label": "phase-2 final",
-  "created_at": "2026-10-09T06:21:52Z",
+  "created_at": "2026-10-10T02:51:16Z",
   "directories": [
     "results",
     "reports",
@@ -10,11 +10,11 @@
     "configs"
   ],
   "n_files": 93,
-  "total_bytes": 24252656,
+  "total_bytes": 24253128,
   "files": {
     "configs/dataset.yaml": {
-      "sha256": "7cec9c079882f026fb6813b288dcea915b610f534389219c7912406c3a06e3fc",
-      "bytes": 5810
+      "sha256": "9e217f617cb777a4eec69ec7fc5c5df17239f6a50a82225d4ef1f0e268e5d231",
+      "bytes": 6050
     },
     "configs/dataset_scientific.yaml": {
       "sha256": "8e76e75fb2faf93ec65d0e946d67bf6faec3ffd27e01704c6357e8323f0bf3f7",
@@ -29,16 +29,16 @@
       "bytes": 3934
     },
     "configs/guard_thresholds.yaml": {
-      "sha256": "6031153879d9e6eb6465a7f9136788d07b0b75c265bb3dc5b809b541c4e5e682",
-      "bytes": 2974
+      "sha256": "882d97c774604862e421b9c15452a5f34fa7d2b26a4730864653c9f9ceedf843",
+      "bytes": 3061
     },
     "configs/logging.yaml": {
       "sha256": "6d02962455d61102e4a174638de5e3c1b3e82782eae013464e1f27593d00c210",
       "bytes": 599
     },
     "configs/materialize_client.yaml": {
-      "sha256": "8914daf41013afb9dbeadd33d5174fe0a0264c0ad3f0dad7e71304403e84d78e",
-      "bytes": 1764
+      "sha256": "69bfe168a53b3dfa635ecb3812d587d3bf3097fc735b82d8b8ede7de5c0a1c4c",
+      "bytes": 1909
     },
     "configs/partition.yaml": {
       "sha256": "4c5cb83947f9c65908a2b28f8a671e5517d60943f660f72a9465c126ed71778a",

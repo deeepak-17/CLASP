@@ -6,6 +6,7 @@ import { formatOrNA } from "../lib/loadResults";
  * Only fields present on the record are shown; anything absent renders
  * "N/A" rather than being invented or silently dropped. */
 export function MetadataTable({ records }: { records: ResultRecord[] }) {
+  // One row per results record: model, dataset, samples, seed, generation settings.
   if (records.length === 0) return null;
 
   return (

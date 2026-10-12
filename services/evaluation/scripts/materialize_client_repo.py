@@ -84,9 +84,11 @@ def main(args: argparse.Namespace) -> int:
         config = replace(config, seed=args.seed)
 
     manifest_path = args.manifest or config.manifest_path
+    # [Step 3] Load step 2's manifest.
     manifest = load_partition_manifest(manifest_path)
     paths = project_paths()
 
+    # [Step 3] Materialize one client.
     result = materialize_client_repo(manifest, args.client_id, config, dry_run=args.dry_run)
 
     lines = [

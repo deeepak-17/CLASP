@@ -38,6 +38,7 @@ def _discover_root() -> Path:
 
     here = Path(__file__).resolve()
     for candidate in here.parents:
+        # The module root is the folder that has both configs/ and pyproject.toml.
         if (candidate / "configs").is_dir() and (candidate / "pyproject.toml").is_file():
             return candidate
     return _PACKAGE_DIR.parent.parent
@@ -87,6 +88,7 @@ class ProjectPaths:
 
     @property
     def eval_results(self) -> Path:
+        # All result JSON files live in services/evaluation/results/.
         return self.root / "results"
 
     # --- documentation & artefacts ---------------------------------------
@@ -96,6 +98,7 @@ class ProjectPaths:
 
     @property
     def reports(self) -> Path:
+        # All generated Markdown reports live in services/evaluation/reports/.
         return self.root / "reports"
 
     @property
@@ -110,6 +113,7 @@ class ProjectPaths:
         """Render ``path`` relative to the module root for readable logging."""
         p = Path(path).resolve()
         try:
+            # Show paths relative to the module root in logs and reports.
             return str(p.relative_to(self.root))
         except ValueError:
             return str(p)

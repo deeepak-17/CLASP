@@ -34,6 +34,7 @@ class AcquisitionConfig:
     timeout_seconds: int = 600
     fail_fast: bool = True
 
+    # git = clone real repos; local = use an existing checkout; synthetic = offline fake data for tests.
     VALID_MODES = ("git", "local", "synthetic")
 
     def __post_init__(self) -> None:
@@ -54,6 +55,7 @@ class FilterConfig:
     include_globs: list[str] = field(default_factory=lambda: ["**/*.py"])
     exclude_globs: list[str] = field(default_factory=list)
     min_code_lines: int = 10
+    # Default filters: only .py files, at least 10 code lines, at most 256 KiB, duplicates dropped.
     max_file_bytes: int = 262_144
     drop_duplicate_content: bool = True
 
@@ -86,6 +88,7 @@ class SourceConfig:
             )
         if self.cluster_id != self.cluster_id.lower():
             raise ConfigError(f"cluster_id '{self.cluster_id}' must be lowercase")
+        # Every source must declare its licence (needed for licence certainty).
         if not self.license:
             raise ConfigError(f"Source '{self.cluster_id}' must declare a license")
 
@@ -123,6 +126,7 @@ class CorpusConfig:
         if not self.sources:
             raise ConfigError("corpus.sources must declare at least one source")
         ids = [source.cluster_id for source in self.sources]
+        # Two sources with the same cluster id would merge two projects — refuse it.
         duplicates = {i for i in ids if ids.count(i) > 1}
         if duplicates:
             raise ConfigError(f"Duplicate cluster_id(s) in corpus.sources: {sorted(duplicates)}")
@@ -162,6 +166,7 @@ class CorpusRecord:
     source_ref: str | None = None
     content: str | None = None
 
+    # One corpus.jsonl line; content can be left out to write an index-only file.
     def to_dict(self, *, include_content: bool = True) -> dict[str, Any]:
         payload = asdict(self)
         if not include_content:

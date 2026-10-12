@@ -57,6 +57,7 @@ def task_seed(seed: int, task_id: str) -> int:
     samples independent of which tasks ran before it, so a ``--limit``-ed run
     reproduces the same completions as the full run for the tasks they share.
     """
+    # Per-task seed = hash(run seed, task id): each task always gets the same randomness, even in a partial run.
     digest = hashlib.sha256(f"{seed}|{task_id}".encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
@@ -94,6 +95,7 @@ class EdgeInferenceClient(Protocol):
         """Adapters currently composed into the served weights."""
         ...
 
+    # The one method a model must provide: prompt in, completions out.
     def generate(self, request: GenerationRequest) -> GenerationResult:
         """Produce completions for a single prompt."""
         ...
@@ -144,9 +146,11 @@ class MockEdgeInferenceClient:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         self._call_count += 1
         if request.task_id in self._fail_task_ids:
+            # Tests can make chosen tasks fail on purpose to check error handling.
             raise ClaspP5Error(f"MockEdgeInferenceClient: injected failure for {request.task_id}")
 
         completions = [
+            # Mock model: deterministic placeholder code (never passes tests) — used without a GPU.
             self._synthesise(request, sample_index) for sample_index in range(request.num_samples)
         ]
         _LOG.debug("mock generate task_id=%s samples=%d", request.task_id, len(completions))

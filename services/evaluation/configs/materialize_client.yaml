@@ -22,15 +22,18 @@ materialize:
   # resolve against services/evaluation, so this is the REPOSITORY-ROOT
   # datasets/materialized: the shared corpus location the edge lane reads
   # (edge.chunking) and docker-compose's train profile mounts.
+  # [Step 3] Shared location at the repository root (P1 trains from here).
   output_root: "../../datasets/materialized"
 
   repo_dirname: "repo"
   held_out_dirname: "held_out"
 
   # Fraction of a client's files set aside for eval, not training.
+  # [Step 3] 10% held out.
   held_out_fraction: 0.10
 
   # Pins which files land in held_out/. Recorded in
   # <output_root>/<client_id>/materialize_manifest.json so the split is
   # reproducible; independent of partition.yaml's seed.
+  # [Step 3] Seed for the held-out choice.
   seed: 20260616

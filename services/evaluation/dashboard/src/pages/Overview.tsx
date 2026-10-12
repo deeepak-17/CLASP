@@ -20,8 +20,10 @@ const signed = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(3)}`;
  * HumanEval guard — never Pass@k on its own. Each half renders N/A, not a
  * made-up number, when its feed has not been produced. */
 function Headline() {
+  // [Step 7] Overview: headline personalization + noise tiles.
   const pers = useFeed("personalization.json", isPersonalizationFeed, "dashboard/src/lib/personalization.ts");
   const noise = useFeed("noise_report.json", isNoiseReport, "dashboard/src/lib/noise.ts");
+  // Headline tiles use the latest round's personalization numbers.
   const round = pers.status === "ready" ? pers.data.rounds[pers.data.rounds.length - 1] : null;
   const guard = noise.status === "ready" ? noise.data : null;
   return (
@@ -68,6 +70,7 @@ export function Overview() {
   if (state.status === "error") return <ErrorState message={state.message} />;
 
   const { results } = state.data;
+  // Count mock-model records so the page can warn they are not real measurements.
   const nDemo = results.filter((r) => r.run_metadata.provenance !== "REAL").length;
 
   return (

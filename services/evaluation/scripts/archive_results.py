@@ -31,6 +31,7 @@ def main(args: argparse.Namespace) -> int:
     paths = project_paths()
     path = paths.eval_results / MANIFEST_NAME
     if args.check:
+        # --check: re-hash every file and compare with the saved manifest.
         diff = verify_manifest(read_json(path), paths.root)
         lines = ["", "CLASP-P5 · archive check", "=" * 68]
         for kind, items in diff.items():
@@ -39,7 +40,9 @@ def main(args: argparse.Namespace) -> int:
         clean = not any(diff.values())
         lines += [f"  result   {'archive intact' if clean else 'archive DIFFERS from manifest'}", ""]
         emit(lines)
+        # Exit 1 if any reported file changed, disappeared or was added.
         return EXIT_OK if clean else EXIT_FAILURE
+    # Otherwise: record sha256 of every result, report, partition and figure.
     manifest = build_manifest(paths.root, label=args.label)
     write_json(path, manifest)
     emit(["", "CLASP-P5 · archive", "=" * 68, f"  files    {manifest['n_files']}",

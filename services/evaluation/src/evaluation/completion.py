@@ -77,6 +77,7 @@ def levenshtein(a: str, b: str) -> int:
             current.append(min(
                 previous[j] + 1,          # deletion
                 current[j - 1] + 1,       # insertion
+                # [Step 5] Levenshtein DP: substitution cost.
                 previous[j - 1] + (ca != cb),  # substitution
             ))
         previous = current
@@ -87,6 +88,7 @@ def edit_similarity(pred: str, gold: str) -> float:
     """1 - normalized edit distance, in [0, 1]. Two empty strings score 1.0."""
     if not pred and not gold:
         return 1.0
+    # [Step 5] Edit similarity = 1 − distance / longer length.
     return 1.0 - levenshtein(pred, gold) / max(len(pred), len(gold))
 
 
@@ -118,10 +120,13 @@ def extract_examples(text: str, file_name: str, *, max_per_file: int,
     out: List[CompletionExample] = []
     seen = 0
     for idx in range(min_prefix_lines, len(lines)):
+        # [Step 5] Skip blank, comment and tiny lines (they inflate the score).
         if not is_usable_target(lines[idx]):
             continue
         if seen % stride == 0:
+            # [Step 5] Prompt = everything above the target line.
             prompt = "\n".join(lines[:idx]) + "\n"
+            # [Step 5] Target = the real next line.
             out.append(CompletionExample(file=file_name, line_no=idx,
                                          prompt=prompt, target=lines[idx]))
             if len(out) >= max_per_file:
@@ -182,7 +187,9 @@ def score(predictions: Iterable[str], examples: Sequence[CompletionExample],
     n = 0
     for pred, ex in zip(predictions, examples):
         p, g = pred.strip(), ex.target.strip()
+        # [Step 5] Edit similarity per example.
         sims.append(edit_similarity(p, g))
+        # [Step 5] Exact match per example.
         exact += int(p == g)
         n += 1
     if n == 0:
@@ -253,6 +260,7 @@ def noise_band(repeats: Sequence[Dict[str, float]]) -> Tuple[float, str]:
         return 0.0, ("PLACEHOLDER — fewer than 2 baseline repeats supplied; "
                      "no band measured")
     vals = [r["edit_similarity"] for r in repeats]
+    # [Step 5] Band = max − min of repeated baseline scores.
     band = max(vals) - min(vals)
     return band, (
         f"spread of {len(vals)} repeated baseline evaluations "

@@ -84,6 +84,7 @@ def _holdout_sort_key(seed: int, client_id: str, file_id: str) -> str:
     here for the same reason: hashing before splitting avoids the artefact of
     grouping by path/name prefix, which is not a meaningful boundary either.
     """
+    # [Step 3] The seeded hash itself.
     digest = hashlib.sha256(f"{seed}:{client_id}:{file_id}".encode("utf-8"))
     return digest.hexdigest()
 
@@ -108,11 +109,15 @@ def split_held_out(
             "and still leave a non-empty training set"
         )
     # 10% of files (at least 1, never all) go to held_out/ for in-project eval.
+    # [Step 3] 10% of the files…
     held_out_count = round(n * fraction)
+    # [Step 3] …at least 1, never all.
     held_out_count = max(1, min(held_out_count, n - 1))
 
     # Sort by a seeded hash: a fixed, reproducible but unbiased choice of which files are held out.
+    # [Step 3] Order by a seeded hash = fixed but unbiased choice.
     ordered = sorted(records, key=lambda r: _holdout_sort_key(seed, client_id, r.file_id))
+    # [Step 3] First 10% → held_out, rest → kept.
     held_out, kept = ordered[:held_out_count], ordered[held_out_count:]
 
     # Restore canonical (file_id) order within each group — the hash sort is
@@ -128,6 +133,7 @@ def _safe_write(root: Path, relative_path: str, content: str) -> Path:
     root_resolved = root.resolve()
     target = (root / relative_path).resolve()
     if target != root_resolved and root_resolved not in target.parents:
+        # [Step 3] Safety: a path can never escape the folder.
         raise PartitionError(f"Refusing to write outside {root}: relative_path={relative_path!r}")
     ensure_dir(target.parent)
     target.write_text(content, encoding="utf-8")
@@ -156,6 +162,7 @@ def materialize_client_repo(
             is too small to hold out a non-empty slice from.
     """
     shard = manifest.shard_for(client_id)  # raises ContractViolationError if unknown
+    # [Step 3] Load that client's files.
     records = load_shard_records(manifest, client_id)
 
     missing_content = [r.file_id for r in records if r.content is None]
@@ -165,6 +172,7 @@ def materialize_client_repo(
             "(shard was written with output.include_content: false); cannot materialize files"
         )
 
+    # [Step 3] Split into train / held-out.
     kept, held_out = split_held_out(
         records, client_id=client_id, seed=config.seed, fraction=config.held_out_fraction
     )
@@ -178,10 +186,13 @@ def materialize_client_repo(
         ensure_dir(held_out_dir)
         # repo/ = training files, held_out/ = eval files; the two never overlap.
         for record in kept:
+            # [Step 3] Write training files to repo/.
             _safe_write(repo_dir, record.relative_path, record.content)
         for record in held_out:
+            # [Step 3] Write evaluation files to held_out/.
             _safe_write(held_out_dir, record.relative_path, record.content)
 
+        # [Step 3] Record exactly which files went where (with hashes).
         write_json(manifest_path, _manifest_payload(shard.cluster_id, shard.project_label, client_id, config, kept, held_out))
         _LOG.info(
             "Materialized %s: %d kept -> %s, %d held out -> %s",

@@ -36,9 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(args: argparse.Namespace) -> int:
     paths = project_paths()
     sources = args.manifests or sorted((paths.eval_results / "edge_rounds").glob("round*_manifest.json"))
+    # [Step 6] Build the lineage graph from round manifests.
     lineage = build_lineage(read_json(p) for p in sources)
     lineage["sources"] = [paths.relative(p) for p in sources]
     out = args.out or paths.eval_results / "lineage.json"
+    # [Step 6] results/lineage.json
     write_json(out, lineage)
 
     kinds = Counter(n["kind"] for n in lineage["nodes"])

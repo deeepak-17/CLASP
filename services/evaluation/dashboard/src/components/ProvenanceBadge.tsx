@@ -4,6 +4,7 @@ import type { Provenance } from "../lib/types";
  * provenance "DEMO_TEST" is shown as "DEMO / PLACEHOLDER DATA", never
  * dressed up as a measured result. */
 export function ProvenanceBadge({ provenance }: { provenance: Provenance }) {
+  // REAL = measured on a real model; anything else is labelled DEMO / PLACEHOLDER.
   if (provenance === "REAL") {
     return (
       <span className="badge badge-real">

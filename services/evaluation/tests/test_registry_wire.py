@@ -102,6 +102,7 @@ class TestInProjectWire:
             in_project_wire(_metrics(n=0), perplexity=2.0)
 
 
+# The EvalResult we send matches what the registry parses (and the noise band is required).
 class TestEvalResultWire:
     def _wire(self, **kw):
         kw.setdefault("baseline_noise_band", 0.0)
@@ -184,6 +185,7 @@ class _FakeSession:
         return _FakeResponse(status, payload)
 
 
+# Reading from the registry over HTTP, with a fake server.
 class TestHttpRegistryReadClientOffline:
     def _client(self, routes):
         return HttpRegistryReadClient("http://registry:8004/", session=_FakeSession(routes))
@@ -246,6 +248,7 @@ def registry(tmp_path, monkeypatch):
     appmod._store = None
 
 
+# Against P4's real registry app (skipped when it is not installed).
 class TestAgainstRealRegistry:
     def test_reads_versions_active_and_metadata(self, registry) -> None:
         reader = HttpRegistryReadClient("", session=registry)

@@ -4,6 +4,7 @@ import { formatOrNA, formatPercent, useResults } from "../lib/loadResults";
 import { recordKey, recordLabel } from "../lib/records";
 
 export function Benchmarks() {
+  // Benchmarks page: reads results.json (HumanEval / MBPP records).
   const state = useResults();
 
   if (state.status === "loading") return <LoadingState />;

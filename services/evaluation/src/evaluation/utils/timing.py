@@ -22,6 +22,7 @@ def utc_now() -> datetime:
 
 def utc_timestamp() -> str:
     """Return the current UTC time as ``YYYY-MM-DDTHH:MM:SSZ``."""
+    # ISO-8601 UTC timestamp written into every result and manifest.
     return utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -62,6 +63,7 @@ class Stopwatch(AbstractContextManager["Stopwatch"]):
     def elapsed_seconds(self) -> float:
         """Seconds elapsed; live value while the block is still running."""
         end = self._end if self._end is not None else time.perf_counter()
+        # Elapsed seconds of the timed block (shown as e.g. 'elapsed 0.34s').
         return round(end - self._start, 6)
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic

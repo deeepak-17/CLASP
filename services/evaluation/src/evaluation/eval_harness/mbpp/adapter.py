@@ -32,14 +32,17 @@ class MbppAdapter(BenchmarkAdapter):
         practice: it disambiguates argument order and return type, which the
         prose alone frequently leaves open.
         """
+        # MBPP prompt = the task description as a docstring...
         lines = ['"""', task.prompt.strip()]
 
         if self._config.include_test_example_in_prompt:
             example = self._first_assert(task)
             if example:
+                # ...plus one example assert, so the model knows argument order and return type...
                 lines += ["", f"Example: {example}"]
 
         lines += ['"""', "", ""]
+        # ...followed by the function signature for the model to complete.
         return "\n".join(lines) + self._signature(task)
 
     def assemble_program(self, task: EvalTask, completion: str) -> str:
@@ -49,6 +52,7 @@ class MbppAdapter(BenchmarkAdapter):
         """
         prompt = self.build_prompt(task)
         body = completion if completion.endswith("\n") else completion + "\n"
+        # Runnable program = prompt + model's body + MBPP's assert statements.
         return f"{prompt}{body}\n{task.test_code}"
 
     # --- internals ---------------------------------------------------------

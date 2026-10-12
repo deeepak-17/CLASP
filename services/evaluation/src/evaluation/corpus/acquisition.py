@@ -84,6 +84,7 @@ class GitAcquirer:
 
         target = source.checkout_dir(ensure_dir(raw_dir))
 
+        # Warn if a source pins a branch like 'main' — it moves over time, so the corpus would not be reproducible.
         if source.ref in _MOVING_REFS:
             _LOG.warning(
                 "Source '%s' pins the moving ref '%s'; the corpus will not be reproducible "
@@ -92,6 +93,7 @@ class GitAcquirer:
                 source.ref,
             )
 
+        # Reuse an existing clone instead of downloading again.
         if (target / ".git").is_dir():
             _LOG.info("Reusing existing checkout for '%s' at %s", source.cluster_id, target)
         else:
@@ -113,10 +115,13 @@ class GitAcquirer:
                 f"or set acquisition.mode='local' to use it as-is."
             )
 
+        # [Step 1] Build the git clone command.
         command = ["git", "clone", "--quiet"]
         if self._config.git_depth > 0:
+            # [Step 1] Shallow clone (depth 1) — only the pinned snapshot.
             command += ["--depth", str(self._config.git_depth)]
         if source.ref:
+            # [Step 1] Check out the pinned tag, e.g. Flask 3.0.3.
             command += ["--branch", source.ref]
         command += [source.repo_url or "", str(target)]
 
@@ -127,6 +132,7 @@ class GitAcquirer:
         """Return the checked-out commit SHA, or ``None`` if unavailable."""
         try:
             completed = subprocess.run(
+                # [Step 1] Record the exact commit SHA for provenance.
                 ["git", "rev-parse", "HEAD"],
                 cwd=str(target),
                 capture_output=True,
@@ -159,6 +165,7 @@ class GitAcquirer:
 
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
+            # A failed git command stops collection with git's own error message.
             raise CorpusError(f"git failed during {what} (exit {completed.returncode}): {detail}")
 
 
@@ -176,6 +183,7 @@ class LocalAcquirer:
                 f"Populate it, or switch to mode 'git'."
             )
         _LOG.info("Using local checkout for '%s' at %s", source.cluster_id, target)
+        # local mode: use a folder that is already on disk.
         return AcquiredSource(cluster_id=source.cluster_id, root=target, resolved_ref=source.ref)
 
 
@@ -199,6 +207,7 @@ class SyntheticAcquirer:
         package = ensure_dir(root / source.cluster_id)
 
         for index in range(self._config.files_per_source):
+            # synthetic mode: write small generated Python files (tests and offline runs only).
             path = package / f"module_{index:02d}.py"
             path.write_text(self._render(source, index), encoding="utf-8")
 
@@ -262,6 +271,7 @@ def build_acquirer(
     acquisition: AcquisitionConfig, synthetic: SyntheticConfig
 ) -> SourceAcquirer:
     """Return the acquirer matching ``acquisition.mode``."""
+    # Pick the acquirer named by acquisition.mode in configs/dataset.yaml.
     if acquisition.mode == "git":
         return GitAcquirer(acquisition)
     if acquisition.mode == "local":

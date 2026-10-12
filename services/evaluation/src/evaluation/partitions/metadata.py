@@ -111,6 +111,7 @@ def build_partition_metadata(
         manifest_path: Path of ``manifest.json``, recorded as a back-reference.
     """
     paths = project_paths()
+    # How evenly files are spread across clients (Gini, imbalance ratio).
     balance: BalanceMetrics = compute_balance(manifest)
 
     total_files = sum(shard.num_files for shard in manifest.shards)
@@ -136,6 +137,7 @@ def build_partition_metadata(
         cluster_code_lines = sum(code_lines)
         licenses = sorted({record.license for record in records})
         for record in records:
+            # Count files per licence for the licence summary.
             license_counter[record.license] += 1
 
         clusters.append(

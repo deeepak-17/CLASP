@@ -102,6 +102,7 @@ def pass_at_k(n: int, c: int, k: int) -> float:
         )
     # Unbiased pass@k (Chen et al. 2021): 1 - P(all k picks fail) = 1 - C(n-c, k) / C(n, k).
     # n = samples generated, c = samples that passed.
+    # [Step 5] Unbiased pass@k formula.
     return 1.0 - math.comb(n - c, k) / math.comb(n, k)
 
 
@@ -143,6 +144,7 @@ def task_pass_at_k(outcome: TaskOutcome, ks: Sequence[int]) -> TaskPassAtK:
             f"run eval_harness.execution before scoring"
         )
     n = len(outcome.passed)
+    # n = samples generated for the task, c = how many passed.
     c = sum(1 for p in outcome.passed if p)
 
     computed: dict[int, float] = {}
@@ -151,6 +153,7 @@ def task_pass_at_k(outcome: TaskOutcome, ks: Sequence[int]) -> TaskPassAtK:
         try:
             computed[k] = pass_at_k(n, c, k)
         except ScoringError as exc:
+            # A k that cannot be computed (e.g. k > n) is recorded as skipped, not counted as 0.
             skipped[k] = str(exc)
     return TaskPassAtK(task_id=outcome.task_id, n=n, c=c, computed=computed, skipped=skipped)
 
@@ -197,6 +200,7 @@ def aggregate_pass_at_k(outcomes: Sequence[TaskOutcome], ks: Sequence[int]) -> A
     for outcome in outcomes:
         if outcome.passed is None:
             for k in ks:
+                # A task that was never executed is excluded from the average and reported.
                 skipped[k].append(f"{outcome.task_id}: not executed (error={outcome.error!r})")
             continue
         result = task_pass_at_k(outcome, ks)
@@ -208,6 +212,7 @@ def aggregate_pass_at_k(outcomes: Sequence[TaskOutcome], ks: Sequence[int]) -> A
             else:
                 skipped[k].append(f"{outcome.task_id}: {result.skipped[k]}")
 
+    # Benchmark pass@k = average of the per-task pass@k values.
     means = {k: (sums[k] / counts[k] if counts[k] else 0.0) for k in ks}
     if any(counts[k] == 0 for k in ks):
         empty = [k for k in ks if counts[k] == 0]

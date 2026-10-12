@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // services/evaluation — the P5 module root (dashboard/scripts -> dashboard -> module).
 const MODULE_ROOT = resolve(__dirname, "..", "..");
+// [Step 7] Source: results/results.json.
 const SOURCE = resolve(MODULE_ROOT, "results", "results.json");
 const DEST_DIR = resolve(__dirname, "..", "public", "data");
 const DEST = resolve(DEST_DIR, "results.json");
@@ -37,6 +38,7 @@ if (!existsSync(SOURCE)) {
 }
 
 mkdirSync(DEST_DIR, { recursive: true });
+// [Step 7] Copy into dashboard/public/data/.
 copyFileSync(SOURCE, DEST);
 const { size } = statSync(DEST);
 console.log(`[sync-data] copied ${SOURCE} -> ${DEST} (${size} bytes)`);
@@ -64,6 +66,7 @@ if (existsSync(ROUNDS_SOURCE)) {
 // scripts/export_lineage.py, scripts/build_noise_report.py). Optional: each page
 // shows how to produce its feed when the file is absent.
 // Copy each optional feed if it exists; remove a stale copy if the source is gone.
+// [Step 7] Copy the other feeds too.
 for (const name of ["personalization.json", "lineage.json", "noise_report.json"]) {
   const source = resolve(MODULE_ROOT, "results", name);
   const dest = resolve(DEST_DIR, name);

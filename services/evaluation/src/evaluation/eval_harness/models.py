@@ -47,6 +47,7 @@ class EvalTask:
         if not self.task_id:
             raise EvaluationError("EvalTask.task_id must be non-empty")
         if not self.prompt.strip():
+            # A task without a prompt or entry point cannot be evaluated — reject it at load time.
             raise EvaluationError(f"Task {self.task_id} has an empty prompt")
         if not self.entry_point:
             raise EvaluationError(f"Task {self.task_id} has no entry_point")
@@ -69,6 +70,7 @@ class TaskOutcome:
     task_id: str
     benchmark: BenchmarkName
     completions: list[str]
+    # passed: one True/False per generated sample; None means the code was not executed.
     passed: list[bool] | None = None
     error: str | None = None
     latency_ms: float | None = None
@@ -134,6 +136,7 @@ class RunConfig:
     continue_on_task_error: bool = True
     results_dir: Path = Path("results")
 
+    # dry_run = generate and assemble only; full = also execute and score.
     VALID_MODES = ("dry_run", "full")
 
     def __post_init__(self) -> None:
@@ -173,6 +176,7 @@ class BackendConfig:
     kind: str = "mock"
     model_id: str = "mock/deepseek-coder-6.7b-base"
 
+    # Which model answers: the deterministic mock, or P1's real model.
     VALID_KINDS = ("mock", "edge")
 
     def __post_init__(self) -> None:
@@ -202,6 +206,7 @@ class ScoringConfig:
     sandbox: str = "auto"
 
     def __post_init__(self) -> None:
+        # Sandbox for running generated code: docker, a restricted process, or auto (docker if available).
         if self.sandbox not in ("auto", "docker", "process"):
             raise ConfigError(f"scoring.sandbox must be auto, docker or process, got '{self.sandbox}'")
         if not self.pass_at_k:
@@ -231,6 +236,7 @@ class EvaluationConfig:
                 f"Unknown benchmark(s) in configs/evaluation.yaml: {', '.join(sorted(unknown))}. "
                 f"Known: {', '.join(sorted(known))}"
             )
+        # pass@k needs at least k samples per task.
         if self.run.num_samples_per_task < max(self.scoring.pass_at_k, default=1):
             # Not fatal: legitimate during a Week-1 dry run, but pass@10 from
             # one sample per task is not a number anyone should quote.

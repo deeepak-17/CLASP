@@ -5,6 +5,7 @@ export function LoadingState() {
   return <div className="empty-state">Loading results.json…</div>;
 }
 
+// Shown when a results file is broken: says what is wrong and how to regenerate it.
 export function ErrorState({ message }: { message: string }) {
   return (
     <div className="panel">
@@ -32,6 +33,7 @@ export function EmptyResultsState() {
 }
 
 /** An optional feed that has not been produced yet: say which script makes it. */
+// Shown when a results file was never produced: names the script that makes it.
 export function AbsentFeedState({ file, command }: { file: string; command: string }) {
   return (
     <div className="empty-state">

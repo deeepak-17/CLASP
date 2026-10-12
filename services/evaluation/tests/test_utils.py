@@ -34,6 +34,7 @@ from evaluation.utils.text_utils import count_code_lines, count_lines, normalise
 from evaluation.utils.timing import Stopwatch, file_timestamp, utc_timestamp
 
 
+# Module paths resolve from services/evaluation.
 class TestPaths:
     def test_root_contains_expected_directories(self) -> None:
         paths = project_paths()
@@ -54,6 +55,7 @@ class TestPaths:
         assert project_paths() is project_paths()
 
 
+# Atomic writes, JSON/JSONL reading and writing, checksums.
 class TestIoUtils:
     def test_atomic_write_creates_parents(self, tmp_path: Path) -> None:
         target = tmp_path / "deep" / "nested" / "file.txt"
@@ -160,6 +162,7 @@ class _Outer:
     optional: str | None = None
 
 
+# YAML config loading: types, unknown keys, ${ENV} placeholders.
 class TestConfig:
     def test_build_dataclass_hydrates_nested_types(self) -> None:
         built = build_dataclass(
@@ -246,6 +249,7 @@ class TestLogging:
         configure_logging(level="CRITICAL", log_file=None, force=True)
 
 
+# Markdown report builder.
 class TestReporting:
     def test_report_renders_all_blocks(self) -> None:
         text = (

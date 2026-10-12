@@ -38,6 +38,7 @@ def materialize_config(tmp_path: Path, partition_config: PartitionConfig) -> Mat
     )
 
 
+# Bad materialize settings are rejected.
 class TestMaterializeConfig:
     def test_rejects_out_of_range_fraction(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError):
@@ -57,6 +58,7 @@ class TestMaterializeConfig:
             )
 
 
+# The 10% held-out split: complete, deterministic, depends on the seed.
 class TestSplitHeldOut:
     def test_kept_and_held_out_partition_the_shard(self, manifest, materialize_config) -> None:
         from evaluation.partitions.partitioner import load_shard_records
@@ -98,6 +100,7 @@ class TestSplitHeldOut:
             split_held_out([], client_id="client-x", seed=1, fraction=0.1)
 
 
+# Writing repo/ and held_out/: right files, right content, never overlapping.
 class TestMaterializeClientRepo:
     def test_writes_kept_files_at_their_relative_paths(self, manifest, materialize_config) -> None:
         result = materialize_client_repo(manifest, "client-alpha", materialize_config)

@@ -94,6 +94,7 @@ class CorpusCollector:
         stats: list[SourceStats] = []
 
         with Stopwatch("collect") as watch:
+            # [Step 1] Loop over every project in the config.
             for source in self._config.sources:
                 source_records, source_stats = self._collect_source(source, raw_dir)
                 records.extend(source_records)
@@ -126,14 +127,17 @@ class CorpusCollector:
                 )
 
             ensure_dir(corpus_path.parent)
+            # [Step 1] Write corpus.jsonl.
             written = write_jsonl(
                 corpus_path,
                 (r.to_dict(include_content=self._config.output.include_content) for r in records),
             )
+            # [Step 1] Checksum the whole corpus.
             corpus_sha256 = sha256_file(corpus_path)
             _LOG.info("Wrote %d record(s) -> %s", written, paths.relative(corpus_path))
 
             manifest = self._build_manifest(records, stats, corpus_path, corpus_sha256)
+            # [Step 1] Write the manifest (counts, refs, skip reasons, checksum).
             write_json(manifest_path, manifest.to_dict())
             _LOG.info("Wrote manifest -> %s", paths.relative(manifest_path))
 
@@ -151,9 +155,11 @@ class CorpusCollector:
         """Acquire, discover, filter and normalise one source repository."""
         _LOG.info("Collecting cluster '%s' (%s)", source.cluster_id, source.project_label)
         # 1) clone/fetch the repository at its pinned ref.
+        # [Step 1] Clone the project (or reuse the existing clone).
         acquired: AcquiredSource = self._acquirer.acquire(source, raw_dir)
 
         # 2) list candidate .py files (include globs).
+        # [Step 1] List every *.py file in the clone.
         candidates = self._selector.discover(acquired.root, source.subpaths)
         _LOG.info("  discovered %d candidate file(s)", len(candidates))
 
@@ -161,6 +167,7 @@ class CorpusCollector:
         for path in candidates:
             relative_path = self._relative_path(path, acquired.root)
             # 3) apply filters: exclude globs, size, min code lines, duplicates; skips are counted per reason.
+            # [Step 1] Run all filters on one file.
             outcome = self._selector.evaluate(path, relative_path)
             if isinstance(outcome, SkipReason):
                 continue
@@ -204,6 +211,7 @@ class CorpusCollector:
         relative_path: str,
     ) -> CorpusRecord:
         return CorpusRecord(
+            # [Step 1] Give each kept file a unique id, e.g. flask:src/flask/app.py.
             file_id=f"{source.cluster_id}:{relative_path}",
             cluster_id=source.cluster_id,
             project_label=source.project_label,

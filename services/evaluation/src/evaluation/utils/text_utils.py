@@ -14,6 +14,7 @@ def normalise_newlines(text: str) -> str:
     Line-ending noise would otherwise change content hashes and inflate
     duplicate counts across repositories authored on different platforms.
     """
+    # Windows/Mac line endings -> \n, so identical files hash identically.
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
@@ -21,6 +22,7 @@ def looks_binary(path: Path | str) -> bool:
     """Heuristically detect a binary file by sniffing for NUL bytes."""
     try:
         with Path(path).open("rb") as handle:
+            # A NUL byte in the first 8 KiB means a binary file, not source code.
             return _NULL_BYTE in handle.read(_BINARY_SNIFF_BYTES)
     except OSError:
         return True
@@ -57,6 +59,7 @@ def count_code_lines(text: str) -> int:
     total = 0
     for line in text.splitlines():
         stripped = line.strip()
+        # Blank and comment-only lines are not counted as code lines.
         if not stripped or stripped.startswith("#"):
             continue
         total += 1

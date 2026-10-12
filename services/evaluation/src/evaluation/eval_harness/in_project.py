@@ -321,6 +321,7 @@ class InProjectEvaluator:
         scores: list[ExampleScore] = []
         for example in examples:
             # One model call per example; a failed call scores as an empty prediction, it never aborts the run.
+            # [Step 5] Ask the model for the next line.
             prediction, error = self._complete(example)
             scores.append(
                 ExampleScore(
@@ -352,6 +353,7 @@ class InProjectEvaluator:
             )
         scores = self.score_examples(examples)
         # The aggregate is computed by the canonical scorer, not re-derived.
+        # [Step 5] Score with the canonical scorer.
         scored = _canonical.score([s.prediction for s in scores], examples)
         return InProjectEvalResult(
             client_id=client_id,
@@ -389,6 +391,7 @@ class InProjectEvaluator:
         raw = result.completions[0] if result.completions else ""
         # First line only, cut exactly as edge.completion_eval._first_line does;
         # clients that ignore stop_sequences (the mock) still get one line.
+        # [Step 5] Keep only the first line of the answer.
         return raw.split("\n", 1)[0], None
 
 
@@ -408,6 +411,7 @@ def evaluate_client_in_project(
     """
     config = config or InProjectConfig()
     # Step 1: load every file in this client's partition shard.
+    # [Step 5] Load the client's files.
     records = load_shard_records(manifest, client_id)  # raises ContractViolationError if unknown
     missing = [r.file_id for r in records if r.content is None]
     if missing:
@@ -417,10 +421,12 @@ def evaluate_client_in_project(
         )
 
     # Step 2: take the same 10% held-out files the edge lane never trained on (same seed + fraction).
+    # [Step 5] Same held-out 10% as step 3.
     _, held_out = split_held_out(
         records, client_id=client_id, seed=config.seed, fraction=config.held_out_fraction
     )
     # Step 3: turn held-out files into next-line completion problems.
+    # [Step 5] Turn files into next-line problems.
     examples = build_completion_examples(held_out, config=config)
     _LOG.info(
         "in-project eval %s: %d held-out file(s) -> %d completion example(s)",

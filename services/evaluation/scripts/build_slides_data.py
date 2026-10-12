@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def headlines(pers: dict[str, Any], noise: dict[str, Any], inproj: dict[str, Any]) -> list[dict[str, Any]]:
+    # Read every headline number from the committed result files — none are typed by hand.
     first, last = pers["rounds"][0], pers["rounds"][-1]
     s1, s2 = first["summary"], last["summary"]
     comp = pers["comparisons"][-1]
@@ -101,6 +102,7 @@ def main(args: argparse.Namespace) -> int:
         read_json(res / "noise_report.json"),
         read_json(res / "in_project_metric.json"),
     )
+    # Save the headlines (value, claim, source file) for the slides.
     out = res / "slides_data.json"
     write_json(out, {"generated_at": utc_timestamp(), "headlines": items})
     md = MarkdownReport("Slides data", subtitle="Headline numbers for the demo and deck, read from committed results")

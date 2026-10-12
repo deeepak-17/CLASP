@@ -148,13 +148,16 @@ class TransformersEdgeInferenceClient:
     def _generate_one(self, request: GenerationRequest) -> list[str]:
         import torch
 
+        # Turn the prompt into tokens on the model's device.
         inputs = self._tokenizer(request.prompt, return_tensors="pt").to(self._model.device)
         prompt_len = inputs["input_ids"].shape[1]
         if request.temperature > 0 and request.seed is not None:
             # Seeded sampling: the same (seed, task) reproduces the same samples.
+            # [Step 4] Seeded per task → reproducible sampling.
             torch.manual_seed(task_seed(request.seed, request.task_id))
 
         with torch.no_grad():
+            # [Step 4] Generate the completion.
             output = self._model.generate(
                 **inputs,
                 max_new_tokens=request.max_new_tokens,
@@ -166,6 +169,7 @@ class TransformersEdgeInferenceClient:
 
         completions = []
         for row in output:
+            # Keep only the newly generated text (drop the prompt tokens).
             text = self._tokenizer.decode(row[prompt_len:], skip_special_tokens=True)
             completions.append(text)
         return completions
@@ -179,6 +183,7 @@ class TransformersEdgeInferenceClient:
         device_map: str,
         dtype: str,
     ) -> tuple["PreTrainedModel", "PreTrainedTokenizerBase"]:
+        # Without torch/transformers, fail with a clear message instead of an import crash.
         missing = [pkg for pkg in ("torch", "transformers") if not _is_importable(pkg)]
         if adapters and not _is_importable("peft"):
             missing.append("peft")
@@ -207,6 +212,7 @@ class TransformersEdgeInferenceClient:
                 )
             from transformers import BitsAndBytesConfig
 
+            # Load the base model in 4-bit to fit in GPU memory (same as P1's setup).
             quantisation_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
 
         try:
@@ -228,6 +234,7 @@ class TransformersEdgeInferenceClient:
             from peft import PeftModel
 
             try:
+                # [Step 4] Load base model + LoRA adapters (HF Transformers + PEFT).
                 model = PeftModel.from_pretrained(model, composition.local_path, is_trainable=False)
             except OSError as exc:
                 raise DependencyError(
@@ -306,6 +313,7 @@ def register_transformers_edge_client(
     from evaluation.eval_harness.registry import register_edge_client_factory
 
     def _factory(_backend_config) -> TransformersEdgeInferenceClient:
+        # Registered as the 'edge' backend, so backend.kind: edge uses the real model.
         return TransformersEdgeInferenceClient(model_id, adapters=adapters, load_in_4bit=load_in_4bit)
 
     register_edge_client_factory(_factory)

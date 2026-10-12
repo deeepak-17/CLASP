@@ -129,6 +129,7 @@ class ProjectLevelStrategy(PartitionStrategy):
         grouped: dict[str, list[CorpusRecord]] = defaultdict(list)
         labels: dict[str, str] = {}
         for record in records:
+            # [Step 2] Group files by project.
             grouped[record.cluster_id].append(record)
             existing = labels.setdefault(record.cluster_id, record.project_label)
             if existing != record.project_label:
@@ -139,6 +140,7 @@ class ProjectLevelStrategy(PartitionStrategy):
 
         assignments = [
             ClientAssignment(
+                # [Step 2] Name the client, e.g. client-flask.
                 client_id=self._naming.client_id(cluster_id),
                 cluster_id=cluster_id,
                 project_label=labels[cluster_id],
@@ -146,6 +148,7 @@ class ProjectLevelStrategy(PartitionStrategy):
             )
             # Sorting by cluster_id makes shard order — and therefore the
             # manifest — reproducible.
+            # [Step 2] Sorted, so the manifest is always the same.
             for cluster_id in sorted(grouped)
         ]
 
@@ -237,9 +240,11 @@ class PerDeveloperStrategy(PartitionStrategy):
         assignments: list[ClientAssignment] = []
         for cluster_id in sorted(grouped):
             cluster_records = self._sort_records(grouped[cluster_id])
+            # First try: one developer per subpackage (module path).
             groups = self._module_groups(cluster_records)
             basis = "module_path"
             if len(groups) < 2 or not self._clears_minimum(groups):
+                # Flat project (no usable subpackages): split into seeded hash chunks instead.
                 groups = self._hash_chunks(cluster_records, cluster_id)
                 basis = "deterministic_hash_chunk"
             if len(groups) < 2 or not self._clears_minimum(groups):
@@ -252,6 +257,7 @@ class PerDeveloperStrategy(PartitionStrategy):
                 label = self._group_label(basis, group_records, dev_index)
                 assignments.append(
                     ClientAssignment(
+                        # One client per developer slice, e.g. client-flask-dev0.
                         client_id=self._config.client_id(cluster_id, dev_index),
                         cluster_id=cluster_id,
                         project_label=labels[cluster_id],
@@ -284,6 +290,7 @@ class PerDeveloperStrategy(PartitionStrategy):
         back to hash-chunking instead.
         """
         parts = record.relative_path.rsplit("/", 1)
+        # A file's module = its folder path (files at the top level share '.').
         return parts[0] if len(parts) == 2 else "."
 
     def _module_groups(self, records: list[CorpusRecord]) -> list[list[CorpusRecord]]:
@@ -305,6 +312,7 @@ class PerDeveloperStrategy(PartitionStrategy):
         meaningful than the flat-directory case it exists to fix.
         """
         target = self._config.target_files_per_developer
+        # Number of hash chunks = files / target files per developer.
         num_chunks = max(1, len(records) // target)
 
         def sort_key(record: CorpusRecord) -> str:

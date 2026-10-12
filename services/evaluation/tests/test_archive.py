@@ -15,6 +15,7 @@ def _tree(root: Path) -> None:
     (root / "reports" / "r.md").write_text("# r")
 
 
+# The archive lists every result file with its checksum (but not the manifest itself).
 def test_manifest_lists_files_but_not_itself(tmp_path: Path) -> None:
     _tree(tmp_path)
     manifest = build_manifest(tmp_path, ("results", "reports", "absent"))
@@ -22,6 +23,7 @@ def test_manifest_lists_files_but_not_itself(tmp_path: Path) -> None:
     assert manifest["n_files"] == 2
 
 
+# --check detects a changed, a deleted and a new file.
 def test_verify_reports_changed_missing_and_added(tmp_path: Path) -> None:
     _tree(tmp_path)
     manifest = build_manifest(tmp_path, ("results", "reports"))

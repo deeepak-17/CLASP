@@ -46,6 +46,7 @@ export interface NoiseReport {
   };
 }
 
+// Shape check for noise_report.json: guard block, thresholds and in-project block.
 export function isNoiseReport(x: unknown): x is NoiseReport {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;

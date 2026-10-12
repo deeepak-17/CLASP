@@ -11,6 +11,7 @@ from evaluation.eval_harness.models import ScoringConfig
 from evaluation.utils.errors import ConfigError, EvaluationError
 
 
+# The docker command must carry every isolation flag: no network, read-only, no privileges, limits.
 def test_docker_command_isolates_network_filesystem_and_resources(tmp_path) -> None:
     cmd = docker_command(tmp_path, 7, name="clasp-p5-exec-test")
     joined = " ".join(cmd)
@@ -21,6 +22,7 @@ def test_docker_command_isolates_network_filesystem_and_resources(tmp_path) -> N
     assert cmd[-6:] == ["timeout", "-s", "KILL", "7", "python", "/sandbox/candidate.py"]
 
 
+# 'auto' uses docker when it is available and falls back to a restricted process otherwise.
 @pytest.mark.parametrize(("mode", "available", "expected"), [
     ("process", True, "process"),
     ("auto", True, "docker"),
@@ -32,6 +34,7 @@ def test_resolve_sandbox(monkeypatch, mode: str, available: bool, expected: str)
     assert resolve_sandbox(mode) == expected
 
 
+# If docker is explicitly required but missing, fail loudly instead of silently running unisolated.
 def test_docker_mode_refuses_to_fall_back(monkeypatch) -> None:
     monkeypatch.setattr(execution, "docker_available", lambda: False)
     with pytest.raises(EvaluationError, match="no Docker daemon"):
@@ -40,18 +43,21 @@ def test_docker_mode_refuses_to_fall_back(monkeypatch) -> None:
         resolve_sandbox("chroot")
 
 
+# Every result records which isolation was actually used.
 def test_process_backend_records_its_isolation() -> None:
     outcome = execute_program("assert 1 + 1 == 2\n", sandbox="process")
     assert outcome.passed and outcome.isolation == "process"
     assert outcome.to_dict()["isolation"] == "process"
 
 
+# Default is 'auto'; an unknown sandbox setting is rejected.
 def test_scoring_config_validates_sandbox() -> None:
     assert ScoringConfig().sandbox == "auto"
     with pytest.raises(ConfigError):
         ScoringConfig(sandbox="none")
 
 
+# The guard score file states honestly how the code was isolated (docker vs process).
 def test_anchor_states_the_isolation_actually_used() -> None:
     outcomes = [SampleOutcome("t1", True, False, True, isolation="docker"),
                 SampleOutcome("t2", False, False, True, isolation="docker")]
@@ -61,6 +67,7 @@ def test_anchor_states_the_isolation_actually_used() -> None:
 
 
 # --- what counts as a pass (review on #22: sys.exit(0) must not pass) ---
+# A tiny HumanEval-style program: function f, then check() runs the test on it.
 _HUMANEVAL_SHAPED = """
 def f(x):
 {body}
@@ -72,6 +79,8 @@ check(f)
 """
 
 
+# Each case is a different body for f; only the genuinely correct one may pass.
+# The test below runs each case: pass needs exit code 0 AND the random marker printed after the tests.
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
@@ -87,6 +96,7 @@ def test_pass_requires_reaching_the_end_of_the_tests(body: str, expected: bool) 
     assert outcome.passed is expected
 
 
+# Code that starts a background process and hangs: on timeout the whole process group is killed.
 def test_spawned_child_does_not_outlive_the_timeout(tmp_path) -> None:
     marker = tmp_path / "alive"
     program = (

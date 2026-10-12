@@ -139,6 +139,7 @@ def validate_document(
         validator_cls = jsonschema.validators.validator_for(schema)  # type: ignore[union-attr]
         validator_cls.check_schema(schema)
         validator = validator_cls(schema)
+        # Check 1: structure — every required field present with the right type.
         structural_errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
         for err in structural_errors:
             location = "/".join(str(part) for part in err.path) or "<root>"
@@ -146,6 +147,7 @@ def validate_document(
         if not structural_errors:
             report.passed("json-schema structural validation")
     else:
+        # [Step 6] Fails closed if jsonschema is missing.
         report.error("json-schema structural validation could not run: `jsonschema` is not installed")
 
     # --- layer 2: semantic --------------------------------------------
@@ -154,6 +156,7 @@ def validate_document(
         return report
 
     try:
+        # Check 2: semantics — the document must load into its dataclass (which validates values).
         instance = dataclass_type.from_dict(payload)  # type: ignore[attr-defined]
     except ContractViolationError as exc:
         report.error(f"semantic: {exc}")
@@ -169,6 +172,7 @@ def validate_document(
     # about representation even though both "validate" -- exactly the class of
     # bug that surfaces as a mystery KeyError in someone else's module.
     reserialised = instance.to_dict()  # type: ignore[attr-defined]
+    # Check 3: round-trip — saving it again must give the same fields back.
     drift = _diff_keys(dict(payload), reserialised)
     if drift:
         report.warn(f"re-serialisation drift on field(s): {', '.join(sorted(drift))}")

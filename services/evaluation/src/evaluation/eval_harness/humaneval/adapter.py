@@ -36,6 +36,7 @@ class HumanEvalAdapter(BenchmarkAdapter):
         function body, so any added framing would change the distribution the
         published numbers were measured under.
         """
+        # HumanEval prompt = the function signature + docstring, exactly as published.
         return task.prompt
 
     def assemble_program(self, task: EvalTask, completion: str) -> str:
@@ -47,4 +48,5 @@ class HumanEvalAdapter(BenchmarkAdapter):
         """
         prompt = task.prompt if task.prompt.endswith("\n") else task.prompt + "\n"
         body = completion if completion.endswith("\n") else completion + "\n"
+        # Runnable program = prompt + model's body + HumanEval's tests + check(function).
         return f"{prompt}{body}\n{task.test_code}\ncheck({task.entry_point})\n"

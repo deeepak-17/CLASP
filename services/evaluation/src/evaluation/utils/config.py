@@ -55,6 +55,7 @@ def load_yaml(path: Path | str) -> dict[str, Any]:
         raise ConfigError(f"Configuration file not found: {target}")
 
     try:
+        # safe_load: a config file can never execute code.
         raw = yaml.safe_load(target.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ConfigError(f"Could not parse YAML in {target}: {exc}") from exc
@@ -63,6 +64,7 @@ def load_yaml(path: Path | str) -> dict[str, Any]:
         return {}
     if not isinstance(raw, dict):
         raise ConfigError(f"Top level of {target} must be a mapping, got {type(raw).__name__}")
+    # Replace ${ENV_VAR} placeholders so CI/containers can override paths.
     return _expand_env(raw)
 
 
@@ -92,6 +94,7 @@ def resolve_path(value: Path | str) -> Path:
     candidate = Path(str(value)).expanduser()
     if candidate.is_absolute():
         return candidate
+    # Relative config paths are resolved from services/evaluation, not the current folder.
     return (project_paths().root / candidate).resolve()
 
 
@@ -118,6 +121,7 @@ def build_dataclass(cls: type[T], data: Mapping[str, Any], *, context: str = "co
     hints = get_type_hints(cls)
     known = {f.name for f in fields(cls)}
     unknown = set(data) - known
+    # A misspelt config key is an error, not silently ignored.
     if unknown:
         raise ConfigError(f"Unknown key(s) in {context}: {', '.join(sorted(unknown))}")
 
@@ -128,6 +132,7 @@ def build_dataclass(cls: type[T], data: Mapping[str, Any], *, context: str = "co
         kwargs[f.name] = _coerce(hints[f.name], data[f.name], context=f"{context}.{f.name}")
 
     try:
+        # Build the typed, frozen config object from the YAML values.
         return cls(**kwargs)  # type: ignore[return-value]
     except TypeError as exc:
         raise ConfigError(f"Invalid {context}: {exc}") from exc
@@ -194,6 +199,7 @@ def load_config(cls: type[T], path: Path | str, *, section: str | None = None) -
             raise ConfigError(f"Section '{section}' in {resolved} must be a mapping")
     else:
         payload = raw
+    # Load one YAML file (or one section of it) into its config dataclass.
     return build_dataclass(cls, payload, context=f"{resolved.name}" + (f":{section}" if section else ""))
 
 

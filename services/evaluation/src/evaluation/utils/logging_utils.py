@@ -72,6 +72,7 @@ def configure_logging(
 
     formatter = logging.Formatter(fmt=fmt, datefmt=date_fmt)
 
+    # Logs go to stderr, so stdout stays clean for each script's summary.
     console = logging.StreamHandler(stream=sys.stderr)
     console.setLevel(numeric_level)
     console.setFormatter(formatter)
@@ -81,6 +82,7 @@ def configure_logging(
     if log_file is not None:
         path = Path(log_file).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Optional log file that rotates at 5 MiB.
         file_handler = logging.handlers.RotatingFileHandler(
             path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
         )
@@ -114,6 +116,7 @@ def get_logger(name: str) -> logging.Logger:
     """
     if name == _LOGGER_NAMESPACE or name.startswith(f"{_LOGGER_NAMESPACE}."):
         return logging.getLogger(name)
+    # Every module logs under the shared 'clasp_p5' namespace.
     return logging.getLogger(f"{_LOGGER_NAMESPACE}.{name}")
 
 

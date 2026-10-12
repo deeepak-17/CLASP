@@ -93,12 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(args: argparse.Namespace) -> int:
     config = load_evaluation_config(args.config)
+    # Always execute and score in this run (not a dry run).
     config = replace(config, scoring=replace(config.scoring, execution_enabled=True))
     if args.num_samples:
         config = replace(config, run=replace(config.run, num_samples_per_task=args.num_samples))
     if args.k:
         config = replace(config, scoring=replace(config.scoring, pass_at_k=sorted(set(args.k))))
 
+    # Mock model: no GPU here, so the run is labelled DEMO_TEST, never REAL.
     client = MockEdgeInferenceClient(model_id=_BASELINE_MODEL_ID)
     harness = EvaluationHarness(config, client=client)
     run = harness.run(limit=args.limit, write_artifact=True)
@@ -118,6 +120,7 @@ def main(args: argparse.Namespace) -> int:
                 f"dataset manifest declares {expected_problems}"
             )
         for k, rate in summary.pass_at_k.items():
+            # Sanity check: every pass@k must be between 0 and 1.
             if not 0.0 <= rate <= 1.0:
                 sanity_failures.append(f"{summary.benchmark.value}: pass@{k}={rate} outside [0, 1]")
         if summary.tasks_succeeded > summary.tasks_attempted:
@@ -159,6 +162,7 @@ def main(args: argparse.Namespace) -> int:
         )
 
     output_path = args.output or default_results_path()
+    # Save the records to results/results.json.
     written_path = append_results(records, output_path)
 
     lines = [

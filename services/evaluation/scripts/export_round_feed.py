@@ -36,7 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(args: argparse.Namespace) -> int:
+    # Turn round manifests into the dashboard's rounds feed (with D5 alerts).
     feed = build_feed(read_json(path) for path in args.manifests)
+    # Written to results/rounds.json; the Rounds page reads it.
     out = args.out or project_paths().eval_results / "rounds.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(feed, indent=2) + "\n", encoding="utf-8")

@@ -107,6 +107,7 @@ def assemble_program(task: EvalTask, sample: Mapping[str, str]) -> str:
         source = prompt + sample["completion"]
     if not source.endswith("\n"):
         source += "\n"
+    # [Step 5] Program = solution + HumanEval tests + check().
     return f"{source}\n{task.test_code}\ncheck({task.entry_point})\n"
 
 
@@ -128,7 +129,9 @@ def score_samples(
     for sample in samples:
         task = tasks[sample["task_id"]]
         # Build prompt + completion + HumanEval's check() call, then run it in the sandbox.
+        # [Step 5] Build a runnable program.
         program = assemble_program(task, sample)
+        # [Step 5] Execute it safely.
         result = execute_program(program, timeout_seconds=timeout_seconds, sandbox=sandbox)
         outcomes.append(
             SampleOutcome(
@@ -182,6 +185,7 @@ def anchor_result_record(
             num_samples_per_task=max(1, n_samples // n),
             created_at=anchor["scored_at"],
             # Same samples -> same run_id, so re-scoring replaces the record instead of duplicating it.
+            # [Step 6] Same samples → same run id (no duplicates).
             run_id=f"anchor-{anchor['samples']['sha256'][:12]}",
         ),
         model_checkpoint=model_checkpoint,
@@ -193,10 +197,12 @@ def anchor_result_record(
             temperature=float(generation["temperature"]),
             stop_sequences=list(generation["stop_sequences"]),
         ),
+        # [Step 6] Labelled REAL (mock-model runs are DEMO_TEST).
         provenance="REAL",
         provenance_note=provenance_note,
         raw_artifact_path=raw_artifact_path,
         benchmark_data_source="original HumanEval check() tests (src/evaluation/eval_harness/humaneval/tasks.jsonl)",
+        # [Step 6] Which harness version produced it.
         harness_version=__version__,
     )
 
@@ -237,6 +243,7 @@ def build_anchor(
         )
 
     # pass@1 per task with the unbiased estimator, then averaged over tasks.
+    # [Step 5] pass@1 per task.
     per_task_p1 = [pass_at_k(len(v), sum(o.passed for o in v), 1) for v in (by_task[t] for t in task_ids)]
     solved = sum(1 for t in task_ids if any(o.passed for o in by_task[t]))
     samples_bytes = Path(samples_path).read_bytes()
@@ -245,6 +252,7 @@ def build_anchor(
         **manifest,
         "subset": subset,
         "n_problems": len(task_ids),
+        # [Step 5] Average → 0.50 for the base model.
         "base_pass_at_1": round(sum(per_task_p1) / len(task_ids), 4),
         "base_solved": solved,
         "plus_pass_at_1": None,

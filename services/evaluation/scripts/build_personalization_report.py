@@ -142,6 +142,7 @@ def main(args: argparse.Namespace) -> int:
         sources=[paths.relative(p) for p in sources],
     )
     out = args.out or paths.eval_results / "personalization.json"
+    # [Step 6] results/personalization.json
     write_json(out, feed)
 
     lines = ["", "CLASP-P5 · personalization", "=" * 68]
@@ -158,6 +159,7 @@ def main(args: argparse.Namespace) -> int:
         )
     lines.append(f"  feed     {paths.relative(out)}")
     if not args.no_report:
+        # [Step 6] reports/personalization_report.md
         lines.append(report_line(_report(feed, paths.reports / "personalization_report.md")))
     lines.append("")
     emit(lines)

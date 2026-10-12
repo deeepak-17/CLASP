@@ -64,6 +64,7 @@ function isResultRecord(x: unknown): x is ResultRecord {
   return isEvalResult(r.eval_result) && isRunMetadata(r.run_metadata);
 }
 
+// Shape check for results.json, mirroring the Python ResultRecord fields.
 export function isResultsIndex(x: unknown): x is ResultsIndex {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
@@ -92,6 +93,7 @@ export function useResults(): ResultsState {
 
     async function load() {
       try {
+        // [Step 7] Benchmarks / Pass@k pages read results.json.
         const response = await fetch(DATA_URL, { cache: "no-store" });
         if (!response.ok) {
           throw new Error(`HTTP ${response.status} fetching ${DATA_URL}`);

@@ -17,6 +17,7 @@ export default function App() {
         {/* Each page reads one JSON feed from public/data/ (copied from services/evaluation/results/ by npm run sync-data). */}
         <Route path="/" element={<Overview />} />
         <Route path="/in-project" element={<InProject />} />
+        {/* [Step 7] Each page has a route. */}
         <Route path="/personalization" element={<Personalization />} />
         <Route path="/rounds" element={<Rounds />} />
         <Route path="/lineage" element={<Lineage />} />

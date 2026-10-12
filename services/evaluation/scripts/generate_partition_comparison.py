@@ -51,6 +51,7 @@ def _load_strategy_data(label: str, config_path: str) -> dict:
             f"{label}: manifest not found at {manifest_path}. Run "
             f"`python scripts/build_partitions.py --config {config_path}` first."
         )
+    # Read the real manifest, metadata and validation results for each strategy — no invented numbers.
     manifest = load_partition_manifest(manifest_path)
 
     metadata_path = config.output.partitions_dir / "partition_metadata.json"
@@ -156,6 +157,7 @@ def main(args: argparse.Namespace) -> int:
         )
 
     report.heading("4. Developer distribution (per_developer only)")
+    # How many per-developer clients came from module paths, hash chunks or whole projects.
     breakdown = _basis_breakdown(data["per_developer"]["developer_basis"])
     if breakdown:
         report.table(["Basis", "Client shards"], [[k, v] for k, v in sorted(breakdown.items())])

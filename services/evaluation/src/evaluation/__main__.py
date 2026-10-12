@@ -20,17 +20,21 @@ from evaluation import __version__
 
 
 def main() -> int:
+    # Container start: say which version and metric this image provides.
     print(f"clasp-evaluation {__version__}: evaluation.completion (D5 in-project metric)")
+    # The registry address comes from the environment (set in docker-compose).
     url = os.environ.get("CLASP_REGISTRY_URL")
     if not url:
         print("CLASP_REGISTRY_URL not set; skipping registry check")
         return 0
     try:
+        # Ask the registry's health endpoint whether it is up.
         with urllib.request.urlopen(f"{url.rstrip('/')}/healthz", timeout=5) as resp:  # noqa: S310
             print(f"registry {url}: {json.loads(resp.read().decode('utf-8'))}")
         return 0
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         print(f"registry {url} unreachable: {exc}", file=sys.stderr)
+        # Registry configured but unreachable -> exit code 1 so the container shows as failed.
         return 1
 
 

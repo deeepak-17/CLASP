@@ -22,6 +22,7 @@ class _Spy(MockEdgeInferenceClient):
         return super().generate(request)
 
 
+# The same run seed + task always gives the same per-task seed; different tasks get different seeds.
 def test_task_seed_is_stable_and_task_specific() -> None:
     assert task_seed(0, "HumanEval/0") == task_seed(0, "HumanEval/0")
     assert task_seed(0, "HumanEval/0") != task_seed(0, "HumanEval/1")
@@ -29,6 +30,7 @@ def test_task_seed_is_stable_and_task_specific() -> None:
     assert 0 <= task_seed(123, "x") < 2**31
 
 
+# The seed in configs/evaluation.yaml really reaches the model call.
 def test_harness_passes_the_configured_seed(evaluation_config: EvaluationConfig) -> None:
     config = dataclasses.replace(
         evaluation_config, generation=dataclasses.replace(evaluation_config.generation, seed=42)
@@ -38,6 +40,7 @@ def test_harness_passes_the_configured_seed(evaluation_config: EvaluationConfig)
     assert spy.requests and all(r.seed == 42 for r in spy.requests)
 
 
+# Same seed -> same output; different seed -> different output.
 def test_seed_changes_sampled_output_and_repeats_reproduce_it() -> None:
     client = MockEdgeInferenceClient()
     make = lambda seed: GenerationRequest(task_id="t", prompt="def f():", temperature=0.2, seed=seed)  # noqa: E731

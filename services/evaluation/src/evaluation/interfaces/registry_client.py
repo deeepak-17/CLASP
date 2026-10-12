@@ -78,6 +78,7 @@ class MockRegistryClient:
             raise ClaspP5Error(f"Mock registry directory not found: {root}")
 
         snapshots: list[SnapshotMetadata] = []
+        # Offline registry: load snapshot metadata from JSON files in a folder.
         for path in sorted(root.rglob("*.json")):
             payload = read_json(path)
             try:
@@ -114,12 +115,14 @@ class MockRegistryClient:
     # --- RegistryReadClient ------------------------------------------------
     def list_versions(self, name: str, kind: AdapterKind) -> Sequence[SnapshotMetadata]:
         matches = [s for s in self._snapshots if s.adapter.name == name and s.adapter.kind is kind]
+        # All versions of one adapter, oldest first.
         return sorted(matches, key=lambda s: s.adapter.version)
 
     def latest(self, name: str, kind: AdapterKind) -> SnapshotMetadata:
         versions = self.list_versions(name, kind)
         if not versions:
             raise SnapshotNotFoundError(f"No snapshots for {kind.value}/{name}")
+        # Latest = highest version number.
         return versions[-1]
 
     def load_metadata(self, ref: AdapterRef) -> SnapshotMetadata:

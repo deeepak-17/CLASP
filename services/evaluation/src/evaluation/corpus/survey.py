@@ -91,6 +91,7 @@ class SurveyConfig:
             raise ConfigError("survey.candidates must not be empty")
 
         total_weight = sum(c.weight for c in self.criteria)
+        # Criterion weights must add up to 1, so scores are comparable.
         if abs(total_weight - 1.0) > _WEIGHT_TOLERANCE:
             raise ConfigError(f"survey.criteria weights must sum to 1.0, got {total_weight:.6f}")
 
@@ -169,9 +170,11 @@ def score_survey(config: SurveyConfig) -> SurveyOutcome:
     scored: list[tuple[Candidate, float, dict[str, float]]] = []
     for candidate in config.candidates:
         contributions = {
+            # Each criterion contributes weight x score (score 1-5).
             criterion.key: round(criterion.weight * float(candidate.scores[criterion.key]), 4)
             for criterion in config.criteria
         }
+        # Candidate's total = sum of its weighted criterion scores.
         scored.append((candidate, round(sum(contributions.values()), 4), contributions))
 
     # Ties break on key so the ranking is stable across runs.
@@ -192,6 +195,7 @@ def score_survey(config: SurveyConfig) -> SurveyOutcome:
     top = ranking[0]
 
     warnings: list[str] = []
+    # Choosing anything other than the top scorer is flagged as an override.
     if selected.key != top.key:
         warnings.append(
             f"Selected candidate '{selected.key}' (rank {selected.rank}, "

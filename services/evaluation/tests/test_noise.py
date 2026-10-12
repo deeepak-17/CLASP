@@ -26,6 +26,7 @@ def test_binomial_standard_error_closed_form() -> None:
         binomial_standard_error(1.5, 10)
 
 
+# Bootstrap interval: same seed -> same interval, and it contains the mean.
 def test_bootstrap_is_deterministic_and_brackets_the_mean() -> None:
     values = [1.0] * 10 + [0.0] * 10
     lo, hi = bootstrap_mean_ci(values, n_resamples=2000, seed=7)
@@ -44,6 +45,7 @@ def test_paired_diff_needs_matching_items() -> None:
     assert lo == pytest.approx(0.1) and hi == pytest.approx(0.1)
 
 
+# Noise-floor formulas against hand-computed values.
 def test_detectable_drop_formulas() -> None:
     assert paired_min_detectable_drop(0.1, 20) == pytest.approx(Z_95 * math.sqrt(0.1 / 20))
     assert unpaired_min_detectable_drop(0.5, 20) == pytest.approx(Z_95 * math.sqrt(2 * 0.25 / 20))
@@ -52,6 +54,7 @@ def test_detectable_drop_formulas() -> None:
     assert paired_min_detectable_drop(0.1, n) <= 0.02 < paired_min_detectable_drop(0.1, n - 1)
 
 
+# Guard verdicts: pass / within_noise / regression at each threshold.
 @pytest.mark.parametrize(
     ("drop", "expected"),
     [(0.0, "pass"), (0.02, "pass"), (0.05, "within_noise"), (0.2, "regression")],
@@ -60,6 +63,7 @@ def test_classify_guard_drop(drop: float, expected: str) -> None:
     assert classify_guard_drop(drop, tolerance=0.02, noise_floor=0.1) == expected
 
 
+# The real situation: 20 tasks, 10 solved -> the reported noise floor.
 def test_guard_report_on_twenty_tasks_half_solved() -> None:
     report = guard_noise_report([True] * 10 + [False] * 10, tolerance=0.02, full_benchmark_size=164)
     assert report["pass_at_1"] == 0.5

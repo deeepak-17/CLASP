@@ -49,8 +49,11 @@ def _client_row(client_id: str, block: Mapping[str, Any]) -> dict[str, Any]:
         return _get(block, "full_split", key)
 
     # Three models on the same held-out tokens: frozen base, client-only adapter, full composite.
+    # [Step 5] Perplexity of the frozen base model.
     base = float(split("base_ppl"))
+    # [Step 5] Base + client adapter only.
     client_only = float(split("client_only_ppl"))
+    # [Step 5] Base + α·cluster + β·client (CLASP).
     composite = float(split("composite_ppl"))
     promotion = block.get("promotion") or {}
     return {
@@ -69,6 +72,7 @@ def _client_row(client_id: str, block: Mapping[str, Any]) -> dict[str, Any]:
         "cluster_contribution_at_alpha_ref": float(_get(block, "cluster_contribution_at_alpha_ref")),
         # Perplexity: lower is better. Descriptive flag only (no threshold, no noise band) —
         # never use it to decide a promotion; D5's rule lives in the registry.
+        # [Step 5] Improved = composite lower than base.
         "improved": composite < base,
         "decision": promotion.get("decision"),
         "decision_is_authoritative": bool(promotion.get("decision_is_authoritative", False)),
@@ -98,10 +102,12 @@ def summarize_round(manifest: Mapping[str, Any], *, label: str | None = None) ->
         "summary": {
             "n_clients": len(clients),
             "n_improved": sum(1 for c in clients if c["improved"]),
+            # [Step 5] Mean change in perplexity.
             "mean_delta_ppl": round(fmean(deltas), 4),
             "min_delta_ppl": min(deltas),
             "max_delta_ppl": max(deltas),
             "mean_cluster_contribution_ppl": round(fmean(contributions), 4),
+            # [Step 5] How many clients the cluster layer helps.
             "n_cluster_helps": sum(1 for v in contributions if v < 0),
             "n_alpha_zero": sum(1 for c in clients if c["best_alpha"] == 0.0),
         },
@@ -121,6 +127,7 @@ def compare_rounds(earlier: Mapping[str, Any], later: Mapping[str, Any]) -> dict
         rows.append(
             {
                 "client_id": client["client_id"],
+                # [Step 5] Round 1 → round 2 change.
                 "composite_ppl_change": round(client["composite_ppl"] - prev["composite_ppl"], 4),
                 "cluster_contribution_before": prev["cluster_contribution_at_alpha_ref"],
                 "cluster_contribution_after": client["cluster_contribution_at_alpha_ref"],

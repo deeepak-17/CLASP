@@ -136,10 +136,12 @@ def main(args: argparse.Namespace) -> int:
 
     for client_id in clients:
         repeats = [
+            # [Step 5] Evaluate each client (repeated for the noise band).
             evaluate_client_in_project(manifest, client_id, client, config=config)
             for _ in range(args.repeats)
         ]
         primary = repeats[0]
+        # [Step 5] D5 noise band from the repeats.
         band, band_note = noise_band_with_note([r.edit_similarity for r in repeats])
         if primary.generation_errors:
             warnings.append(f"{client_id}: {primary.generation_errors} completion request(s) errored")
@@ -154,6 +156,7 @@ def main(args: argparse.Namespace) -> int:
             created_at=created_at,
             run_id=run_id,
             in_project=metrics,
+            # [Step 5] The band goes into the EvalResult.
             baseline_noise_band=band,
         )
         report = validate_document("eval_result", eval_result.to_dict(), document_name=f"{client_id} EvalResult")

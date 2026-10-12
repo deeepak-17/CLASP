@@ -58,7 +58,9 @@ def _per_client(feed: dict[str, Any], key) -> tuple[list[str], list[Series]]:
 
 
 def figures(pers: dict[str, Any], noise: dict[str, Any], inproj: dict[str, Any]) -> dict[str, str]:
+    # Figure 1 data: how much CLASP's composite lowers perplexity vs the base model, per client.
     cats, reduction = _per_client(pers, lambda c: round(c["base_ppl"] - c["composite_ppl"], 4))
+    # Figure 2 data: the cluster layer's effect per client (below zero = it helps).
     _, contribution = _per_client(pers, lambda c: c["cluster_contribution_at_alpha_ref"])
     out = {
         "fig_personalization_gain.svg": grouped_bars(
@@ -74,6 +76,7 @@ def figures(pers: dict[str, Any], noise: dict[str, Any], inproj: dict[str, Any])
             y_label="Δ perplexity", fmt=lambda v: f"{v:+.3f}" if v else "0",
         ),
     }
+    # Figure 3: aggregation error of naive averaging vs SVD.
     abl = inproj["aggregation_ablation"]["rows"]
     out["fig_aggregation_error.svg"] = grouped_bars(
         [r["cluster"] for r in abl],
@@ -83,6 +86,7 @@ def figures(pers: dict[str, Any], noise: dict[str, Any], inproj: dict[str, Any])
         subtitle="Relative Frobenius error over 96 modules on the trained adapters. Lower is better.",
         y_label="relative error", fmt=lambda v: f"{v:.2f}",
     )
+    # Figure 4: in-project next-line completion scores.
     comp = inproj["in_project_completion"]["rows"]
     out["fig_in_project_completion.svg"] = grouped_bars(
         ["edit similarity", "exact match"],
@@ -91,6 +95,7 @@ def figures(pers: dict[str, Any], noise: dict[str, Any], inproj: dict[str, Any])
         subtitle=f"{inproj['held_out_examples']} held-out examples, greedy decoding. Higher is better.",
         fmt=lambda v: f"{v:.2f}",
     )
+    # Figure 5: the guard's noise floor vs number of tasks.
     g = noise["humaneval_guard"]
     grid = [row["discordance"] for row in g["paired"]]
     out["fig_guard_noise_floor.svg"] = lines(

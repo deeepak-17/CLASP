@@ -69,6 +69,7 @@ class Partitioner:
 
     def __init__(self, config: PartitionConfig) -> None:
         self._config = config
+        # [Step 2] Pick the strategy named in config (project_level).
         self._strategy = build_strategy(
             config.strategy_name, config.client_naming, config.seed, config.per_developer
         )
@@ -85,12 +86,14 @@ class Partitioner:
         corpus_path = Path(self._config.input.corpus_path)
 
         # Input: the collected corpus (one record per source file).
+        # [Step 2] Load corpus.jsonl from step 1.
         records = load_corpus_records(corpus_path)
         _LOG.info("Loaded %d corpus record(s) from %s", len(records), paths.relative(corpus_path))
         self._warn_if_synthetic()
 
         with Stopwatch("partition") as watch:
             # The strategy decides which client gets which files (project-level: one client per repo).
+            # [Step 2] Ask the strategy which files go to which client.
             assignments = self._strategy.assign(records)
 
             shard_paths: dict[str, Path] = {}
@@ -102,6 +105,7 @@ class Partitioner:
 
                 if not dry_run:
                     ensure_dir(shard_path.parent)
+                    # [Step 2] Write this client's shard file.
                     write_jsonl(
                         shard_path,
                         (
@@ -121,6 +125,7 @@ class Partitioner:
                         total_bytes=assignment.total_bytes,
                         files_path=paths.relative(shard_path),
                         # Shard checksum, so anyone can verify a shard was not altered.
+                        # [Step 2] Checksum each shard.
                         content_sha256=self._shard_digest(assignment),
                     )
                 )
@@ -150,6 +155,7 @@ class Partitioner:
             if dry_run:
                 _LOG.info("Dry run: %d shard(s) computed, nothing written", len(shards))
             else:
+                # [Step 2] Write manifest.json (the contract other members read).
                 write_json(manifest_path, manifest.to_dict())
                 _LOG.info("Wrote partition manifest -> %s", paths.relative(manifest_path))
 
@@ -174,6 +180,7 @@ class Partitioner:
         for record in assignment.records:
             digest.update(record.file_id.encode("utf-8"))
             digest.update(b"\x00")
+            # [Step 2] The shard checksum = hash over its files' hashes.
             digest.update(record.content_sha256.encode("utf-8"))
             digest.update(b"\n")
         return digest.hexdigest()

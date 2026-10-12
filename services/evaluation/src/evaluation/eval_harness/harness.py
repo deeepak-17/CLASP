@@ -190,12 +190,14 @@ class EvaluationHarness:
         with Stopwatch("harness") as watch:
             # One adapter per benchmark; each knows how to build prompts and assemble runnable programs.
             for adapter in self._adapters:
+                # [Step 5] For each benchmark…
                 summary, outcomes = self._run_benchmark(adapter, effective_limit)
                 run.summaries.append(summary)
                 run.outcomes[adapter.name.value] = outcomes
         run.elapsed_seconds = watch.elapsed_seconds
 
         if write_artifact:
+            # Save the full run (every completion and outcome) to results/<run_id>.json.
             run.artifact_path = self._write_artifact(run)
 
         _LOG.info(
@@ -215,6 +217,7 @@ class EvaluationHarness:
         """Run every task of one benchmark."""
         _LOG.info("--- %s ---", adapter.name.value)
         # Tasks come from the benchmark's tasks.jsonl (or the bundled sample file if it is missing).
+        # [Step 5] …load its tasks.
         tasks = adapter.load_tasks(limit=limit)
 
         outcomes: list[TaskOutcome] = []
@@ -237,6 +240,7 @@ class EvaluationHarness:
         scoring = self._config.scoring
         aggregate: AggregatePassAtK | None = None
         if scoring.execution_enabled:
+            # [Step 5] pass@k per benchmark.
             aggregate = aggregate_pass_at_k(outcomes, scoring.pass_at_k)
             for k, skipped in aggregate.tasks_skipped.items():
                 if skipped:
@@ -281,8 +285,10 @@ class EvaluationHarness:
         generation = self._config.generation
         scoring = self._config.scoring
         try:
+            # Ask the model for this task: prompt, generation settings and seed.
             request = GenerationRequest(
                 task_id=task.task_id,
+                # [Step 5] Build the prompt.
                 prompt=adapter.build_prompt(task),
                 max_new_tokens=generation.max_new_tokens,
                 temperature=generation.temperature,
@@ -290,9 +296,11 @@ class EvaluationHarness:
                 num_samples=self._config.run.num_samples_per_task,
                 seed=generation.seed,
             )
+            # [Step 5] Generate n samples.
             result = self._client.generate(request)
 
             completions = [
+                # [Step 5] Cut at stop sequences.
                 adapter.truncate_completion(text, generation.stop_sequences)
                 for text in result.completions
             ]
@@ -301,11 +309,13 @@ class EvaluationHarness:
             # adapter/format mismatches during the dry run rather than at
             # execution time when a sandbox failure would be ambiguous.
             # program = prompt + model completion + the benchmark's own tests.
+            # [Step 5] Prompt + completion + tests.
             programs = [adapter.assemble_program(task, completion) for completion in completions]
 
             passed: list[bool] | None = None
             if scoring.execution_enabled:
                 passed = [
+                    # [Step 5] Run each program (same sandbox as 5B).
                     execute_program(
                         program, timeout_seconds=scoring.execution_timeout_seconds, sandbox=scoring.sandbox
                     ).passed

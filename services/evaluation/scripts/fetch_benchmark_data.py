@@ -118,10 +118,12 @@ def _download(url: str) -> bytes:
 # HumanEval
 # ---------------------------------------------------------------------------
 def fetch_humaneval(output_dir: Path) -> FetchResult:
+    # Download the official HumanEval file (164 tasks, MIT licence).
     raw = _download(_HUMANEVAL_URL)
     raw_sha256 = hashlib.sha256(raw).hexdigest()
 
     try:
+        # HumanEval ships gzipped; unpack it.
         text = gzip.decompress(raw).decode("utf-8")
     except OSError as exc:
         raise FetchError(f"HumanEval download at {_HUMANEVAL_URL} is not valid gzip: {exc}") from exc
@@ -203,6 +205,7 @@ def _mbpp_signature_and_body(code: str, expected_entry_point: str) -> tuple[str,
 
 
 def fetch_mbpp(output_dir: Path, *, eval_range: range = _MBPP_EVAL_RANGE) -> FetchResult:
+    # Download the official MBPP file (CC-BY-4.0).
     raw = _download(_MBPP_URL)
     raw_sha256 = hashlib.sha256(raw).hexdigest()
     text = raw.decode("utf-8")
@@ -215,6 +218,7 @@ def fetch_mbpp(output_dir: Path, *, eval_range: range = _MBPP_EVAL_RANGE) -> Fet
             continue
         record = json.loads(line)
         task_id = int(record["task_id"])
+        # Keep only MBPP's 500-task test split.
         if task_id not in eval_range:
             skip_reasons["out_of_split"] += 1
             continue
@@ -226,6 +230,7 @@ def fetch_mbpp(output_dir: Path, *, eval_range: range = _MBPP_EVAL_RANGE) -> Fet
             continue
         entry_point = entry_match.group(1)
 
+        # Split the reference solution into signature and body; unparseable ones are skipped and counted (108).
         parsed = _mbpp_signature_and_body(record["code"], entry_point)
         if parsed is None:
             skip_reasons["unparseable_solution"] += 1

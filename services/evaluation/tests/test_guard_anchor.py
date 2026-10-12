@@ -43,6 +43,7 @@ def _write(tmp_path: Path, samples: list[dict]) -> Path:
     return path
 
 
+# Reading P1's samples file: valid lines load, broken or empty files are rejected.
 class TestLoadSamples:
     def test_reads_evalplus_lines(self, tmp_path) -> None:
         path = _write(tmp_path, [{"task_id": "HumanEval/0", "solution": "x"}, {"task_id": "HumanEval/1", "completion": "y"}])
@@ -60,6 +61,7 @@ class TestLoadSamples:
             load_samples(_write(tmp_path, []))
 
 
+# Running samples: correct answers pass, wrong ones fail, infinite loops time out.
 class TestScoring:
     def test_canonical_solutions_pass_wrong_bodies_fail(self, tasks) -> None:
         ids = ["HumanEval/0", "HumanEval/1", "HumanEval/2"]
@@ -84,6 +86,7 @@ class TestScoring:
         assert not outcome.passed and outcome.timed_out
 
 
+# The guard file has exactly what P1's promote step reads, with pass@1 computed correctly.
 class TestBuildAnchor:
     def test_anchor_carries_what_resolve_guard_reads(self, tasks, tmp_path) -> None:
         samples = [_good(tasks["HumanEval/0"]), _bad(tasks["HumanEval/1"])]
@@ -123,6 +126,7 @@ class TestBuildAnchor:
         assert status.candidate == {"benchmark": "HumanEval", "pass_at_k": {"1": 0.5}}
 
 
+# Re-scoring the same samples replaces their results.json record instead of duplicating it.
 def test_anchor_becomes_a_real_results_record_with_stable_run_id() -> None:
     from evaluation.eval_harness.guard_anchor import anchor_result_record
     from evaluation.eval_harness.results_store import ResultRecord

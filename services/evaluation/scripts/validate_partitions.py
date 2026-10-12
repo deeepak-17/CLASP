@@ -73,10 +73,12 @@ def main(args: argparse.Namespace) -> int:
         validation_config = replace(validation_config, fail_on_warning=True)
 
     manifest_path = args.manifest or config.output.manifest_path
+    # [Step 2] Load the manifest.
     manifest = load_partition_manifest(manifest_path)
     paths = project_paths()
     _LOG.info("Validating %s", paths.relative(Path(manifest_path)))
 
+    # [Step 2] Read every shard back from disk (checks what was written).
     shard_records = {
         shard.client_id: load_shard_records(manifest, shard.client_id) for shard in manifest.shards
     }
@@ -85,6 +87,7 @@ def main(args: argparse.Namespace) -> int:
     if not args.skip_coverage:
         corpus_records = load_corpus_records(config.input.corpus_path)
 
+    # [Step 2] Run all checks.
     result = PartitionValidator(validation_config).validate(
         manifest, shard_records, corpus_records=corpus_records
     )

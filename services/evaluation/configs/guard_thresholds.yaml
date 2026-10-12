@@ -8,6 +8,7 @@
 humaneval_guard:
   # The D5 rule as the registry implements it (registry.promotion
   # GUARD_PASS_AT_1_TOLERANCE). Owned by P4; P5 does not change it.
+  # [Step 5] D5's 2-point tolerance.
   tolerance_pass_at_1: 0.02
   # Scored baseline anchor the noise floor is measured from.
   baseline_anchor: "results/humaneval_guard/base_anchor.json"
@@ -24,6 +25,7 @@ humaneval_guard:
     stop_sequences: ["\nclass ", "\ndef ", "\n#", "\nif __name__", "\nprint(", "\n@", "\nassert "]
   # Fraction of tasks whose pass/fail flips between baseline and candidate.
   # Assumed until a candidate anchor exists; then the measured value replaces it.
+  # [Step 5] Assumed until a candidate is scored.
   assumed_discordance: 0.10
   # Size of the full benchmark the guard should move to.
   full_benchmark_size: 164

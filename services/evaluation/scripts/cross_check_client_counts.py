@@ -63,8 +63,10 @@ def _check_one(label: str, config_path: str) -> dict:
             f"{label}: manifest not found at {manifest_path}. Run "
             f"`python scripts/build_partitions.py --config {config_path}` first."
         )
+    # Load the partition (project-level or per-developer) to check.
     manifest = load_partition_manifest(manifest_path)
 
+    # Offer it to P2's admission rules (expected client count).
     client = MockClusterClient(
         expected_client_count=config.integration.expected_client_count,
         max_client_count=config.integration.max_client_count,

@@ -107,6 +107,7 @@ class FileSelector:
         for search_root in search_roots:
             for pattern in self._config.include_globs:
                 discovered.update(p for p in search_root.glob(pattern) if p.is_file())
+        # [Step 1] Sorted, so the corpus order (and every hash) is reproducible.
         return sorted(discovered)
 
     def evaluate(self, path: Path, relative_path: str) -> AcceptedFile | SkipReason:
@@ -116,6 +117,7 @@ class FileSelector:
             An :class:`AcceptedFile` on success, or the :class:`SkipReason`
             that rejected it. Rejections are counted internally.
         """
+        # [Step 1] Drop tests/, docs/, examples/, benchmarks, build output…
         if matches_any(relative_path, self._config.exclude_globs):
             return self._skip(SkipReason.EXCLUDED_GLOB, relative_path)
 
@@ -126,6 +128,7 @@ class FileSelector:
 
         if size == 0:
             return self._skip(SkipReason.EMPTY, relative_path)
+        # [Step 1] Drop files over 256 KiB.
         if size > self._config.max_file_bytes:
             return self._skip(SkipReason.TOO_LARGE, relative_path)
 
@@ -134,6 +137,7 @@ class FileSelector:
             return self._skip(SkipReason.UNDECODABLE, relative_path)
 
         code_lines = count_code_lines(text)
+        # [Step 1] Drop files with under 10 code lines.
         if code_lines < self._config.min_code_lines:
             return self._skip(SkipReason.TOO_FEW_CODE_LINES, relative_path)
 
@@ -141,7 +145,9 @@ class FileSelector:
         # the same file deduplicate correctly.
         from evaluation.utils.io_utils import sha256_text  # local import: avoids a cycle at module load
 
+        # [Step 1] Fingerprint the file content.
         digest = sha256_text(text)
+        # [Step 1] Drop exact duplicates (even across projects).
         if self._config.drop_duplicate_content and digest in self._seen_hashes:
             _LOG.debug(
                 "Duplicate content: %s already seen as %s", relative_path, self._seen_hashes[digest]

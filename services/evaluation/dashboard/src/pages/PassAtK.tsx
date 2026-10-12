@@ -5,6 +5,7 @@ import { useResults } from "../lib/loadResults";
 import { recordKey, recordLabel } from "../lib/records";
 
 export function PassAtK() {
+  // Pass@k page: one chart of pass@k for every results record.
   const state = useResults();
 
   if (state.status === "loading") return <LoadingState />;

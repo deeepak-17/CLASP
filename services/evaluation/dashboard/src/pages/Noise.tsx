@@ -5,6 +5,7 @@ import { useFeed } from "../lib/useFeed";
 
 const pts = (v: number) => `${(v * 100).toFixed(1)} pts`;
 
+// How each guard verdict is shown: pass / within_noise / regression.
 const VERDICT = {
   pass: "Pass — drop within tolerance",
   within_noise: "Within noise — drop exceeds tolerance but not the noise floor",
@@ -12,6 +13,7 @@ const VERDICT = {
 };
 
 export function Noise() {
+  // [Step 7] Noise & guard page.
   const state = useFeed("noise_report.json", isNoiseReport, "dashboard/src/lib/noise.ts");
   if (state.status === "loading") return <LoadingState />;
   if (state.status === "error") return <ErrorState message={state.message} />;
@@ -19,6 +21,7 @@ export function Noise() {
     return <AbsentFeedState file="results/noise_report.json" command="python scripts/build_noise_report.py" />;
 
   const r = state.data;
+  // Guard numbers: pass@1, confidence interval and noise floor.
   const g = r.humaneval_guard;
   // Every number on this page comes from results/noise_report.json (scripts/build_noise_report.py).
   const t = r.locked_thresholds;

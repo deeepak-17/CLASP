@@ -13,6 +13,7 @@ def _parse(svg: str) -> xml.dom.minidom.Document:
     return xml.dom.minidom.parseString(svg)
 
 
+# Report charts: valid SVG, one bar per value.
 def test_grouped_bars_is_valid_svg_with_one_path_per_value() -> None:
     svg = grouped_bars(["a", "b"], [Series("r1", [0.1, -0.2]), Series("r2", [0.3, None])], title="t & <x>")
     doc = _parse(svg)
@@ -20,6 +21,7 @@ def test_grouped_bars_is_valid_svg_with_one_path_per_value() -> None:
     assert "t &amp; &lt;x&gt;" in svg
 
 
+# Negative values are drawn below the zero line.
 def test_signed_bars_straddle_the_zero_line() -> None:
     svg = grouped_bars(["a"], [Series("s", [-0.5]), Series("t", [0.5])], title="t")
     labels = [t.firstChild.data for t in _parse(svg).getElementsByTagName("text") if t.firstChild]

@@ -15,19 +15,23 @@ export function useFeed<T>(file: string, guard: (x: unknown) => x is T, guardNam
 
   useEffect(() => {
     let cancelled = false;
+    // [Step 7] Page asks for its JSON file.
     const url = `${import.meta.env.BASE_URL}data/${file}`;
 
     async function load() {
       try {
         const response = await fetch(url, { cache: "no-store" });
         // 404 = the exporter has not been run yet: show how to produce the file instead of an error.
+        // [Step 7] Missing → show the command that produces it.
         if (response.status === 404) {
           if (!cancelled) setState({ status: "absent", file });
           return;
         }
         if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${url}`);
         const parsed: unknown = await response.json();
+        // [Step 7] Wrong shape → error naming the checker.
         if (!guard(parsed)) throw new Error(`${file} does not match the expected shape (see ${guardName}).`);
+        // [Step 7] Good → the page renders.
         if (!cancelled) setState({ status: "ready", data: parsed });
       } catch (err) {
         if (!cancelled) setState({ status: "error", message: err instanceof Error ? err.message : String(err) });

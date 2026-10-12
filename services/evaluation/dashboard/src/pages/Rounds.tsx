@@ -20,6 +20,7 @@ function versionCell(v: VersionBlock) {
 }
 
 function DecisionBadge({ c }: { c: ClusterRound }) {
+  // The registry's decision for this cluster: promote (green) or rollback (red).
   const promote = c.decision.action === "promote";
   return (
     <span className={"badge " + (promote ? "badge-real" : "badge-demo")}>
@@ -34,6 +35,7 @@ export function Rounds() {
   const state = useRounds();
   if (state.status === "loading") return <LoadingState />;
   if (state.status === "error") return <ErrorState message={state.message} />;
+  // No rounds.json exported yet -> explain how to produce it instead of an empty page.
   if (state.status === "missing") {
     return (
       <div className="page">
@@ -53,6 +55,7 @@ export function Rounds() {
   const feed = state.data;
   const latest = feed.rounds[feed.rounds.length - 1];
   const ids = clusterIds(feed);
+  // Edit similarity of each cluster's candidate across rounds (trend chart).
   const trend = candidateTrend(feed);
 
   return (

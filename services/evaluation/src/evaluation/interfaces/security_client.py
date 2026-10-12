@@ -49,6 +49,7 @@ class PrivacyBudget:
     def label(self) -> str:
         """Short human-readable label for charts and reports."""
         if not self.enabled or self.epsilon is None:
+            # Label shown on results: differential privacy was off for this run.
             return "DP off (baseline)"
         return f"ε={self.epsilon:.2f}, δ={self.delta:g}" if self.delta else f"ε={self.epsilon:.2f}"
 
@@ -70,4 +71,5 @@ class NullPrivacyAccountant:
     """
 
     def current_budget(self) -> PrivacyBudget:
+        # Default accountant: no DP (P3's real accountant can be plugged in instead).
         return PrivacyBudget(enabled=False)

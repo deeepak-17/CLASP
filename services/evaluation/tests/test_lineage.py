@@ -12,6 +12,7 @@ def _rounds() -> list[dict]:
     return [read_json(root / "round1_manifest.json"), read_json(root / "round2_d3_manifest.json")]
 
 
+# On the real round manifests: the expected number of adapters and links.
 def test_real_rounds_graph_shape() -> None:
     lineage = build_lineage(_rounds())
     kinds = [n["kind"] for n in lineage["nodes"]]
@@ -19,6 +20,7 @@ def test_real_rounds_graph_shape() -> None:
     assert lineage["rounds"] == [1, 2]
 
 
+# Round 2 clients are linked to the registry cluster adapter they trained on (D3).
 def test_round_two_clients_trained_on_the_registry_version() -> None:
     lineage = build_lineage(_rounds())
     nodes = {n["id"]: n for n in lineage["nodes"]}

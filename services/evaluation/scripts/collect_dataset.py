@@ -131,12 +131,15 @@ def _render_report(result, config) -> MarkdownReport:
 
 
 def main(args: argparse.Namespace) -> int:
+    # [Step 1] Read the YAML config (projects, tags, filters).
     config = load_corpus_config(args.config)
     if args.mode:
         config = replace(config, acquisition=replace(config.acquisition, mode=args.mode))
         _LOG.info("Acquisition mode overridden to '%s'", args.mode)
 
+    # [Step 1] Create the collector; it builds the git acquirer and the file selector.
     collector = CorpusCollector(config)
+    # [Step 1] Start collection.
     result = collector.collect(dry_run=args.dry_run)
     manifest = result.manifest
     paths = project_paths()

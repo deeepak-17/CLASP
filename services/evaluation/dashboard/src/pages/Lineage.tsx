@@ -37,6 +37,7 @@ function NodeCard({ node, selected, onSelect }: { node: LineageNode; selected: b
 }
 
 export function Lineage() {
+  // [Step 7] Adapter lineage page.
   const state = useFeed("lineage.json", isLineageFeed, "dashboard/src/lib/lineage.ts");
   const [selected, setSelected] = useState<string | null>(null);
   if (state.status === "loading") return <LoadingState />;
@@ -45,6 +46,7 @@ export function Lineage() {
     return <AbsentFeedState file="results/lineage.json" command="python scripts/export_lineage.py" />;
 
   const feed = state.data;
+  // Lay the adapters out in columns: each round's clients, then clusters, then composites.
   const columns = lineageColumns(feed);
   const current = feed.nodes.find((n) => n.id === selected) ?? null;
   // Clicking an adapter shows the edges pointing into it (what it was built from).

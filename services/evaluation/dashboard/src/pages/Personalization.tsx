@@ -9,6 +9,7 @@ const signed = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(3)}`;
 
 function reductionByClient(feed: PersonalizationFeed): Record<string, number | string>[] {
   const rows = new Map<string, Record<string, number | string>>();
+  // Chart data: perplexity reduction (base - composite) per client, per round.
   for (const round of feed.rounds) {
     for (const c of round.clients) {
       const row = rows.get(c.client_id) ?? { client: shortClient(c.client_id) };
@@ -22,6 +23,7 @@ function reductionByClient(feed: PersonalizationFeed): Record<string, number | s
 }
 
 export function Personalization() {
+  // [Step 7] Personalization page.
   const state = useFeed("personalization.json", isPersonalizationFeed, "dashboard/src/lib/personalization.ts");
   if (state.status === "loading") return <LoadingState />;
   if (state.status === "error") return <ErrorState message={state.message} />;
@@ -50,6 +52,7 @@ export function Personalization() {
       <div className="tile-row">
         <StatTile
           label={`Clients improved, round ${last.round}`}
+          // [Step 7] Tile: clients improved.
           value={`${last.summary.n_improved} / ${last.summary.n_clients}`}
           hint="composite below base perplexity"
         />

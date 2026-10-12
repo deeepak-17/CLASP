@@ -68,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _check_benchmark(name: BenchmarkName, config, *, limit: int | None, timeout: float, sandbox: str):
+    # Pick the HumanEval or MBPP adapter, then load its real tasks (164 / 392).
     adapter = build_adapter(name, config)
     tasks: list[EvalTask] = adapter.load_tasks(limit=limit)
 
@@ -75,13 +76,18 @@ def _check_benchmark(name: BenchmarkName, config, *, limit: int | None, timeout:
     failures: list[tuple[str, str]] = []
 
     with Stopwatch(name.value) as watch:
+        # For every task, run the benchmark's OFFICIAL correct answer — no model involved.
         for task in tasks:
+            # A task with no recorded correct answer is reported as a failure, never skipped silently.
             if task.canonical_solution is None:
                 failures.append((task.task_id, "no canonical_solution recorded for this task"))
                 outcomes.append(TaskOutcome(task_id=task.task_id, benchmark=name, completions=[], passed=[False]))
                 continue
+            # Program = prompt + correct answer + the benchmark's own tests.
             program = adapter.assemble_program(task, task.canonical_solution)
+            # Run it exactly the way model answers are run (same sandbox, same pass rule).
             outcome = execute_program(program, timeout_seconds=timeout, sandbox=sandbox)
+            # A correct answer that fails here would mean the scorer itself is broken.
             if not outcome.passed:
                 failures.append((task.task_id, outcome.stderr_tail[-300:]))
             outcomes.append(
@@ -93,6 +99,7 @@ def _check_benchmark(name: BenchmarkName, config, *, limit: int | None, timeout:
                 )
             )
 
+    # pass@1 over all tasks: must come out as 1.0 when every correct answer passes.
     aggregate = aggregate_pass_at_k(outcomes, [1])
     return {
         "benchmark": name,
@@ -107,6 +114,7 @@ def main(args: argparse.Namespace) -> int:
     config = load_evaluation_config(args.config)
     paths = project_paths()
 
+    # Check both benchmarks (HumanEval and MBPP) unless one is named with --benchmark.
     benchmarks = [parse_benchmark_name(args.benchmark)] if args.benchmark else list(BenchmarkName)
     results = [_check_benchmark(b, config, limit=args.limit, timeout=args.timeout, sandbox=args.sandbox) for b in benchmarks]
 
@@ -119,6 +127,7 @@ def main(args: argparse.Namespace) -> int:
     ]
     all_ok = True
     for result in results:
+        # PASS only if every correct answer passed (pass@1 = 1.0, no failures).
         ok = result["pass_at_1"] == 1.0 and not result["failures"]
         all_ok = all_ok and ok
         lines.append(
@@ -131,6 +140,7 @@ def main(args: argparse.Namespace) -> int:
         if len(result["failures"]) > 5:
             lines.append(f"        ... and {len(result['failures']) - 5} more")
     lines.append("")
+    # Overall verdict: the scorer can be trusted only if both benchmarks PASS.
     lines.append(
         "  Verdict: "
         + (
@@ -168,6 +178,7 @@ def main(args: argparse.Namespace) -> int:
         lines.append("")
 
     emit(lines)
+    # Non-zero exit code on any failure, so CI or a script can detect a broken scorer.
     return EXIT_OK if all_ok else EXIT_FAILURE
 
 

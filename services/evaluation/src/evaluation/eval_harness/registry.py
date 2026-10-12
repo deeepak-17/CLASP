@@ -39,6 +39,7 @@ def build_adapter(name: BenchmarkName, config: EvaluationConfig) -> BenchmarkAda
 
 def build_adapters(config: EvaluationConfig) -> list[BenchmarkAdapter]:
     """Instantiate an adapter for every benchmark enabled in config."""
+    # One adapter for every benchmark enabled in configs/evaluation.yaml.
     adapters = [build_adapter(name, config) for name in config.enabled_benchmarks()]
     if not adapters:
         raise EvaluationError(
@@ -75,6 +76,7 @@ def build_inference_client(config: EvaluationConfig) -> EdgeInferenceClient:
     """
     backend = config.backend
 
+    # mock = deterministic fake model (tests, no GPU); edge = P1's real model.
     if backend.kind == "mock":
         _LOG.info("Using MockEdgeInferenceClient (offline, deterministic)")
         return MockEdgeInferenceClient(model_id=backend.model_id)
@@ -86,6 +88,7 @@ def build_inference_client(config: EvaluationConfig) -> EdgeInferenceClient:
                 "Week 3. Register a factory via eval_harness.registry.register_edge_client_factory, "
                 "or set backend.kind='mock' in configs/evaluation.yaml."
             )
+        # Build the real model client registered by edge_transformers_adapter.py.
         return _EDGE_CLIENT_FACTORY(backend)
 
     raise EvaluationError(f"Unsupported backend.kind '{backend.kind}'")  # pragma: no cover

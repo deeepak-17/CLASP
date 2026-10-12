@@ -119,6 +119,7 @@ def build_lineage(manifests: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                         cluster=cluster,
                         round=round_no,
                     )
+                    # [Step 6] Edge: client → cluster it was aggregated into.
                     graph.edge(_client_node(round_no, member), node_id, "aggregated_into")
 
         for client_id, block in sorted(clients.items()):
@@ -129,6 +130,7 @@ def build_lineage(manifests: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             trained_on = "base"
             if d3:
                 trained_on = f"base + {d3['alpha']}·{graph.nodes[cluster_ids[cluster]]['label']}"
+                # [Step 6] Edge: cluster → client trained on it (D3).
                 graph.edge(cluster_ids[cluster], client_node, "trained_on")
             graph.node(
                 client_node,

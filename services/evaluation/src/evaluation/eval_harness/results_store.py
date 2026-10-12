@@ -97,6 +97,7 @@ class ResultRecord:
     harness_version: str | None = None
 
     def __post_init__(self) -> None:
+        # Every record says whether it came from a real model (REAL) or the mock (DEMO_TEST).
         if self.provenance not in ("REAL", "DEMO_TEST"):
             raise ResultsStoreError(f"provenance must be REAL or DEMO_TEST, got {self.provenance!r}")
 
@@ -139,6 +140,7 @@ class ResultRecord:
 
     def validate(self) -> None:
         """Raise if the nested ``eval_result`` does not satisfy its contract."""
+        # Check the record against the EvalResult JSON schema before it can be saved.
         report = validate_document(
             "eval_result", self.eval_result.to_dict(), document_name=f"ResultRecord({self.eval_result.run_id})"
         )
@@ -179,6 +181,7 @@ def load_results_index(path: Path | str | None = None) -> ResultsIndex:
     """Load ``results.json``, returning an empty index if it does not exist yet."""
     target = Path(path) if path else default_results_path()
     if not target.is_file():
+        # No results.json yet -> start an empty index.
         return ResultsIndex(index_version=RESULTS_INDEX_VERSION, updated_at=utc_timestamp())
     return ResultsIndex.from_dict(read_json(target))
 
@@ -192,10 +195,12 @@ def append_results(records: list[ResultRecord], path: Path | str | None = None) 
     """
     target = Path(path) if path else default_results_path()
     for record in records:
+        # [Step 6] Schema-check every record before writing.
         record.validate()
 
     index = load_results_index(target)
     # Key = (run_id, benchmark): re-running the same run updates its record instead of adding a copy.
+    # [Step 6] Replace a re-run, append a new run.
     by_key = {(r.eval_result.run_id, r.eval_result.benchmark.value): i for i, r in enumerate(index.records)}
     for record in records:
         key = (record.eval_result.run_id, record.eval_result.benchmark.value)
@@ -206,6 +211,7 @@ def append_results(records: list[ResultRecord], path: Path | str | None = None) 
             index.records.append(record)
 
     index.updated_at = utc_timestamp()
+    # [Step 6] Atomic write of results/results.json.
     write_json(target, index.to_dict())
     _LOG.info(
         "results.json: %d record(s) total (%d added/updated this run) -> %s",

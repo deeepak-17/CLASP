@@ -38,6 +38,7 @@ class MarkdownReport:
 
     def __post_init__(self) -> None:
         self._blocks.append(f"# {self.title}")
+        # Every report starts with its title and generation time.
         header = [f"**Generated:** {utc_timestamp()}"]
         if self.subtitle:
             header.insert(0, f"_{self.subtitle}_")
@@ -67,6 +68,7 @@ class MarkdownReport:
         if not rows:
             self._blocks.append("_No rows._")
             return self
+        # Build a Markdown table: header row, separator, one row per item.
         head = "| " + " | ".join(headers) + " |"
         sep = "| " + " | ".join("---" for _ in headers) + " |"
         body = ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
@@ -91,4 +93,5 @@ class MarkdownReport:
 
     def write(self, path: Path | str) -> Path:
         """Write the report to ``path`` and return the resolved path."""
+        # Write the finished report into reports/ atomically.
         return atomic_write_text(path, self.render())
