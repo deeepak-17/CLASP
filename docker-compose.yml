@@ -77,10 +77,7 @@ services:
     environment:
       CLASP_REGISTRY_URL: http://registry:8004
       CLASP_CLUSTER_URL: http://cluster:8002
-      CLASP_EDGE_ARTIFACTS: /artifacts
     volumes:
-      # Committed edge manifests (numbers shown on the panel pages), read-only.
-      - ./services/edge/artifacts:/artifacts:ro
       # Evaluation's measured results, which the live panel's Promote sends
       # (demo_ui/evidence.py): round manifests + HumanEval anchors + noise band.
       - ./experiments/w12-integration/results:/app/experiments/w12-integration/results:ro

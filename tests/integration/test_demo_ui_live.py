@@ -147,3 +147,19 @@ def test_a_promote_leaves_the_cluster_serving_the_new_merge(stack, tmp_path, mon
     assert body["decision"]["action"] == "promote" and "cluster_restore" not in body
     listing = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]["web"]
     assert listing["active_sha256"] == v2["sha256"]
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/api/demo/send-to-cluster/web"),        # uploaded synthetic tensors
+    ("POST", "/api/demo/promote/cluster-web"),        # sent hardcoded metrics
+    ("POST", "/api/demo/demonstrate-rollback/cluster-web"),  # posted a made-up candidate
+    ("POST", "/api/demo/publish-to-registry/web"),
+    ("GET", "/api/edge/clients"),
+    ("GET", "/static/page1.html"),
+    ("GET", "/static/page2.html"),
+    ("GET", "/static/page3.html"),
+])
+def test_the_panel_has_no_synthetic_or_placeholder_paths(method, path):
+    with TestClient(panel.app) as ui:
+        assert ui.request(method, path).status_code == 404
+        assert b"page1.html" not in ui.get("/").content

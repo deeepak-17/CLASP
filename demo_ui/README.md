@@ -1,52 +1,33 @@
-# CLASP Panel Demo UI
+# CLASP live round panel
 
-**Not a CLASP service.** This is presentation scaffolding for the Phase II
-Panel Review (P4/Deepak), isolated under `demo_ui/` on purpose — it is never
-imported by `services/`, never in the Docker Compose stack, and breaks nothing
-if deleted after the panel.
+**Not a CLASP service.** The page laptop A shows during the multi-laptop demo
+(P4/Deepak), isolated under `demo_ui/` on purpose — it is never imported by
+`services/` and breaks nothing if deleted.
 
 ## What it actually does
 
-Three static pages, one thin FastAPI backend (`server.py`) that:
+One page (`static/live.html`) and a thin FastAPI backend (`server.py`):
 
-1. **Reads real, already-committed artifacts** for anything that can't run
-   live in a browser demo — Edge's real training/composition/eval numbers
-   need a GPU + the base model, neither available at a panel:
-   `services/edge/artifacts/round1/*/manifest.json`,
-   `services/edge/artifacts/round1_out/round_manifest.json`,
-   `services/edge/artifacts/clusters/*/aggregate_manifest.json`.
-2. **Proxies straight through** to the real Cluster (`:8002`) and Registry
-   (`:8004`) FastAPI apps for everything that *can* run live. No aggregation
-   or promotion logic is reimplemented — every proxied call hits the actual
-   service code.
-3. **Orchestrates** the multi-step demo actions (send-to-cluster,
-   publish-to-registry, promote) by sequencing the same real HTTP calls a
-   real Edge client would make. Business logic stays in `cluster`/`registry`;
-   this layer only sequences requests and reads files.
+1. **Drives the real services** through their own HTTP APIs (`/api/live/*`):
+   register each cluster's members, aggregate, publish to the registry,
+   promote. Every number and tensor comes from them or from the edge laptops,
+   which upload their own trained adapters (`edge.webui`).
+2. **Promote sends measured evaluation** (`evidence.py`), never constants, and
+   says where each number came from. On a ROLLBACK it tells the cluster to
+   serve the restored version again, so the edges' next round builds on it.
+3. **Proxies** `/api/cluster/*` and `/api/registry/*` straight through, for
+   inspection.
 
-## Architecture
+The earlier panel pages and their `/api/demo/*` routes (synthetic tensors,
+hardcoded promote metrics, a staged regression) were removed.
 
 ```
-Browser (3 static pages, vanilla JS)
-        │  fetch("/api/...")
-        ▼
-demo_ui/server.py  (:8010 — this demo layer, not a CLASP service)
-        │
-        ├── /api/edge/*       → reads real committed JSON artifacts (no live Edge)
-        ├── /api/cluster/*    → proxies, unchanged, to cluster.server:app   (:8002)
-        ├── /api/registry/*   → proxies, unchanged, to registry.app:app    (:8004)
-        └── /api/demo/*       → orchestrates real calls to :8002 / :8004
+edge laptops (edge.webui) ──upload──► cluster :8002 ◄──┐
+                                                        │ /api/live/*
+browser ──► demo_ui/server.py :8010 ────────────────────┤
+                                                        │
+                                       registry :8004 ◄─┘
 ```
-
-## Known, load-bearing limitation
-
-`cluster.server`'s real implementation holds **one active aggregate at a
-time** (one process, one cluster, one upload buffer — by its own design, see
-`_ClusterState`'s docstring). This demo layer works within that: it verifies
-(via `GET /aggregate/manifest`) that the aggregate you're about to publish
-actually came from the cluster you're publishing it as, and refuses (409) if
-not. **Always finish one cluster fully — Send → Publish → Promote — before
-starting the other.**
 
 ## Setup
 
@@ -70,5 +51,6 @@ CLASP_REGISTRY_DATA=./_demo_data/registry .venv-demo/bin/uvicorn registry.app:ap
 .venv-demo/bin/uvicorn demo_ui.server:app --port 8010
 ```
 
-Open `http://localhost:8010/` for the live multi-laptop round (`static/live.html`; edges upload from their own laptops, see `docs/multi-laptop-demo.md`); the three panel pages are linked from it. See `RUNBOOK.md` for the
-full pre-demo checklist and presentation script.
+Open `http://localhost:8010/` for the live multi-laptop round; the edges upload from
+their own laptops (see `docs/multi-laptop-demo.md`). `python scripts/run_services.py --ui`
+starts all three in one go.
