@@ -37,6 +37,7 @@ from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
+from security.validation import detect_poisoning, validate_adapter_integrity
 
 from cluster.adapter_format import (
     DEFAULT_ALPHA,
@@ -650,6 +651,15 @@ def _upload_locked(
         )
     except AdapterFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # P3's integrity check (security.validation) on top of the format check
+    # above: a LoRA rank above D8's cap, absurd tensor norms, NaN / Inf. A
+    # broken or hostile adapter stops here, before it can reach an aggregate.
+    integrity = validate_adapter_integrity(state_dict)
+    if not integrity.valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"refused by security.validation: {'; '.join(integrity.errors[:5])}",
+        )
 
     # One round = one (rank, alpha, modules, layers) structure: reject a
     # mismatching upload now rather than failing the whole aggregate later.
@@ -852,11 +862,20 @@ def _aggregate_locked(
         )
         for client_id in client_ids
     ]
+    # P3's poisoning screen (security.validation.detect_poisoning): with 3+
+    # clients, an update whose norm is a robust outlier from the round's is
+    # left out and named, before the straggler policy weighs the rest.
+    flagged = [updates[i].client_id for i in
+               detect_poisoning([u.adapter.to_state_dict() for u in updates])]
+    if flagged:
+        updates = [u for u in updates if u.client_id not in flagged]
     # ``min_fraction`` is a fraction of the clients the round *expected*, not of
     # the uploads that happened to arrive (that would always be 100%). Never
     # below what actually arrived.
-    expected_n = max(len(updates), expected or 0)
+    expected_n = max(len(updates) + len(flagged), expected or 0)
     outcome = apply_policy(updates, policy, expected=expected_n)
+    outcome.skipped.update({c: "poisoning_suspect: norm outlier (security.validation."
+                               "detect_poisoning)" for c in flagged})
     if not outcome.accepted or not outcome.quorum_met:
         # keep the buffer so the caller can retry once more clients arrive
         raise HTTPException(
@@ -902,6 +921,11 @@ def _aggregate_locked(
         "rank": rank,
         "epsilon": epsilon,
         "update_rule": "fedprox_cumulative" if start_broadcast is not None else "average",
+        "screening": {
+            "uploads": "security.validation.validate_adapter_integrity",
+            "round": "security.validation.detect_poisoning (robust norm outliers, 3+ clients)",
+            "flagged": sorted(flagged),
+        },
     }
     if start_broadcast is not None:
         alpha = float(state.uploads[used_ids[0]].composition_alpha)
