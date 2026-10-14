@@ -22,7 +22,7 @@ watches the live round in `demo_ui` and the results in the evaluation dashboard.
 | 5 | Bind `0.0.0.0` outside Docker | `scripts/run_services.py` | Done (`--ui`, `--mtls-dir`, prints LAN URLs) |
 | 6 | Uploaded client IDs in `GET /clusters` | `uploaded_clients`, `aggregated_clients` | Done |
 | 7 | Live panel on per-cluster endpoints | `demo_ui` `/` (`static/live.html`, `/api/live/*`) | Done |
-| 8 | Evaluation → Promote | `demo_ui/evidence.py` | Done; see "Promote" below |
+| 8 | Evaluation → Promote | `scripts/evaluate_candidate.py`, `demo_ui/evidence.py` | Done; the candidate itself is evaluated (2026-10-14) |
 | 9 | Cluster TLS switched on | `python -m cluster.serve` | Done; uploads bound to the client cert's CN |
 | 10 | LAN certificates | `scripts/make_dev_certs.sh` (`CLASP_LAN_IPS`, `CLASP_EDGE_CLIENTS`) | Done |
 | 11 | Round into the React dashboard | `scripts/feed_dashboard.py`, `results/rounds.json` | Done for round 1 |
@@ -82,37 +82,46 @@ python scripts/run_services.py --ui                     # add --mtls-dir .runtim
 
 Open `http://localhost:8010` and press **1 · Register clusters and members**.
 
-Laptops B and C: `.\start_edge_<client>.ps1`, open `http://127.0.0.1:8020`, pick the
-adapter, press **Upload to cluster**. Laptop A's panel shows each client arrive.
+Laptops B and C: `.\start_edge_<client>.ps1`, open `http://127.0.0.1:8020`.
 
-Then, per cluster on laptop A: **Aggregate (SVD)** → **Publish** → **Promote**. The
-results are on the dashboard at `http://<A>:8005`.
+One round, end to end (2026-10-14 build):
+
+1. **Train** on B and C ("Train a new adapter here first"): DP-SGD (ε ≤ 8) with the
+   FedProx proximal term (μ 0.01, `--fedprox-mu`), 512-token blocks. In round 0 there
+   is no merged adapter yet, so it trains on the bare base.
+2. **Send**. Laptop A's panel shows each laptop arrive. Every upload passes P3's
+   integrity check (`security.validation`); a round of 3+ is screened for poisoned
+   updates.
+3. **Merge** per cluster on laptop A. Round 0 averages the full adapters. From round 1
+   on, each upload names the merged adapter it trained on (sha256) and the cluster adds
+   the round's updates onto it — FedProx's server step,
+   `C_{N+1} = C_N + (1/α)·Σ w_k R_k` — refusing anything trained on another adapter
+   (409 stale_adapter). The panel says which rule ran and how ε composes.
+4. **Publish** to the registry (`cluster-<id>`, a new immutable version).
+5. **Back on the edges**: each page pulls the merged adapter laptop A serves (compared by
+   sha256) and the next training starts from it.
+6. **Evaluate** on laptop A: `scripts/evaluate_candidate.py` scores the published version
+   and the one before it on laptop A's GPU, each as base + α·cluster: in-project
+   completion on the noise-band client's held-out files and the 20-problem HumanEval
+   guard on P5's executor. Several minutes; results are cached by sha256. It runs in
+   demo_ui's own environment, so start laptop A with `run_services.py` from the `.venv`
+   (torch + CUDA); the docker demo-ui image has no GPU stack.
+7. **Promote**: the registry's D5 rule on those measurements of that exact version. On a
+   ROLLBACK the cluster serves the restored version again, the edges pull it, and the
+   next round builds on it.
+
+The results are on the dashboard at `http://<A>:8005`.
 
 ## Promote: what the guide will see
 
-Promote sends numbers evaluation measured, never constants, and the panel prints
-where each came from:
+Promote sends only numbers measured on the version it judges, and the panel prints where
+each came from (version, sha256, client, examples). A version nobody evaluated is not
+judged: the panel asks for Evaluate first. `CLASP_EVAL_EVIDENCE` still lets an operator
+supply an evaluation file explicitly (format in `demo_ui/evidence.py`). The noise band
+is P5's `noise_report.json` (0.0, deterministic decoding).
 
-- In-project edit similarity for candidate and baseline (`evaluation.completion`,
-  60 held-out examples, greedy), from the newest `scripts/demo_round.py` round
-  manifest. Those were measured on round 1's aggregate (2026-09-06), not on the one
-  built live, because scoring the 1.3B model needs a GPU. The panel says so.
-- HumanEval guard: evaluation's measured base pass@1 (0.50 on 20 problems). No
-  candidate has been scored, so the candidate guard is missing.
-- Noise band: P5's `noise_report.json` (0.0, deterministic decoding).
-
-D5 treats a missing guard as a failed one, so **the registry currently answers
-ROLLBACK for both clusters**, even though edit similarity improved (+0.0133 web,
-+0.0023 scientific). That is the honest answer. Two ways to change it:
-
-- Evaluation scores a candidate HumanEval anchor
-  (`services/evaluation/results/humaneval_guard/cluster-<id>_anchor.json`).
-- A GPU laptop re-scores the live aggregate and writes a file that
-  `CLASP_EVAL_EVIDENCE` points at (format in `demo_ui/evidence.py`).
-
-D5 needs a previous version to roll back to, so Promote is enabled once a cluster
-has two versions. Run one round before the guide arrives, or use the registry
-volume from the rehearsal.
+D5 needs a previous version to compare with, so Evaluate and Promote are enabled once a
+cluster has two versions.
 
 ## Verified (2026-10-09, one Windows laptop with an RTX 2050, LAN address 10.214.204.34)
 
