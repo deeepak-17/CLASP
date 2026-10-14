@@ -220,3 +220,16 @@ def test_adapter_on_a_cluster_adapter_from_elsewhere_is_not_sent(cluster_url, tm
     out = upload.upload_adapter(a, cluster_url=cluster_url, allow_foreign_base=True,
                                 log=lambda *_: None)
     assert out["base"] is None
+
+
+def test_a_bare_base_adapter_after_a_merge_is_not_sent(cluster_url, tmp_path):
+    """Review #1: once the cluster serves a merged adapter, a full adapter trained on
+    the bare base would replace it (averaged), dropping the earlier rounds."""
+    _merge_round(cluster_url, tmp_path)
+    late = _adapter(tmp_path / "late", "client-flask", seed=50)
+    with pytest.raises(upload.UploadError, match="bare base") as err:
+        upload.upload_adapter(late, cluster_url=cluster_url, log=lambda *_: None)
+    assert err.value.status is None and "--allow-reset" in err.value.hint
+    out = upload.upload_adapter(late, cluster_url=cluster_url, allow_reset=True,
+                                log=lambda *_: None)
+    assert out["base"] is None

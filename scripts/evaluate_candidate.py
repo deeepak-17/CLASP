@@ -49,13 +49,26 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def pick_versions(listing: Dict) -> Tuple[Dict, Dict]:
-    """(candidate, baseline): the registry's active version and the one before it."""
+def payload_header(blob: bytes) -> Dict:
+    """The ``__metadata__`` of a safetensors payload (update_rule, base_sha256, ...)."""
+    return json.loads(blob[8:8 + int.from_bytes(blob[:8], "little")]).get("__metadata__") or {}
+
+
+def pick_versions(listing: Dict, parent_sha256: str | None = None) -> Tuple[Dict, Dict]:
+    """(candidate, baseline): the registry's active version and the one it was
+    built on (its ``base_sha256``); without one, the version before it. A
+    rolled-back version in between is never the baseline."""
     active = listing.get("active")
     if active is None:
         raise SystemExit("the registry has no active version for this cluster: publish first")
     versions = sorted(listing["versions"], key=lambda v: v["ref"]["version"])
     cand = next(v for v in versions if v["ref"]["version"] == active)
+    if parent_sha256:
+        parent = next((v for v in versions if v["sha256"] == parent_sha256), None)
+        if parent is None:
+            raise SystemExit(f"v{active} was built on {parent_sha256[:12]}, which is not a "
+                             f"version of this adapter in the registry")
+        return cand, parent
     earlier = [v for v in versions if v["ref"]["version"] < active]
     if not earlier:
         raise SystemExit(f"v{active} has no previous version to compare with (D5): publish a "
@@ -208,7 +221,9 @@ def main(argv=None) -> int:
     t0 = time.time()
 
     rc = _registry(args.registry_url)
-    cand, base = pick_versions(rc.list_versions(name))
+    listing = rc.list_versions(name)
+    blob, _ = rc.fetch_verified(name, listing.get("active"))
+    cand, base = pick_versions(listing, payload_header(blob).get("base_sha256"))
     log(f"{name}: candidate v{cand['ref']['version']} ({cand['sha256'][:12]}) against "
         f"baseline v{base['ref']['version']} ({base['sha256'][:12]}), alpha {args.alpha:g}")
 

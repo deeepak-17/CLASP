@@ -174,7 +174,8 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                    num_examples: Optional[int] = None, round_id: Optional[int] = None,
                    seed: Optional[int] = None, http: Optional[requests.Session] = None,
                    timeout: float = transport.DEFAULT_UPLOAD_TIMEOUT,
-                   allow_foreign_base: bool = False, log=print) -> Dict:
+                   allow_foreign_base: bool = False, allow_reset: bool = False,
+                   log=print) -> Dict:
     """Upload one adapter directory; returns the cluster's answer plus what was sent."""
     adapter_dir = Path(adapter_dir)
     if not (adapter_dir / "adapter_model.safetensors").exists():
@@ -198,8 +199,17 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                      "adapter anyway") from exc
         base = None
 
-    target = resolve_target(list_clusters(http, cluster_url), client_id, cluster_id,
-                            manifest_cluster(manifest))
+    clusters = list_clusters(http, cluster_url)
+    target = resolve_target(clusters, client_id, cluster_id, manifest_cluster(manifest))
+    served = clusters[target.cluster_id].get("active_sha256")
+    if base is None and served and not allow_reset:
+        # A full adapter is averaged as one: after a merge it would replace the
+        # merged adapter and drop every earlier round (FedProx builds on it).
+        raise UploadError(
+            f"{adapter_dir} was trained on the bare base, but {target.cluster_id!r} already "
+            f"serves merged adapter {served[:12]}; sending it would replace that adapter",
+            hint="pull the merged adapter and train on top of it (the edge page's default); "
+                 "--allow-reset sends it anyway")
     rnd = target.round_id if round_id is None else round_id
     log(f"edge.upload  {client_id} -> cluster {target.cluster_id!r} round {rnd} "
         f"({target.how}) at {cluster_url}")
@@ -337,6 +347,8 @@ def main(argv=None) -> int:
     ap.add_argument("--allow-foreign-base", action="store_true",
                     help="send an adapter trained on a cluster adapter that did not come from "
                          "this cluster, as a full adapter")
+    ap.add_argument("--allow-reset", action="store_true",
+                    help="send a bare-base adapter even though the cluster has merged rounds")
     ap.add_argument("--json", action="store_true", help="print the result as JSON")
     args = ap.parse_args(argv)
     try:
@@ -345,6 +357,7 @@ def main(argv=None) -> int:
                              cluster_id=args.cluster, num_examples=args.num_examples,
                              round_id=args.round, http=http,
                              allow_foreign_base=args.allow_foreign_base,
+                             allow_reset=args.allow_reset,
                              # with --json, stdout carries only the JSON
                              log=(lambda m: print(m, file=sys.stderr)) if args.json else print)
     except UploadError as exc:

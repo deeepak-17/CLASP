@@ -111,11 +111,15 @@ def noise_band(cluster_id: str, results: Path = EVAL_RESULTS) -> Dict:
             "note": "no measured band; 0.0 means any improvement counts"}
 
 
-def _from_override(cluster_id: str) -> Optional[Dict]:
+def _from_override(cluster_id: str, version: Optional[int] = None,
+                   sha256: Optional[str] = None) -> Optional[Dict]:
     path = os.environ.get("CLASP_EVAL_EVIDENCE")
     if not path:
         return None
     doc = _read(Path(path))
+    if version is not None and ((doc or {}).get("candidate_version") != version
+                                or (doc or {}).get("candidate_sha256") != sha256):
+        return None  # written for another version: not this candidate's evidence
     entry = ((doc or {}).get("clusters") or {}).get(cluster_id)
     if not entry:
         return None
@@ -187,7 +191,7 @@ def evidence_for(cluster_id: str, version: Optional[int] = None,
     With ``version`` (the candidate Promote is about to judge) only that
     version's own evaluation — or an explicit ``CLASP_EVAL_EVIDENCE`` — will do.
     """
-    override = _from_override(cluster_id)
+    override = _from_override(cluster_id, version, sha256)
     if override:
         return override
     if version is not None:

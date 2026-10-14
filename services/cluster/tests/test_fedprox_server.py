@@ -342,3 +342,22 @@ def test_restore_refuses_another_clusters_version(monkeypatch):
     missing = client.post("/clusters/web/adapters/active/restore",
                           json={"adapter_name": "cluster-web", "version": 9})
     assert missing.status_code == 502 and "404" in missing.text
+
+
+def test_restore_only_talks_to_the_configured_registry(monkeypatch):
+    """Review #3: a caller cannot point the cluster at a registry of its choosing."""
+    _two_rounds(monkeypatch)
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1,
+                          "registry_url": "http://evil.example:9"})
+    assert r.status_code == 422 and "registry" in r.text
+
+
+def test_restored_tensors_pass_the_security_screen(monkeypatch):
+    registry, _, active1 = _two_rounds(monkeypatch)
+    monkeypatch.setattr(server, "validate_adapter_integrity",
+                        lambda sd: type("R", (), {"valid": False, "errors": ["norm too big"]})())
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1})
+    assert r.status_code == 502 and "security" in r.text
+    assert server._clusters["web"].active.sha256 == active1["sha256"]

@@ -1424,6 +1424,10 @@ def _broadcast_from_payload(
         raise HTTPException(status_code=502, detail="registry payload carries no adapter_config")
     cfg = json.loads(md["adapter_config"])
     tensors = load(blob)
+    integrity = validate_adapter_integrity(tensors)  # same screen as an upload
+    if not integrity.valid:
+        raise HTTPException(status_code=502, detail=f"restored adapter refused by "
+                            f"security.validation: {'; '.join(integrity.errors[:5])}")
     layers = {int(m.group(1)) for k in tensors if (m := re.search(r"layers\.(\d+)\.", k))}
     adapter = LoRAAdapter.from_state_dict(
         tensors, rank=int(cfg["r"]), alpha=float(cfg["lora_alpha"]),
@@ -1464,6 +1468,12 @@ def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, o
     from cluster.tls import outbound_ssl_context
 
     state = _cluster(cluster_id)
+    configured = _os.environ.get("CLASP_REGISTRY_URL", DEFAULT_REGISTRY_URL).rstrip("/")
+    if body.registry_url.rstrip("/") != configured:
+        # This endpoint changes what every edge trains on: it only reads the
+        # registry the cluster itself is configured with (no caller-chosen URL).
+        raise HTTPException(status_code=422,
+                            detail=f"restore reads only the configured registry ({configured})")
     name = body.adapter_name or cluster_id
     base = f"{body.registry_url.rstrip('/')}/adapters/{name}/versions/{body.version}"
     tls = outbound_ssl_context(_os.environ) if body.registry_url.startswith("https") else None

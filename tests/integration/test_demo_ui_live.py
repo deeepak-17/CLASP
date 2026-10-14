@@ -52,6 +52,7 @@ def stack(tmp_path, monkeypatch):
     cluster_server._reset_clusters()
     servers = [_serve(registry_app.app), _serve(cluster_server.app)]
     registry_url, cluster_url = servers[0][2], servers[1][2]
+    monkeypatch.setenv("CLASP_REGISTRY_URL", registry_url)  # the cluster's configured registry
     monkeypatch.setattr(panel, "CLUSTER_BASE", cluster_url)
     monkeypatch.setattr(panel, "REGISTRY_BASE", registry_url)
     monkeypatch.setattr(panel, "LIVE_CLUSTERS", {"web": list(CLIENTS)})

@@ -253,6 +253,17 @@ async def live_state() -> dict:
     return {"clusters": out}
 
 
+async def _parent_version(client: httpx.AsyncClient, name: str, reg: dict) -> int | None:
+    """The registry version the active one was built on (its header's base_sha256)."""
+    r = await _send(client, "GET", f"{REGISTRY_BASE}/adapters/{name}/versions/{reg['active']}/file")
+    if r.status_code != 200:
+        return None
+    blob = r.content
+    md = json.loads(blob[8:8 + int.from_bytes(blob[:8], "little")]).get("__metadata__") or {}
+    parent = md.get("base_sha256")
+    return next((v["version"] for v in reg["versions"] if v["digest"] == parent), None)
+
+
 def _active_digest(reg: dict) -> str | None:
     return next((v["digest"] for v in reg["versions"] if v["version"] == reg["active"]), None)
 
@@ -396,12 +407,23 @@ async def live_promote(cluster_id: str) -> dict:
         decision = r.json()
         restore = None
         if decision.get("action") == "rollback":
+            # Back to the version the rejected one was built on: the registry's
+            # numeric "previous" can be an earlier rejected version.
+            target = decision["active_version_after"]
+            parent = await _parent_version(client, name, reg)
+            if parent is not None and parent != target:
+                rr = await _send(client, "POST", f"{REGISTRY_BASE}/adapters/{name}/restore",
+                                 json={"to_version": parent,
+                                       "reason": f"v{reg['active']} rejected; back to its parent"})
+                if rr.status_code == 200:
+                    target = parent
+                    decision = {**decision, "active_version_after": parent}
             # The registry repointed `active`; the edges pull from the cluster,
             # so it must serve the restored version too, or the next round
             # would build on the merge D5 just rejected.
             rr = await _send(client, "POST", f"{CLUSTER_BASE}/clusters/{cid}/adapters/active/restore",
                              json={"registry_url": REGISTRY_BASE, "adapter_name": name,
-                                   "version": decision["active_version_after"]})
+                                   "version": target})
             restore = rr.json() if rr.status_code == 200 else {
                 "error": f"cluster restore -> {rr.status_code}: {_detail(rr)}"}
     sent = {k: body["eval"][k] for k in ("in_project", "baseline_in_project", "guard",

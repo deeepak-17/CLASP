@@ -252,7 +252,8 @@ def _plain_round(url, root, round_id, seeds):
 
     for client, seed in zip(("client-flask", "client-requests"), seeds):
         upload.upload_adapter(_contract_adapter(root / f"r{round_id}", client, seed=seed),
-                              cluster_url=url, log=lambda _m: None)
+                              cluster_url=url, allow_reset=True,  # a fresh full round
+                              log=lambda _m: None)
     # rank-16 contract adapters at width 8: only the naive ablation can keep rank 16
     r = requests.post(f"{url}/clusters/web/aggregate", json={"aggregation": "naive"},
                       timeout=30)
