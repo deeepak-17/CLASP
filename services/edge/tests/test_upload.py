@@ -137,3 +137,86 @@ def test_cli(cluster_url, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["cluster_id"] == "web"
     assert upload.main(["--adapter", str(a), "--cluster-url", cluster_url, "--round", "9"]) == 1
     assert "409" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# FedProx under D3: a residual names the merged adapter it was trained on
+# --------------------------------------------------------------------------- #
+def _merge_round(url, tmp_path, cluster="web", clients=("client-flask", "client-requests")):
+    import requests
+
+    _register(url, cluster, list(clients))
+    for i, c in enumerate(clients):
+        upload.upload_adapter(_adapter(tmp_path / "r0", c, seed=10 + i, cluster=cluster),
+                              cluster_url=url, log=lambda *_: None)
+    r = requests.post(f"{url}/clusters/{cluster}/aggregate", json={}, timeout=60)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _residual(root, client, pulled: dict | None, *, seed, alpha=0.5, cluster="web"):
+    """A client adapter whose manifest says it was trained on top of ``pulled``."""
+    adapter = _adapter(root, client, seed=seed, cluster=cluster)
+    m = adapter.parent / "manifest.json"
+    d3 = {"alpha": alpha, "cluster_adapter": str(root / "somewhere")}
+    if pulled is not None:
+        d3["cluster_pull"] = pulled
+    m.write_text(json.dumps({**json.loads(m.read_text()), "d3": d3}), encoding="utf-8")
+    return adapter
+
+
+def test_pull_records_the_merged_adapters_digest(cluster_url, tmp_path):
+    import requests
+
+    merged = _merge_round(cluster_url, tmp_path)
+    info = upload.pull_cluster_adapter(tmp_path / "from_cluster", cluster_id="web",
+                                       cluster_url=cluster_url, log=lambda *_: None)
+    listing = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]["web"]
+    assert info["sha256"] == merged["sha256"] == listing["active_sha256"]
+    assert info["update_rule"] == "average"
+    on_disk = json.loads((Path(info["path"]) / "pull_manifest.json").read_text())
+    assert on_disk["sha256"] == merged["sha256"]
+    assert upload.pull_provenance(Path(info["path"]))["sha256"] == merged["sha256"]
+    assert upload.pull_provenance(tmp_path) is None
+
+
+def test_residual_upload_declares_its_base_and_is_accumulated(cluster_url, tmp_path):
+    import requests
+
+    _merge_round(cluster_url, tmp_path)
+    pulled = upload.pull_cluster_adapter(tmp_path / "from_cluster", cluster_id="web",
+                                         cluster_url=cluster_url, log=lambda *_: None)
+    out = upload.upload_adapter(_residual(tmp_path / "r1", "client-flask", pulled, seed=20),
+                                cluster_url=cluster_url, log=lambda *_: None)
+    assert out["base"] == {"cluster_id": "web", "round_id": 0, "sha256": pulled["sha256"],
+                           "alpha": 0.5}
+    r = requests.post(f"{cluster_url}/clusters/web/aggregate", json={}, timeout=60)
+    assert r.status_code == 200, r.text
+    manifest = requests.get(f"{cluster_url}/clusters/web/aggregate/manifest", timeout=10).json()
+    assert manifest["update_rule"] == "fedprox_cumulative"
+    assert manifest["base_sha256"] == pulled["sha256"]
+
+
+def test_residual_on_an_older_merge_is_refused_with_what_to_do(cluster_url, tmp_path):
+    _merge_round(cluster_url, tmp_path)
+    pulled = upload.pull_cluster_adapter(tmp_path / "from_cluster", cluster_id="web",
+                                         cluster_url=cluster_url, log=lambda *_: None)
+    old = dict(pulled, sha256="f" * 64)
+    with pytest.raises(upload.UploadError) as err:
+        upload.upload_adapter(_residual(tmp_path / "r1", "client-flask", old, seed=21),
+                              cluster_url=cluster_url, log=lambda *_: None)
+    assert err.value.status == 409 and "pull the merged adapter" in err.value.hint
+
+
+def test_adapter_on_a_cluster_adapter_from_elsewhere_is_not_sent(cluster_url, tmp_path):
+    """Trained on top of a cluster adapter this cluster never served (e.g. one
+    materialized from the registry): as a residual it has no base here, and as
+    a full adapter it would be wrong. Refused before anything is sent."""
+    _register(cluster_url, "web", ["client-flask"])
+    a = _residual(tmp_path / "r1", "client-flask", None, seed=22)
+    with pytest.raises(upload.UploadError, match="did not come from this cluster") as err:
+        upload.upload_adapter(a, cluster_url=cluster_url, log=lambda *_: None)
+    assert err.value.status is None and "--allow-foreign-base" in err.value.hint
+    out = upload.upload_adapter(a, cluster_url=cluster_url, allow_foreign_base=True,
+                                log=lambda *_: None)
+    assert out["base"] is None

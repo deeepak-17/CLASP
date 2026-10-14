@@ -354,7 +354,8 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
                    client_id: str, cluster_id: str, round_id: int,
                    num_examples: int, seed: Optional[int] = None,
                    key_convention: str = "peft",
-                   privacy: Optional[Dict] = None) -> Dict:
+                   privacy: Optional[Dict] = None,
+                   base: Optional[Dict] = None) -> Dict:
     """Build the JSON body for ``POST /uploads`` from a real client adapter.
 
     Carries everything the cluster needs to identify and aggregate the upload:
@@ -363,6 +364,11 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
     FedAvg sample weight (``num_examples``). Matches
     ``cluster.schemas.messages.AdapterUpload``, plus the ``privacy`` block
     ``contracts.AdapterUpload`` defines (see :func:`privacy_block`).
+
+    ``base`` (``{"cluster_id", "round_id", "sha256", "alpha"}``) marks a D3
+    residual: the adapter was trained on top of frozen base + alpha * the merged
+    adapter with that digest, and the cluster adds it onto that adapter (the
+    FedProx server step) instead of averaging it as a full adapter.
     """
     sd = as_fp32(translate_keys(state_dict, "peft" if key_convention == "peft" else "cluster"))
     info = describe(sd)
@@ -398,6 +404,9 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
         "num_examples": int(num_examples),
         "seed": seed,
         "privacy": privacy_block(privacy),
+        **({"base_cluster_id": base["cluster_id"], "base_round_id": int(base["round_id"]),
+            "base_sha256": base["sha256"], "composition_alpha": float(base["alpha"])}
+           if base else {}),
         "tensors": [encode_tensor(name, arr) for name, arr in sd.items()],
     }
 

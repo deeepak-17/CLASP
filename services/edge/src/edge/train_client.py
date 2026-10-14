@@ -437,6 +437,8 @@ def stack_frozen_cluster(model, cluster_dir: Path, alpha: float) -> Dict:
         raise RuntimeError(f"D3 freeze failed: trainable parameters outside the client "
                            f"adapter: {stray[:5]}")
 
+    from edge.upload import pull_provenance
+
     provenance = None
     manifest = cluster_dir / "materialize_manifest.json"
     if manifest.exists():
@@ -454,6 +456,9 @@ def stack_frozen_cluster(model, cluster_dir: Path, alpha: float) -> Dict:
         "n_trainable_tensors": len(trainable),
         "compatibility": compat,
         "registry_provenance": provenance,
+        # Set when the cluster layer was pulled back from the cluster service:
+        # its sha256 is what the upload names as this residual's base (FedProx).
+        "cluster_pull": pull_provenance(cluster_dir),
     }
 
 

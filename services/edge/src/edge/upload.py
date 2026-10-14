@@ -13,7 +13,10 @@ What it does, in order:
 2. Builds the upload body from the adapter directory (``edge.wire``): fp32
    tensors, the adapter's own LoRA hyperparameters, the FedAvg weight (the
    client's training block count, from the manifest ``edge.train_client``
-   wrote) and the DP ``privacy`` block that run recorded (D7).
+   wrote) and the DP ``privacy`` block that run recorded (D7). An adapter
+   trained on top of a merged adapter pulled from this cluster (D3) also names
+   that adapter (its sha256) and the alpha it was composed with, so the cluster
+   adds it onto that adapter: FedProx's server step (see ``base_from_manifest``).
 3. ``POST /clusters/{id}/uploads`` — the cluster-addressed route, which answers
    404 for an unregistered cluster instead of opening a new one.
 
@@ -82,6 +85,33 @@ def manifest_cluster(manifest: Dict) -> Optional[str]:
     return cid.split("/", 1)[0] if "/" in cid else None
 
 
+def pull_provenance(cluster_adapter_dir: Path | str) -> Optional[Dict]:
+    """``pull_manifest.json`` of a merged adapter pulled from a cluster, or ``None``
+    (a cluster adapter from anywhere else, e.g. materialized from the registry)."""
+    path = Path(cluster_adapter_dir) / "pull_manifest.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def base_from_manifest(manifest: Dict) -> Optional[Dict]:
+    """The merged adapter a D3-trained client was built on, as the upload names it.
+
+    ``None`` for a client trained on the bare base: its adapter is a full
+    adapter, averaged as one. A client trained on top of a merged adapter it
+    pulled from the cluster (``d3.cluster_pull``, written by ``edge.train_client``)
+    is a residual on that adapter. A client trained on top of a cluster adapter
+    from anywhere else has no base the cluster can add it onto: ``ValueError``.
+    """
+    d3 = manifest.get("d3")
+    if not d3:
+        return None
+    pull = d3.get("cluster_pull") or {}
+    if not pull.get("sha256"):
+        raise ValueError(f"trained on top of {d3.get('cluster_adapter')!r}, a cluster adapter "
+                         f"that did not come from this cluster")
+    return {"cluster_id": pull["cluster_id"], "round_id": int(pull["round_id"]),
+            "sha256": pull["sha256"], "alpha": float(d3["alpha"])}
+
+
 def manifest_num_examples(manifest: Dict) -> Optional[int]:
     n = (manifest.get("data") or {}).get("train", {}).get("n_chunks")
     return int(n) if n else None
@@ -143,7 +173,7 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                    num_examples: Optional[int] = None, round_id: Optional[int] = None,
                    seed: Optional[int] = None, http: Optional[requests.Session] = None,
                    timeout: float = transport.DEFAULT_UPLOAD_TIMEOUT,
-                   log=print) -> Dict:
+                   allow_foreign_base: bool = False, log=print) -> Dict:
     """Upload one adapter directory; returns the cluster's answer plus what was sent."""
     adapter_dir = Path(adapter_dir)
     if not (adapter_dir / "adapter_model.safetensors").exists():
@@ -156,6 +186,16 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
     if not n:
         raise UploadError(f"no training manifest beside {adapter_dir} to read the sample count from",
                           hint="pass --num-examples (the client's number of training blocks)")
+    try:
+        base = base_from_manifest(manifest)
+    except ValueError as exc:
+        if not allow_foreign_base:
+            raise UploadError(
+                f"{adapter_dir} was {exc}, so the cluster has no merged adapter to add it onto",
+                hint="train on the merged adapter pulled from laptop A (the edge page does by "
+                     "default) or on the bare base; --allow-foreign-base sends it as a full "
+                     "adapter anyway") from exc
+        base = None
 
     target = resolve_target(list_clusters(http, cluster_url), client_id, cluster_id,
                             manifest_cluster(manifest))
@@ -167,11 +207,14 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
     payload = wire.upload_payload_from_dir(
         adapter_dir, client_id=client_id, cluster_id=target.cluster_id, round_id=rnd,
         num_examples=n, seed=seed if seed is not None else manifest.get("seed"),
-        privacy=privacy)
+        privacy=privacy, base=base)
     size_mb = sum(len(t["data_b64"]) for t in payload["tensors"]) * 3 / 4 / 1e6
     log(f"  {len(payload['tensors'])} tensors, {payload['num_layers']} layers, "
         f"rank {payload['rank']}, {size_mb:.1f} MB fp32, weight {n} blocks, "
         f"epsilon {privacy['epsilon'] if privacy['epsilon'] is not None else 'none (DP off)'}")
+    log(f"  trained on round {base['round_id']}'s merged adapter {base['sha256'][:12]} "
+        f"(alpha {base['alpha']:g}): the cluster adds it onto that adapter (FedProx)"
+        if base else "  a full adapter (trained on the bare base): averaged with the round's others")
 
     url = f"{cluster_url.rstrip('/')}/clusters/{target.cluster_id}/uploads"
     t0 = time.monotonic()
@@ -186,12 +229,16 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
             f"in {target.cluster_id!r} round {body['round_id']}")
         return {"response": body, "cluster_id": target.cluster_id, "client_id": client_id,
                 "round_id": rnd, "num_examples": n, "privacy": privacy, "seconds": seconds,
-                "cluster_url": cluster_url}
+                "cluster_url": cluster_url, "base": base}
     detail = _http_error(r)
     hints = {
         404: "the cluster was not registered; press 'Register clusters' in demo_ui on laptop A",
         409: ("the cluster moved to a new round (an aggregate ran) - run this again to upload "
               "into the current round" if "round_id" in detail else
+              "this cluster's first round takes an adapter trained on the bare base"
+              if "no merged adapter yet" in detail else
+              "this adapter was trained on an older merged adapter: pull the merged adapter "
+              "laptop A serves now and train again" if "stale_adapter" in detail else
               "this adapter was trained from another cluster's adapter; pull the current one"),
         403: ("this edge's certificate is for a different client - use --client-id matching "
               "the certificate's CN" if "authenticated identity" in detail else
@@ -240,6 +287,8 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
     info = {"cluster_id": cluster_id, "round_id": round_id,
             "source_clients": list(broadcast.get("source_clients") or []),
             "aggregation": broadcast.get("aggregation"), "epsilon": broadcast.get("epsilon"),
+            # the identity the next upload names as its base (see base_from_manifest)
+            "sha256": broadcast.get("sha256"), "update_rule": broadcast.get("update_rule"),
             "rank": broadcast.get("rank"), "n_tensors": len(sd),
             "merged_utc": broadcast.get("timestamp"), "cluster_url": cluster_url,
             "seconds": round(time.monotonic() - t0, 2)}
@@ -279,6 +328,9 @@ def main(argv=None) -> int:
                     help="this edge's certs: ca.pem, client.pem, client.key")
     ap.add_argument("--server-hostname", default=None,
                     help="name to check the cluster's certificate against, when not the URL host")
+    ap.add_argument("--allow-foreign-base", action="store_true",
+                    help="send an adapter trained on a cluster adapter that did not come from "
+                         "this cluster, as a full adapter")
     ap.add_argument("--json", action="store_true", help="print the result as JSON")
     args = ap.parse_args(argv)
     try:
@@ -286,6 +338,7 @@ def main(argv=None) -> int:
         out = upload_adapter(args.adapter, cluster_url=args.cluster_url, client_id=args.client_id,
                              cluster_id=args.cluster, num_examples=args.num_examples,
                              round_id=args.round, http=http,
+                             allow_foreign_base=args.allow_foreign_base,
                              # with --json, stdout carries only the JSON
                              log=(lambda m: print(m, file=sys.stderr)) if args.json else print)
     except UploadError as exc:
