@@ -18,6 +18,7 @@ still plain-averaged; one round cannot mix the two.
 from __future__ import annotations
 
 import hashlib
+import json
 
 import numpy as np
 import pytest
@@ -213,3 +214,131 @@ def test_epsilon_is_unknown_when_the_base_had_none():
     body = _based("a", trained_adapter(20), active, privacy={"epsilon": 1.0})
     assert client.post("/clusters/web/uploads", json=body).status_code == 201
     assert client.post("/clusters/web/aggregate", json={}).json()["epsilon"] is None
+
+
+# --------------------------------------------------------------------------- #
+# a D5 rollback reaches the cluster, and so the edges
+# --------------------------------------------------------------------------- #
+class _MemoryRegistry:
+    """The registry's save / metadata / file routes, in memory, behind httpx."""
+
+    def __init__(self, monkeypatch):
+        import httpx
+
+        self.versions: dict[tuple[str, int], dict] = {}
+        self.blobs: dict[tuple[str, int], bytes] = {}
+        outer = self
+
+        class _Resp:
+            def __init__(self, status, body=None, content=b""):
+                self.status_code, self._body, self.content = status, body, content
+                self.text = json.dumps(body) if body is not None else ""
+
+            def json(self):
+                return self._body
+
+        class _Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def post(self, url, files=None, data=None, **kw):
+                name = url.rstrip("/").split("/")[-2]
+                meta = json.loads(data["meta"])
+                blob = files["file"][1]
+                v = 1 + sum(1 for (n, _) in outer.versions if n == name)
+                record = {"ref": {"name": name, "version": v},
+                          "sha256": hashlib.sha256(blob).hexdigest(),
+                          "round": meta["round"], "cluster_id": meta["cluster_id"],
+                          "aggregation": meta["aggregation"],
+                          "source_clients": meta["source_clients"],
+                          "privacy": meta.get("privacy")}
+                outer.versions[(name, v)], outer.blobs[(name, v)] = record, blob
+                return _Resp(201, record)
+
+            def get(self, url, **kw):
+                parts = url.rstrip("/").split("/")
+                is_file = parts[-1] == "file"
+                name, v = (parts[-4], int(parts[-2])) if is_file else (parts[-3], int(parts[-1]))
+                if (name, v) not in outer.versions:
+                    return _Resp(404, {"detail": "not found"})
+                if is_file:
+                    return _Resp(200, None, outer.blobs[(name, v)])
+                return _Resp(200, outer.versions[(name, v)])
+
+        monkeypatch.setattr(httpx, "Client", _Client)
+
+
+def _publish(name="cluster-web"):
+    r = client.post("/adapters/web/publish", json={"adapter_name": name})
+    assert r.status_code == 201, r.text
+    return r.json()["version"]
+
+
+def _two_rounds(monkeypatch):
+    registry = _MemoryRegistry(monkeypatch)
+    active0 = _round0()
+    v1 = _publish()
+    for c, seed in (("a", 20), ("b", 21)):
+        assert client.post("/clusters/web/uploads",
+                           json=_based(c, trained_adapter(seed), active0)).status_code == 201
+    active1 = client.post("/clusters/web/aggregate", json={}).json()
+    v2 = _publish()
+    assert v1["sha256"] == active0["sha256"] and v2["sha256"] == active1["sha256"]
+    return registry, active0, active1
+
+
+def test_a_rollback_puts_the_previous_merge_back_on_the_cluster(monkeypatch):
+    _, active0, active1 = _two_rounds(monkeypatch)
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["restored"]["sha256"] == active0["sha256"]
+    assert client.get("/clusters").json()["clusters"]["web"]["active_sha256"] == active0["sha256"]
+    served = client.get("/clusters/web/adapters/active").json()
+    assert served["sha256"] == active0["sha256"] and served["round_id"] == 0
+    blob = client.get("/adapters/web/download").content
+    assert hashlib.sha256(blob).hexdigest() == active0["sha256"]
+    # the next round builds on what the registry kept, not on the rejected merge
+    stale = client.post("/clusters/web/uploads",
+                        json=_based("a", trained_adapter(30), active1, round_id=2))
+    assert stale.status_code == 409 and "stale_adapter" in stale.text
+    good = client.post("/clusters/web/uploads",
+                       json=_based("a", trained_adapter(30), active0, round_id=2))
+    assert good.status_code == 201, good.text
+
+
+def test_residuals_built_on_the_rejected_merge_are_dropped(monkeypatch):
+    _, active0, active1 = _two_rounds(monkeypatch)
+    assert client.post("/clusters/web/uploads",
+                       json=_based("a", trained_adapter(40), active1, round_id=2)).status_code == 201
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1})
+    assert r.status_code == 200 and r.json()["dropped_uploads"] == ["a"]
+    assert server._clusters["web"].uploads == {}
+
+
+def test_restore_refuses_bytes_that_are_not_the_registered_version(monkeypatch):
+    registry, _, active1 = _two_rounds(monkeypatch)
+    registry.blobs[("cluster-web", 1)] = registry.blobs[("cluster-web", 2)]
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1})
+    assert r.status_code == 502 and "sha256" in r.text
+    assert server._clusters["web"].active.sha256 == active1["sha256"]
+
+
+def test_restore_refuses_another_clusters_version(monkeypatch):
+    registry, _, active1 = _two_rounds(monkeypatch)
+    registry.versions[("cluster-web", 1)]["cluster_id"] = "scientific"
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1})
+    assert r.status_code == 409
+    assert server._clusters["web"].active.sha256 == active1["sha256"]
+    missing = client.post("/clusters/web/adapters/active/restore",
+                          json={"adapter_name": "cluster-web", "version": 9})
+    assert missing.status_code == 502 and "404" in missing.text

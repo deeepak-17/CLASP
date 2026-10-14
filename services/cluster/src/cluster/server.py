@@ -1361,6 +1361,124 @@ def get_cluster_manifest_by_path(cluster_id: str) -> dict[str, object]:
     return _manifest(_cluster(cluster_id), cluster_id)
 
 
+class RestoreRequest(_BaseModel):
+    """``POST /clusters/{id}/adapters/active/restore``: serve a registry version again."""
+
+    version: int = _Field(ge=1)
+    registry_url: str = DEFAULT_REGISTRY_URL
+    adapter_name: str | None = None  # defaults to the cluster id, as /publish does
+    timeout_s: float = 120.0
+
+
+def _registry_get(http, url: str, what: str):
+    import httpx
+
+    try:
+        resp = http.get(url)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"registry unreachable for {what}: {exc}") from exc
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502, detail=f"registry answered {resp.status_code} for {what}: {resp.text}"
+        )
+    return resp
+
+
+def _broadcast_from_payload(
+    blob: bytes, cluster_id: str, meta: dict[str, object]
+) -> ClusterAdapterBroadcast:
+    """Rebuild the broadcast a published payload was made from: tensors and
+    adapter_config from the safetensors file, provenance from its header,
+    round / clients / epsilon from the registry's record of it."""
+    import json
+
+    from safetensors.numpy import load
+
+    header = json.loads(blob[8:8 + int.from_bytes(blob[:8], "little")].decode("utf-8"))
+    md = header.get("__metadata__") or {}
+    if "adapter_config" not in md:
+        raise HTTPException(status_code=502, detail="registry payload carries no adapter_config")
+    cfg = json.loads(md["adapter_config"])
+    tensors = load(blob)
+    layers = {int(m.group(1)) for k in tensors if (m := re.search(r"layers\.(\d+)\.", k))}
+    adapter = LoRAAdapter.from_state_dict(
+        tensors, rank=int(cfg["r"]), alpha=float(cfg["lora_alpha"]),
+        target_modules=tuple(cfg["target_modules"]), num_layers=max(len(layers), 1))
+    sources = tuple(s for s in str(md.get("source_clients", "")).split(",") if s)
+    privacy = meta.get("privacy") or {}
+    broadcast = build_broadcast(
+        adapter, cluster_id=cluster_id, round_id=int(meta.get("round") or 0),
+        num_clients=max(len(sources), 1),
+        aggregation="naive" if meta.get("aggregation") == "naive_avg" else "svd",
+        source_clients=sources, epsilon=privacy.get("epsilon") if isinstance(privacy, dict) else None)
+    alpha = md.get("composition_alpha")
+    broadcast = broadcast.model_copy(update={
+        "update_rule": md.get("update_rule"),
+        "composition_alpha": float(alpha) if alpha is not None else None,
+        "base_sha256": md.get("base_sha256"),
+    })
+    return broadcast.model_copy(
+        update={"sha256": hashlib.sha256(_peft_bytes(broadcast)).hexdigest()})
+
+
+@app.post("/clusters/{cluster_id}/adapters/active/restore")
+def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, object]:
+    """Serve a registry version again: how a D5 ROLLBACK reaches the edges.
+
+    The registry repoints its ``active`` tag on a ROLLBACK, but the edges pull
+    from this service, which would otherwise keep serving the rejected merge —
+    and the next round would build on it. This fetches the version the
+    registry restored, checks its bytes against the registry's sha256,
+    rebuilds the adapter from them and checks that serving it reproduces those
+    exact bytes (so ``active_sha256`` is the registry's digest), then makes it
+    the cluster's active adapter. Residuals buffered on top of the rejected
+    merge are dropped (they would be refused at aggregate time anyway); the
+    round counter is left alone. Network first, cluster lock last.
+    """
+    import httpx
+
+    from cluster.tls import outbound_ssl_context
+
+    state = _cluster(cluster_id)
+    name = body.adapter_name or cluster_id
+    base = f"{body.registry_url.rstrip('/')}/adapters/{name}/versions/{body.version}"
+    tls = outbound_ssl_context(_os.environ) if body.registry_url.startswith("https") else None
+    with httpx.Client(timeout=body.timeout_s, verify=tls if tls is not None else True) as http:
+        meta = _registry_get(http, base, f"{name} v{body.version}").json()
+        blob = _registry_get(http, f"{base}/file", f"{name} v{body.version}'s payload").content
+    if meta.get("cluster_id") not in (None, cluster_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name} v{body.version} is cluster {meta.get('cluster_id')!r}'s, not {cluster_id!r}'s",
+        )
+    digest = hashlib.sha256(blob).hexdigest()
+    if digest != meta.get("sha256"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"{name} v{body.version}'s payload hashes to {digest[:12]}, not the registry's "
+                   f"sha256 {str(meta.get('sha256'))[:12]}; not serving it",
+        )
+    broadcast = _broadcast_from_payload(blob, cluster_id, meta)
+    if broadcast.sha256 != digest:
+        raise HTTPException(
+            status_code=502,
+            detail=f"re-serializing {name} v{body.version} does not reproduce its bytes "
+                   f"({broadcast.sha256[:12]} vs {digest[:12]}); not serving it",
+        )
+    with state.lock:
+        dropped = sorted(c for c, u in state.uploads.items()
+                         if u.base_sha256 is not None and u.base_sha256 != digest)
+        for c in dropped:
+            del state.uploads[c]
+        state.active = broadcast
+    return {
+        "cluster_id": cluster_id,
+        "restored": {"adapter_name": name, "version": body.version,
+                     "round_id": broadcast.round_id, "sha256": digest},
+        "dropped_uploads": dropped,
+    }
+
+
 @app.post("/recluster")
 def recluster(body: ReclusterRequest | None = None) -> dict[str, object]:
     """Dynamic re-clustering over HTTP (Week 10, D4) — same algorithm as

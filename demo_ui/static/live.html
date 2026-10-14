@@ -77,15 +77,21 @@ function mergeStop(cid, c) {
   let body;
   if (m) {
     const err = m.svd_reconstruction_error || {};
+    const cumulative = m.update_rule === "fedprox_cumulative";
     const eps = m.epsilon == null
-      ? `<p class="fine warn">Privacy budget unknown: ${esc((m.epsilon_not_reported_by || []).join(", "))} trained without DP.</p>`
-      : `<p class="fine">Privacy budget ε ${fmt(m.epsilon, 2)}, the largest any laptop spent.</p>`;
+      ? `<p class="fine warn">Privacy budget unknown: ${m.epsilon_not_reported_by ? `${esc(m.epsilon_not_reported_by.join(", "))} trained without DP` : "the adapter it builds on has none recorded"}.</p>`
+      : cumulative
+        ? `<p class="fine">Privacy budget ε ${fmt(m.epsilon, 2)}: this round's ${fmt(m.epsilon_this_round, 2)} plus the adapter it builds on.</p>`
+        : `<p class="fine">Privacy budget ε ${fmt(m.epsilon, 2)}, the largest any laptop spent.</p>`;
+    const rule = cumulative
+      ? `<p class="fine">Added onto round ${m.base_round_id}'s merged adapter (${esc(m.base_sha256.slice(0, 12))}), which the laptops trained on top of at α ${fmt(m.composition_alpha, 2)}: FedProx's server step.</p>`
+      : `<p class="fine">Averaged as full adapters (the laptops trained on the bare base).</p>`;
     body = `<p class="lead">Round ${m.round_id} merged from ${plural(m.num_clients, "laptop", "laptops")}</p>
-      <p class="fine">${esc((m.source_clients || []).join(", "))}, weighted by ${esc((m.sample_weights || []).join(" and "))} training blocks.</p>
+      <p class="fine">${esc((m.source_clients || []).join(", "))}, weighted by ${esc((m.sample_weights || []).join(" and "))} training blocks.</p>${rule}
       <p class="fine">SVD error against the exact average: ${fmt(err.mean, 3)} mean, ${fmt(err.max, 3)} worst.</p>${eps}`;
   } else {
     body = `<p class="lead">${pending ? `${plural(pending, "adapter", "adapters")} ready` : "Waiting for adapters"}</p>
-      <p class="fine">The cluster averages the laptops' updates exactly, then compresses the result back to rank 16.</p>`;
+      <p class="fine">The cluster adds the laptops' updates onto the adapter they trained on (or averages them in the first round) exactly, then compresses the result back to rank 16.</p>`;
   }
   if (m && pending) body += `<p class="fine">${plural(pending, "new adapter has", "new adapters have")} arrived for round ${st.round_id}.</p>`;
   return `<div class="stop"><h3>Cluster merge</h3>${body}
@@ -124,9 +130,14 @@ function decisionStop(cid, c) {
     const fresh = stamped[cid] !== d.timestamp;
     stamped[cid] = d.timestamp;
     const g = (x) => x && x.length ? fmt(x[0].pass_at_k["1"], 2) : "not scored";
+    const back = r.cluster_restore
+      ? (r.cluster_restore.restored
+        ? `<p class="fine">The cluster serves v${r.cluster_restore.restored.version} again (${esc(r.cluster_restore.restored.sha256.slice(0, 12))}), so the laptops' next round builds on it${r.cluster_restore.dropped_uploads.length ? `; dropped ${esc(r.cluster_restore.dropped_uploads.join(", "))}, trained on the rejected one` : ""}.</p>`
+        : `<p class="fine warn">${esc(r.cluster_restore.error)}</p>`)
+      : "";
     body = `<div class="stamp ${promoted ? "" : "rollback"} ${fresh ? "fresh" : ""}">${promoted ? "Promoted" : "Rolled back"}
         <small>v${d.active_version_after} ${promoted ? "now serving" : "serving again"}</small></div>
-      <p class="why">${esc(d.reason)}</p>
+      <p class="why">${esc(d.reason)}</p>${back}
       <p class="numbers">Edit similarity ${fmt(s.in_project.edit_similarity, 4)} against ${fmt(s.baseline_in_project.edit_similarity, 4)}, noise band ${fmt(s.baseline_noise_band, 4)}. HumanEval pass@1 ${g(s.guard)} against ${g(s.baseline_guard)}.</p>
       <details class="source"><summary>Where these numbers come from</summary>
         <p>${esc(p.in_project)}</p><p>${esc(p.guard)}</p><p>Noise band: ${esc(p.noise_band)}</p>

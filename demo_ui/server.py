@@ -654,12 +654,25 @@ async def live_promote(cluster_id: str) -> dict:
             "baseline_guard": ev["baseline_guard"],
         }
         r = await _send(client, "POST", f"{REGISTRY_BASE}/adapters/{name}/promote", json=body)
-    if r.status_code != 200:
-        raise HTTPException(r.status_code, f"promote {name}: {_detail(r)}")
+        if r.status_code != 200:
+            raise HTTPException(r.status_code, f"promote {name}: {_detail(r)}")
+        decision = r.json()
+        restore = None
+        if decision.get("action") == "rollback":
+            # The registry repointed `active`; the edges pull from the cluster,
+            # so it must serve the restored version too, or the next round
+            # would build on the merge D5 just rejected.
+            rr = await _send(client, "POST", f"{CLUSTER_BASE}/clusters/{cid}/adapters/active/restore",
+                             json={"registry_url": REGISTRY_BASE, "adapter_name": name,
+                                   "version": decision["active_version_after"]})
+            restore = rr.json() if rr.status_code == 200 else {
+                "error": f"cluster restore -> {rr.status_code}: {_detail(rr)}"}
     sent = {k: body["eval"][k] for k in ("in_project", "baseline_in_project", "guard",
                                          "baseline_noise_band")}
     sent["baseline_guard"] = body["baseline_guard"]
-    result = {"decision": r.json(), "candidate_version": reg["active"], "sent": sent,
+    result = {"decision": decision, "candidate_version": reg["active"], "sent": sent,
               "provenance": ev["provenance"]}
+    if restore is not None:
+        result["cluster_restore"] = restore
     _live.setdefault(cid, {})["promote"] = result
     return result
