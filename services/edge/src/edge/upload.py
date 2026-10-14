@@ -36,6 +36,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -259,7 +260,9 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
 
     ``GET /clusters/{id}/adapters/active`` on the same cluster service (and the
     same mTLS session) the upload went to, so an edge needs no route to the
-    registry. Written to ``<out_root>/<cluster>-round<N>/`` with
+    registry. Written to ``<out_root>/<cluster>-round<N>-<sha12>/`` (the digest
+    in the name: a restarted cluster or a rollback can serve a different adapter
+    under a round number this laptop already has) with
     ``adapter_config.json`` built from the broadcast's own ``peft_config``
     (``wire.broadcast_to_peft``), plus ``pull_manifest.json`` recording which
     round, clients and ε it is. That directory is what ``edge.train_client
@@ -282,7 +285,9 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
     broadcast = r.json()
     sd, cfg = wire.broadcast_to_peft(broadcast)
     round_id = int(broadcast["round_id"])
-    dest = Path(out_root) / f"{cluster_id}-round{round_id}"
+    sha = broadcast.get("sha256")
+    dest = Path(out_root) / (f"{cluster_id}-round{round_id}-{sha[:12]}" if sha
+                             else f"{cluster_id}-round{round_id}")
     wire.save_peft_dir(dest, sd, cfg)
     info = {"cluster_id": cluster_id, "round_id": round_id,
             "source_clients": list(broadcast.get("source_clients") or []),
@@ -291,6 +296,7 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
             "sha256": broadcast.get("sha256"), "update_rule": broadcast.get("update_rule"),
             "rank": broadcast.get("rank"), "n_tensors": len(sd),
             "merged_utc": broadcast.get("timestamp"), "cluster_url": cluster_url,
+            "pulled_utc": datetime.now(timezone.utc).isoformat(),
             "seconds": round(time.monotonic() - t0, 2)}
     (dest / "pull_manifest.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
     log(f"  round {round_id}, {len(sd)} tensors from {', '.join(info['source_clients']) or '-'}, "

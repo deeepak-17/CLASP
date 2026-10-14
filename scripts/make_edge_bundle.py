@@ -53,12 +53,16 @@ def run_steps(client: str, cluster: str, cluster_url: str, sets, certs: bool, co
 ## Optional: a short live fine-tune (needs an NVIDIA GPU with >= 4 GB)
 
 ```powershell
-pip install -e services/evaluation -e services/edge    # torch, transformers, peft, opacus (use a CUDA build of torch)
+pip install -e security -e services/evaluation -e services/edge    # DP (opacus), torch, transformers, peft (use a CUDA build of torch)
 huggingface-cli download {MODEL_ID}        # several GB; do this before demo day
-python -m edge.train_client --client {cluster}/{client} --max-steps 50 --skip-base-eval --out-dir services/edge/artifacts/live
+python -m edge.train_client --client {cluster}/{client} --max-steps 50 --skip-base-eval --dp --seq-len 512 --out-dir services/edge/artifacts/live-cli
 ```
 
-Or use the "Short fine-tune" panel on the edge page. The new adapter shows up under `live/`.
+Better, use "Train a new adapter here first" on the edge page: it trains with DP and FedProx,
+and once laptop A has merged a round it trains on top of the merged adapter it pulled back,
+which is what the next round needs. The new adapter shows up on the page, ready to send.
+Only adapters trained with DP on this laptop can be sent; the pre-trained adapters in this
+bundle are there for reference.
 """ if corpus else "")
     return f"""# Edge laptop: {client} (cluster `{cluster}`)
 

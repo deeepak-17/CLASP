@@ -14,16 +14,24 @@ the page can do nothing the command line cannot.
   a path.
 * Only differentially private adapters are offered or sent (D7): one upload
   without an ε makes the whole round's composite ε ``None`` on the cluster.
-  ``--allow-non-dp`` lifts that for experiments.
+  ``--allow-non-dp`` lifts that for experiments. Nor is an adapter trained on
+  top of a cluster adapter that did not come from this cluster (e.g. one
+  materialized from the registry): the cluster has nothing to add it onto
+  (``--allow-foreign-base`` sends it as a full adapter).
+* Training here uses FedProx (``--fedprox-mu``, default ``edge.fedprox.DEFAULT_MU``)
+  and, under DP, 512-token blocks: at 1024 the DP run peaked at 4.447 GB on a
+  4 GB card (Opacus needs gradient checkpointing off).
 * Each fine-tune started here writes its own ``live-<timestamp>`` set, so a new
   run adds an adapter instead of overwriting the last one.
 * The status panel polls the cluster's ``GET /clusters`` and tracks the adapter
   this page last sent: sent, the rest of the cluster arriving, merged, and back
   on this laptop.
-* The way back: once laptop A has merged a round, the page pulls the cluster's
-  merged adapter (:func:`edge.upload.pull_cluster_adapter`, the same cluster
-  service and session as the upload) into ``<root>/from_cluster/<cluster>-round<N>``,
-  and the next fine-tune trains on top of it (D3, ``--cluster-adapter``).
+* The way back: whenever laptop A serves a merged adapter this laptop does not
+  have — compared by sha256, so a rollback or a restarted cluster is followed
+  too — the page pulls it (:func:`edge.upload.pull_cluster_adapter`, the same
+  cluster service and session as the upload) into
+  ``<root>/from_cluster/<cluster>-round<N>-<sha12>``, and the next fine-tune
+  trains on top of exactly that adapter (D3, ``--cluster-adapter``).
 * One job (upload or train) runs at a time; its log streams into the page.
 
 Standard library only (``http.server``), so the page runs in the edge's
@@ -48,6 +56,7 @@ import requests
 
 from edge import upload
 from edge.config import REPO_ROOT
+from edge.fedprox import DEFAULT_MU
 
 DEFAULT_PORT = 8020
 DEFAULT_ADAPTERS_ROOT = REPO_ROOT / "services" / "edge" / "artifacts"
@@ -58,16 +67,20 @@ LIVE_SET = "live"
 #: directories (no ``<client>/adapter`` level), so they are never offered for upload.
 PULLED_SET = "from_cluster"
 PAGE = Path(__file__).with_name("webui_page.html")
+#: Block length for a DP fine-tune: Opacus needs gradient checkpointing off, and
+#: at 1024 tokens the run peaked at 4.447 GB on a 4 GB RTX 2050 (6.19 s/step).
+DP_SEQ_LEN = 512
 
 
 def find_pulled(root: Path) -> List[Dict]:
-    """Merged cluster adapters pulled into ``<root>/from_cluster``, newest round first."""
+    """Merged cluster adapters pulled into ``<root>/from_cluster``, latest pull first."""
     out = []
     for m in Path(root, PULLED_SET).glob("*/pull_manifest.json"):
         if (m.parent / "adapter_model.safetensors").exists():
             info = json.loads(m.read_text(encoding="utf-8"))
             out.append({**info, "id": m.parent.name, "path": m.parent})
-    return sorted(out, key=lambda p: (p["round_id"], p["id"]), reverse=True)
+    return sorted(out, key=lambda p: (p.get("pulled_utc") or "", p["round_id"], p["id"]),
+                  reverse=True)
 
 
 def find_adapters(root: Path) -> List[Dict]:
@@ -79,6 +92,7 @@ def find_adapters(root: Path) -> List[Dict]:
         manifest = upload.training_manifest(adapter)
         privacy = manifest.get("privacy") or {}
         d3 = manifest.get("d3") or {}
+        pull = d3.get("cluster_pull") or {}
         set_name = adapter.parent.parent.name
         trained = manifest.get("utc") or datetime.fromtimestamp(
             weights.stat().st_mtime, timezone.utc).isoformat()
@@ -92,6 +106,11 @@ def find_adapters(root: Path) -> List[Dict]:
             "steps": (manifest.get("results") or {}).get("optimizer_steps"),
             "epsilon": privacy.get("epsilon"),
             "d3_alpha": d3.get("alpha"),
+            # what it was trained on top of: the merged adapter it names as its base
+            "base_round": pull.get("round_id"),
+            "base_sha256": pull.get("sha256"),
+            "foreign_base": bool(d3) and not pull.get("sha256"),
+            "fedprox_mu": (manifest.get("fedprox") or {}).get("mu"),
             "trained_utc": trained,
             "size_mb": round(weights.stat().st_size / 1e6, 1),
             "path": adapter,
@@ -139,7 +158,8 @@ class EdgePage:
 
     def __init__(self, *, cluster_url: str, client_id: Optional[str], adapters_root: Path,
                  http: Optional[requests.Session] = None, corpus_root: Optional[Path] = None,
-                 python: str = sys.executable, allow_non_dp: bool = False) -> None:
+                 python: str = sys.executable, allow_non_dp: bool = False,
+                 allow_foreign_base: bool = False, fedprox_mu: float = DEFAULT_MU) -> None:
         self.cluster_url = cluster_url
         self.client_id = client_id
         self.adapters_root = Path(adapters_root)
@@ -147,6 +167,8 @@ class EdgePage:
         self.http = http or requests.Session()
         self.python = python
         self.allow_non_dp = allow_non_dp
+        self.allow_foreign_base = allow_foreign_base
+        self.fedprox_mu = fedprox_mu
         self.job = Job()
         #: The last adapter this page sent: id, cluster and round it went into.
         self.last_sent: Optional[Dict] = None
@@ -158,6 +180,8 @@ class EdgePage:
             found = [a for a in found if a["client_id"] == self.client_id]
         if not self.allow_non_dp:
             found = [a for a in found if a["epsilon"] is not None]
+        if not self.allow_foreign_base:
+            found = [a for a in found if not a["foreign_base"]]
         return found
 
     def status(self) -> Dict:
@@ -173,14 +197,40 @@ class EdgePage:
         out["clusters"] = clusters
         mine = [cid for cid, c in clusters.items() if self.client_id in c.get("members", [])]
         out["my_cluster"] = mine[0] if mine else None
-        out["pulled"] = self._pulled_public(self.latest_pulled(out["my_cluster"]))
+        active = clusters[mine[0]].get("active_sha256") if mine else None
+        current = self.latest_pulled(out["my_cluster"], active) if active else None
+        shown = current or self.latest_pulled(out["my_cluster"])
+        # "current": this laptop has exactly the merged adapter laptop A serves now
+        out["pulled"] = ({**self._pulled_public(shown), "current": current is not None}
+                         if shown else None)
         return out
 
-    def latest_pulled(self, cluster_id: Optional[str]) -> Optional[Dict]:
+    def latest_pulled(self, cluster_id: Optional[str],
+                      sha256: Optional[str] = None) -> Optional[Dict]:
+        """The latest pull for ``cluster_id``; with ``sha256``, only that adapter."""
         if cluster_id is None:
             return None
         return next((p for p in find_pulled(self.adapters_root)
-                     if p["cluster_id"] == cluster_id), None)
+                     if p["cluster_id"] == cluster_id
+                     and (sha256 is None or p.get("sha256") == sha256)), None)
+
+    def current_base(self) -> Dict:
+        """The merged adapter laptop A serves now, if it is on this laptop (D3 base).
+
+        Training on anything older would be refused at upload (409 stale_adapter),
+        so "start from the merged adapter" means this one or nothing.
+        """
+        status = self.status()
+        cid = status.get("my_cluster")
+        active = (status.get("clusters") or {}).get(cid, {}).get("active_sha256") if cid else None
+        if active is None:
+            raise ValueError("no merged cluster adapter on this laptop yet; "
+                             "pull it after laptop A merges a round")
+        base = self.latest_pulled(cid, active)
+        if base is None:
+            raise ValueError(f"laptop A now serves merged adapter {active[:12]}, which is not on "
+                             f"this laptop: pull it first")
+        return base
 
     @staticmethod
     def _pulled_public(p: Optional[Dict]) -> Optional[Dict]:
@@ -198,6 +248,9 @@ class EdgePage:
         if adapter["epsilon"] is None and not self.allow_non_dp:
             raise ValueError(f"{adapter_id} was trained without differential privacy; "
                              f"train one with DP (or start the page with --allow-non-dp)")
+        if adapter["foreign_base"] and not self.allow_foreign_base:
+            raise ValueError(f"{adapter_id} was trained on a cluster adapter that did not come "
+                             f"from this cluster; train on the merged adapter pulled from laptop A")
         if not self.job.begin("upload"):
             raise RuntimeError("another job is still running")
 
@@ -206,7 +259,7 @@ class EdgePage:
                 res = upload.upload_adapter(
                     adapter["path"], cluster_url=self.cluster_url,
                     client_id=self.client_id or adapter["client_id"], http=self.http,
-                    log=self.job.log)
+                    allow_foreign_base=self.allow_foreign_base, log=self.job.log)
                 self.last_sent = {"adapter": adapter_id, "cluster_id": res["cluster_id"],
                                   "round_id": res["round_id"], "utc": time.time()}
                 self.job.finish(result={k: v for k, v in res.items() if k != "privacy"}
@@ -252,13 +305,14 @@ class EdgePage:
                       cluster_adapter: Optional[str], out_set: str = LIVE_SET) -> List[str]:
         cmd = [self.python, "-m", "edge.train_client", "--client", client,
                "--max-steps", str(int(max_steps)), "--skip-base-eval",
-               "--out-dir", str(self.adapters_root / out_set)]
+               "--out-dir", str(self.adapters_root / out_set),
+               "--fedprox-mu", str(self.fedprox_mu)]
         if self.corpus_root:
             cmd += ["--corpus-root", str(self.corpus_root)]
         if cluster_adapter:
             cmd += ["--cluster-adapter", cluster_adapter]
         if dp:
-            cmd.append("--dp")
+            cmd += ["--dp", "--seq-len", str(DP_SEQ_LEN)]
         return cmd
 
     def start_train(self, *, client: str, max_steps: int, dp: bool,
@@ -347,14 +401,10 @@ def make_handler(page: EdgePage):
                 if self.path == "/api/pull":
                     return self._send(202, page.start_pull())
                 if self.path == "/api/train":
-                    # D3: train on top of the merged adapter last pulled back
-                    # from laptop A. The browser asks for it; it never names a path.
-                    base = None
-                    if body.get("from_cluster"):
-                        base = page.latest_pulled(page.status().get("my_cluster"))
-                        if base is None:
-                            raise ValueError("no merged cluster adapter on this laptop yet; "
-                                             "pull it after laptop A merges a round")
+                    # D3: train on top of the merged adapter laptop A serves now,
+                    # pulled back to this laptop. The browser asks for it; it never
+                    # names a path.
+                    base = page.current_base() if body.get("from_cluster") else None
                     return self._send(202, page.start_train(
                         client=str(body["client"]), max_steps=int(body.get("max_steps", 50)),
                         dp=bool(body.get("dp")),
@@ -388,6 +438,11 @@ def main(argv=None) -> int:
     ap.add_argument("--server-hostname", default=None)
     ap.add_argument("--allow-non-dp", action="store_true",
                     help="also offer and send adapters trained without differential privacy")
+    ap.add_argument("--allow-foreign-base", action="store_true",
+                    help="also send adapters trained on a cluster adapter from elsewhere "
+                         "(as full adapters)")
+    ap.add_argument("--fedprox-mu", type=float, default=DEFAULT_MU,
+                    help="FedProx coefficient for fine-tunes started here (0 = off)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = ap.parse_args(argv)
@@ -398,7 +453,8 @@ def main(argv=None) -> int:
         return 1
     page = EdgePage(cluster_url=args.cluster_url, client_id=args.client_id,
                     adapters_root=args.adapters_root, http=http, corpus_root=args.corpus_root,
-                    allow_non_dp=args.allow_non_dp)
+                    allow_non_dp=args.allow_non_dp, allow_foreign_base=args.allow_foreign_base,
+                    fedprox_mu=args.fedprox_mu)
     httpd = serve(page, args.host, args.port)
     print(f"edge page for {args.client_id or 'all clients'} -> http://{args.host}:{args.port}  "
           f"(cluster {args.cluster_url}); ctrl-c to stop")

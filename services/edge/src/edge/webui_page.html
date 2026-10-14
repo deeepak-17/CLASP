@@ -135,7 +135,8 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
 </main>
 
 <script>
-let picked = null, me = null, lastLines = 0, jobRunning = false, jobKind = null, lastStatus = null, adapterList = [];
+let picked = null, me = null, lastLines = 0, jobRunning = false, jobKind = null, lastStatus = null, adapterList = [], lastActive;
+const activeSha = (s) => s && s.reachable && s.my_cluster && s.clusters[s.my_cluster] ? s.clusters[s.my_cluster].active_sha256 : null;
 
 async function get(path) { const r = await fetch(path); return r.json(); }
 async function post(path, body) {
@@ -180,14 +181,15 @@ async function refreshStatus() {
   autoPull(s);
 }
 
-// A newer merged round on laptop A than the one on this laptop: fetch it once.
+// Laptop A serves a merged adapter this laptop does not have (compared by its
+// sha256, so a rollback or a restarted cluster counts too): fetch it once.
 // The button in step 5 retries by hand if it fails.
 const pullTried = new Set();
 function autoPull(s) {
   const c = s.reachable && s.my_cluster ? s.clusters[s.my_cluster] : null;
-  if (!c || c.aggregated_round_id == null || jobRunning) return;
-  if (s.pulled && s.pulled.round_id >= c.aggregated_round_id) return;
-  const key = `${s.my_cluster}/${c.aggregated_round_id}`;
+  if (!c || !c.active_sha256 || jobRunning) return;
+  if (s.pulled && s.pulled.current) return;
+  const key = `${s.my_cluster}/${c.active_sha256}`;
   if (pullTried.has(key)) return;
   pullTried.add(key);
   pullNow();
@@ -200,13 +202,16 @@ async function pullNow() {
 
 function paintBase(s) {
   const box = document.getElementById("t-base"), text = document.getElementById("t-base-text");
+  const usable = !!(s.pulled && s.pulled.current);   // only the one laptop A serves now
   const had = !box.disabled;
-  box.disabled = !s.pulled;
-  if (s.pulled && !had) box.checked = true;   // default on once one arrives
-  if (!s.pulled) box.checked = false;
-  text.textContent = s.pulled
-    ? `Start from the merged cluster adapter (round ${s.pulled.round_id}, ${laptops(s.pulled.source_clients.length)})`
+  box.disabled = !usable;
+  if (usable && !had) box.checked = true;   // default on once one arrives
+  if (!usable) box.checked = false;
+  text.textContent = usable
+    ? `Start from the merged cluster adapter (round ${s.pulled.round_id}, ${laptops(s.pulled.source_clients.length)}, ${s.pulled.sha256.slice(0, 12)})`
+    : s.pulled ? "Start from the merged cluster adapter (laptop A serves a newer one; fetching it)"
     : "Start from the merged cluster adapter (none on this laptop yet)";
+  if (lastActive !== activeSha(s)) { lastActive = activeSha(s); loadAdapters(); }
 }
 
 const laptops = (n) => `${n} laptop${n === 1 ? "" : "s"}`;
@@ -246,9 +251,9 @@ function renderTrack(s) {
     [merged, "Merged", merged ? `Round ${c.aggregated_round_id}'s cluster adapter includes yours` : "Laptop A merges once every adapter is in"],
   ];
   // Step 5 is about the cluster's latest merge, whether or not this laptop was in it.
-  const latest = c ? c.aggregated_round_id : null;
+  const latest = c && c.active_sha256 ? c.aggregated_round_id : null;
   const pulled = s.pulled;
-  const home = !!(pulled && latest != null && pulled.round_id >= latest);
+  const home = !!(pulled && pulled.current);
   const pulling = jobRunning && jobKind === "pull";
   const canPull = latest != null && !home && !jobRunning;
   steps.push([home, "Back on this laptop",
@@ -285,7 +290,8 @@ async function loadAdapters(select) {
       <input type="radio" name="adapter" value="${esc(a.id)}" ${a.id === picked ? "checked" : ""} />
       <div class="name">${esc(when(a.trained_utc))}</div>
       <div class="origin ${a.trained_here && i === 0 ? "new" : ""}">${a.trained_here ? (i === 0 ? "Latest, trained on this laptop" : "Trained on this laptop") : `From the setup bundle (${esc(a.set)})`}</div>
-      <div class="meta">${esc(a.client_id)}, ${a.size_mb} MB${a.steps != null ? `, ${a.steps} training step${a.steps === 1 ? "" : "s"}` : ""}${a.d3_alpha != null ? `, on top of the cluster adapter (α ${a.d3_alpha})` : ""}</div>
+      <div class="meta">${esc(a.client_id)}, ${a.size_mb} MB${a.steps != null ? `, ${a.steps} training step${a.steps === 1 ? "" : "s"}` : ""}${a.base_round != null ? `, on top of round ${a.base_round}'s merged adapter (α ${a.d3_alpha})` : ", on the bare base"}${a.fedprox_mu ? `, FedProx μ ${a.fedprox_mu}` : ""}</div>
+      ${a.base_sha256 && activeSha(lastStatus) && a.base_sha256 !== activeSha(lastStatus) ? `<div class="seal off">Trained on an older merged adapter: laptop A would refuse it. Train again on the current one.</div>` : ""}
       <div class="seal ${a.epsilon == null ? "off" : ""}">${a.epsilon == null ? "Trained without differential privacy" : `Differentially private, ε ${a.epsilon.toFixed(2)}`}</div>
     </label>`).join("");
   box.querySelectorAll("input[name=adapter]").forEach(i => i.onchange = () => { picked = i.value; paintIdentity(); syncButtons(); if (lastStatus) renderTrack(lastStatus); });

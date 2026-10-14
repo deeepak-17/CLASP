@@ -227,3 +227,83 @@ def test_train_command(tmp_path):
     assert cmd[:6] == ["py", "-m", "edge.train_client", "--client", "web/client-flask", "--max-steps"]
     assert cmd[cmd.index("--out-dir") + 1] == str(tmp_path / webui.LIVE_SET)
     assert "--dp" in cmd and cmd[cmd.index("--cluster-adapter") + 1] == "c/web"
+
+
+def test_train_command_carries_fedprox_and_the_dp_sequence_length(tmp_path):
+    from edge import fedprox
+
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path,
+                          python="py")
+    dp = page.train_command(client="web/client-flask", max_steps=40, dp=True, cluster_adapter=None)
+    assert dp[dp.index("--fedprox-mu") + 1] == str(fedprox.DEFAULT_MU)
+    # 1024 peaked at 4.447 GB on a 4 GB card under DP (no gradient checkpointing)
+    assert dp[dp.index("--seq-len") + 1] == "512"
+    loose = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path,
+                           python="py", fedprox_mu=0.1, allow_non_dp=True)
+    plain = loose.train_command(client="web/client-flask", max_steps=40, dp=False,
+                                cluster_adapter=None)
+    assert plain[plain.index("--fedprox-mu") + 1] == "0.1" and "--seq-len" not in plain
+
+
+def _plain_round(url, root, round_id, seeds):
+    import requests
+
+    from edge import upload
+
+    for client, seed in zip(("client-flask", "client-requests"), seeds):
+        upload.upload_adapter(_contract_adapter(root / f"r{round_id}", client, seed=seed),
+                              cluster_url=url, log=lambda _m: None)
+    # rank-16 contract adapters at width 8: only the naive ablation can keep rank 16
+    r = requests.post(f"{url}/clusters/web/aggregate", json={"aggregation": "naive"},
+                      timeout=30)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_page_follows_the_adapter_the_cluster_serves_not_the_round_number(
+        page_url, cluster_url, tmp_path):  # noqa: F811
+    """A rollback (or a restarted cluster) can serve a different adapter under a
+    round number this laptop already has. The page compares digests."""
+    url, page = page_url
+    _register(cluster_url, "web", ["client-flask", "client-requests"])
+    first = _plain_round(cluster_url, tmp_path / "e", 0, (1, 2))
+    _post(f"{url}/api/pull", {})
+    _wait_job(url)
+    status = _get(f"{url}/api/status")
+    assert status["pulled"]["sha256"] == first["sha256"] and status["pulled"]["current"] is True
+    assert first["sha256"][:12] in str(page.latest_pulled("web", first["sha256"])["path"])
+
+    second = _plain_round(cluster_url, tmp_path / "e", 1, (3, 4))
+    status = _get(f"{url}/api/status")
+    assert status["clusters"]["web"]["active_sha256"] == second["sha256"]
+    assert status["pulled"]["current"] is False
+    # training "from the merged adapter" means the one served now, not the last one pulled
+    code, body = _post(f"{url}/api/train", {"client": "web/client-flask", "max_steps": 5,
+                                            "dp": True, "from_cluster": True})
+    assert code == 422 and "pull it first" in body["detail"]
+    _post(f"{url}/api/pull", {})
+    _wait_job(url)
+    status = _get(f"{url}/api/status")
+    assert status["pulled"]["sha256"] == second["sha256"] and status["pulled"]["current"] is True
+
+
+def test_cards_say_what_an_adapter_was_built_on(tmp_path):
+    pulled = {"cluster_id": "web", "round_id": 3, "sha256": "ab" * 32}
+    for name, d3 in (("client-flask", {"alpha": 0.5, "cluster_adapter": "x", "cluster_pull": pulled}),):
+        adapter = _adapter(tmp_path / "live-1", name, seed=1, epsilon=8.0)
+        m = adapter.parent / "manifest.json"
+        m.write_text(json.dumps({**json.loads(m.read_text()), "d3": d3,
+                                 "fedprox": {"mu": 0.01}}), encoding="utf-8")
+    foreign = _adapter(tmp_path / "round2_d3", "client-flask", seed=2, epsilon=8.0)
+    fm = foreign.parent / "manifest.json"
+    fm.write_text(json.dumps({**json.loads(fm.read_text()),
+                              "d3": {"alpha": 0.5, "cluster_adapter": "registry/cluster-web/v2"}}),
+                  encoding="utf-8")
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    offered = page.adapters()
+    # trained on a cluster adapter that never came from this cluster: cannot be sent, not offered
+    assert [a["id"] for a in offered] == ["live-1/client-flask"]
+    card = offered[0]
+    assert card["base_round"] == 3 and card["base_sha256"] == "ab" * 32 and card["fedprox_mu"] == 0.01
+    with pytest.raises(ValueError, match="did not come from this cluster"):
+        page.start_upload("round2_d3/client-flask")

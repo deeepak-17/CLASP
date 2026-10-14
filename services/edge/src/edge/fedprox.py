@@ -25,22 +25,25 @@ in the cluster's own simulation.
 """
 from __future__ import annotations
 
-from typing import List, Sequence
+from typing import TYPE_CHECKING, List, Sequence
 
-import torch
+if TYPE_CHECKING:  # torch is imported where it is used: the edge page reads
+    import torch   # DEFAULT_MU in an upload-only environment without torch
 
 #: The mu ``cluster.client.LoRAClient`` trains with. 0 switches FedProx off.
 DEFAULT_MU = 0.01
 
 
-def snapshot_anchor(params: Sequence[torch.nn.Parameter]) -> List[torch.Tensor]:
+def snapshot_anchor(params: Sequence["torch.nn.Parameter"]) -> List["torch.Tensor"]:
     """``w0``: detached copies of the trainable parameters, taken at round start."""
     return [p.detach().clone() for p in params]
 
 
-def add_proximal_grad(params: Sequence[torch.nn.Parameter], anchors: Sequence[torch.Tensor],
+def add_proximal_grad(params: Sequence["torch.nn.Parameter"], anchors: Sequence["torch.Tensor"],
                       mu: float) -> float:
     """Add ``mu * (w - w0)`` to each parameter's gradient; return ``(mu/2)·||w - w0||²``."""
+    import torch
+
     if mu == 0:
         return 0.0
     if len(params) != len(anchors):
