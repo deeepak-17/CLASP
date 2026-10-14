@@ -110,9 +110,10 @@ class ProjectPaths:
         """Render ``path`` relative to the module root for readable logging."""
         p = Path(path).resolve()
         try:
-            return str(p.relative_to(self.root))
+            # '/' on every OS: these strings land in committed result feeds.
+            return p.relative_to(self.root).as_posix()
         except ValueError:
-            return str(p)
+            return str(p)  # outside the root: machine-specific anyway
 
 
 @lru_cache(maxsize=1)

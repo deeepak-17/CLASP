@@ -125,7 +125,7 @@ def sha256_file(path: Path | str) -> str:
 def _json_default(value: Any) -> Any:
     """Fallback encoder for types ``json`` cannot serialise natively."""
     if isinstance(value, Path):
-        return str(value)
+        return value.as_posix()  # '/' on every OS, so a feed is the same file wherever it was built
     if isinstance(value, (set, frozenset, tuple)):
         return list(value)
     if hasattr(value, "to_dict"):

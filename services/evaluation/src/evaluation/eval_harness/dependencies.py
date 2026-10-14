@@ -31,7 +31,9 @@ from evaluation.utils.reporting import MarkdownReport
 _LOG = get_logger(__name__)
 
 #: Minimum interpreter this repository is developed and tested against.
-MIN_PYTHON: Final[tuple[int, int]] = (3, 11)
+# = requires-python in pyproject.toml; the team's laptops run 3.10 (the edge's
+# bitsandbytes/CUDA stack), CI and the container 3.11.
+MIN_PYTHON: Final[tuple[int, int]] = (3, 10)
 
 
 @dataclass(frozen=True)
