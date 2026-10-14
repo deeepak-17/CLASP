@@ -18,6 +18,7 @@
 body.web { --lane: var(--web); }
 body.scientific { --lane: var(--scientific); }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 400 17px/1.5 var(--font); font-variant-numeric: tabular-nums; }
 :focus-visible { outline: 3px solid var(--lane); outline-offset: 2px; }
 
@@ -37,6 +38,8 @@ h2 { margin: 0 0 4px; font-size: 23.4px; font-weight: 800; }
 .parcel { position: relative; display: block; cursor: pointer; background: var(--sheet); border: 1.5px dashed var(--rule); border-radius: 10px; padding: 14px 16px 14px 44px; }
 .parcel input { position: absolute; left: 16px; top: 18px; width: 18px; height: 18px; accent-color: var(--lane); }
 .parcel .name { font-weight: 800; font-size: 18.75px; }
+.parcel .origin { font-size: 14px; color: var(--ink-2); }
+.parcel .origin.new { color: var(--lane); font-weight: 700; }
 .parcel .meta { font-size: 15px; color: var(--ink-2); }
 .parcel .seal { display: inline-block; margin-top: 6px; font-size: 14px; font-weight: 700; color: var(--lane); }
 .parcel .seal.off { color: var(--ink-2); font-weight: 400; }
@@ -54,13 +57,16 @@ button.quiet:hover:not(:disabled) { background: var(--ink); color: var(--sheet);
 .verdict.bad { color: var(--alert); }
 
 /* tracking: a real sequence, so it is numbered */
-.track { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; counter-reset: step; }
+.track { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; counter-reset: step; }
 .track li { counter-increment: step; position: relative; padding: 38px 16px 0 0; border-top: 4px solid var(--rule); color: var(--ink-2); }
 .track li::before { content: counter(step); position: absolute; top: -16px; left: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--paper); border: 3px solid var(--rule); font-weight: 800; font-size: 14px; display: grid; place-items: center; color: var(--ink-2); }
 .track li.done { border-top-color: var(--lane); color: var(--ink); }
 .track li.done::before { background: var(--lane); border-color: var(--lane); color: var(--sheet); }
+.track li.now { color: var(--ink); }
+.track li.now::before { border-color: var(--lane); color: var(--lane); }
 .track li b { display: block; font-size: 18.75px; }
 .track li span { font-size: 15px; }
+.track li button { margin-top: 8px; }
 
 .others { margin-top: 18px; font-size: 15px; color: var(--ink-2); }
 .others b { color: var(--ink); }
@@ -95,7 +101,7 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
 <main>
   <section>
     <h2>Send an adapter</h2>
-    <p class="sub">Your source code never leaves this laptop. What travels is the adapter trained on it: a few million numbers that describe how to steer the shared model.</p>
+    <p class="sub">Your source code never leaves this laptop. What travels is the adapter trained on it: a few million numbers that describe how to steer the shared model. <span id="dponly">Only adapters trained with differential privacy are listed.</span></p>
     <div id="adapters" class="parcels"><div class="empty">Looking for trained adapters…</div></div>
     <div class="send">
       <button id="upload" disabled>Send adapter to cluster</button>
@@ -105,19 +111,19 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
 
   <section>
     <h2>Where it is now</h2>
-    <p class="sub" id="trackhint">Laptop A merges every laptop's adapter in the cluster, then publishes the result.</p>
+    <p class="sub" id="trackhint">The adapter you send goes to laptop A, gets merged with the cluster's, and the merged adapter comes back here for the next round.</p>
     <ol class="track" id="track"></ol>
     <div class="others" id="others"></div>
   </section>
 
   <details class="train">
     <summary>Train a new adapter here first</summary>
-    <p>Runs a short fine-tune on this laptop's own repository. It needs an NVIDIA GPU. The new adapter appears above, ready to send.</p>
+    <p>Runs a short fine-tune on this laptop's own repository, with differential privacy (ε at most 8). It needs an NVIDIA GPU. Each run adds a new adapter above and selects it, ready to send.</p>
     <div class="fields">
       <label>Repository<input type="text" id="t-client" placeholder="web/client-flask" /></label>
       <label>Training steps<input type="number" id="t-steps" value="50" min="1" max="2000" /></label>
-      <label>Start from the cluster's adapter (optional)<input type="text" id="t-cluster" placeholder="folder of the cluster adapter" /></label>
-      <label class="check"><input type="checkbox" id="t-dp" /> Train with differential privacy (ε at most 8)</label>
+      <label class="check"><input type="checkbox" id="t-base" disabled /> <span id="t-base-text">Start from the merged cluster adapter (none on this laptop yet)</span></label>
+      <label class="check" id="t-dp-row" hidden><input type="checkbox" id="t-dp" checked /> Train with differential privacy (ε at most 8)</label>
     </div>
     <button class="quiet" id="train">Start training</button>
   </details>
@@ -129,7 +135,7 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
 </main>
 
 <script>
-let picked = null, me = null, lastLines = 0, jobRunning = false, lastStatus = null, adapterList = [];
+let picked = null, me = null, lastLines = 0, jobRunning = false, jobKind = null, lastStatus = null, adapterList = [];
 
 async function get(path) { const r = await fetch(path); return r.json(); }
 async function post(path, body) {
@@ -164,25 +170,97 @@ async function refreshStatus() {
     where.className = "link";
     where.innerHTML = `Connected to the cluster at <b>${esc(s.cluster_url)}</b>, ${s.secure ? "over mutual TLS with this laptop's certificate" : "over plain HTTP"}.`;
   }
+  document.getElementById("t-dp-row").hidden = !s.allow_non_dp;
+  document.getElementById("dponly").hidden = !!s.allow_non_dp;
+  const tc = document.getElementById("t-client");
+  if (!tc.value && me && myCluster()) tc.value = `${myCluster()}/${me}`;
   paintIdentity();
   renderTrack(s);
+  paintBase(s);
+  autoPull(s);
 }
 
+// A newer merged round on laptop A than the one on this laptop: fetch it once.
+// The button in step 5 retries by hand if it fails.
+const pullTried = new Set();
+function autoPull(s) {
+  const c = s.reachable && s.my_cluster ? s.clusters[s.my_cluster] : null;
+  if (!c || c.aggregated_round_id == null || jobRunning) return;
+  if (s.pulled && s.pulled.round_id >= c.aggregated_round_id) return;
+  const key = `${s.my_cluster}/${c.aggregated_round_id}`;
+  if (pullTried.has(key)) return;
+  pullTried.add(key);
+  pullNow();
+}
+async function pullNow() {
+  const r = await post("/api/pull", {});
+  if (!r.ok) showResult(r.body.detail, "bad");
+  refreshJob();
+}
+
+function paintBase(s) {
+  const box = document.getElementById("t-base"), text = document.getElementById("t-base-text");
+  const had = !box.disabled;
+  box.disabled = !s.pulled;
+  if (s.pulled && !had) box.checked = true;   // default on once one arrives
+  if (!s.pulled) box.checked = false;
+  text.textContent = s.pulled
+    ? `Start from the merged cluster adapter (round ${s.pulled.round_id}, ${laptops(s.pulled.source_clients.length)})`
+    : "Start from the merged cluster adapter (none on this laptop yet)";
+}
+
+const laptops = (n) => `${n} laptop${n === 1 ? "" : "s"}`;
+const when = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d) ? "Trained" : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+
+// The journey of the adapter this laptop sends: chosen, sent into a round,
+// the rest of the cluster arriving, merged by laptop A, and back here.
 function renderTrack(s) {
   const track = document.getElementById("track");
   const others = document.getElementById("others");
   const cid = s.my_cluster;
   const c = s.reachable && cid ? s.clusters[cid] : null;
-  const hasAdapter = adapterList.length > 0;
-  const received = !!(c && c.uploaded_clients.includes(me));
-  const merged = !!(c && c.aggregated_clients.includes(me) && !received);
+  const chosen = adapterList.find(a => a.id === picked);
+  const sent = s.last_sent && s.last_sent.cluster_id === cid ? s.last_sent : null;
+  const inRound = !!(c && c.uploaded_clients.includes(me));
+  const merged = !!(c && c.aggregated_round_id != null && c.aggregated_clients.includes(me)
+                    && (sent ? c.aggregated_round_id >= sent.round_id : !inRound));
+  const isSent = inRound || merged;
+  const members = c ? c.members || [] : [];
+  const arrived = members.filter(m => c.uploaded_clients.includes(m));
+  const waiting = members.filter(m => !c.uploaded_clients.includes(m) && m !== me);
+  const allIn = members.length > 0 && arrived.length === members.length;
   const steps = [
-    [hasAdapter, "Trained here", hasAdapter ? `${adapterList.length} adapter${adapterList.length === 1 ? "" : "s"} on this laptop` : "No adapter yet"],
-    [!!c, "Round open", c ? `Cluster ${esc(cid)} is collecting round ${c.round_id}` : (s.reachable ? "Waiting for laptop A to register this laptop" : "Cluster not reachable")],
-    [received || merged, "Received", received ? `In round ${c.round_id}, waiting to be merged` : (merged ? "Delivered" : "Not sent in this round")],
-    [merged, "Merged", merged ? `Part of round ${c.aggregated_round_id}'s cluster adapter` : "Laptop A merges once the cluster's adapters arrive"],
+    [!!chosen, "Trained", chosen ? `${when(chosen.trained_utc)}, ε ${chosen.epsilon != null ? chosen.epsilon.toFixed(2) : "none"}` : "Train an adapter below"],
+    [isSent, "Sent",
+      merged ? `Went into round ${c.aggregated_round_id}`
+      : inRound ? `In round ${c.round_id}${sent ? ` (${esc(when(sent.utc * 1000))})` : ""}`
+      : c ? `Round ${c.round_id} is open. Press Send above`
+      : (s.reachable ? "Waiting for laptop A to register this laptop" : "Cluster not reachable")],
+    [merged || allIn, "Cluster complete",
+      merged ? `${c.aggregated_clients.length} laptop${c.aggregated_clients.length === 1 ? "" : "s"} contributed`
+      : c ? `${arrived.length} of ${members.length} laptops have sent${waiting.length && isSent ? `; waiting for ${waiting.map(esc).join(", ")}` : ""}`
+      : "Every laptop in the cluster sends its adapter"],
+    [merged, "Merged", merged ? `Round ${c.aggregated_round_id}'s cluster adapter includes yours` : "Laptop A merges once every adapter is in"],
   ];
-  track.innerHTML = steps.map(([done, title, text]) => `<li class="${done ? "done" : ""}"><b>${title}</b><span>${text}</span></li>`).join("");
+  // Step 5 is about the cluster's latest merge, whether or not this laptop was in it.
+  const latest = c ? c.aggregated_round_id : null;
+  const pulled = s.pulled;
+  const home = !!(pulled && latest != null && pulled.round_id >= latest);
+  const pulling = jobRunning && jobKind === "pull";
+  const canPull = latest != null && !home && !jobRunning;
+  steps.push([home, "Back on this laptop",
+    home ? `Round ${pulled.round_id}'s merged adapter is here (${laptops(pulled.source_clients.length)}, ε ${pulled.epsilon != null ? Number(pulled.epsilon).toFixed(2) : "unknown"}). The next training starts from it.`
+    : pulling ? "Fetching the merged adapter from laptop A…"
+    : latest != null ? `Round ${latest}'s merged adapter is ready on laptop A`
+    : "Comes back here after laptop A merges",
+    canPull]);
+  const now = steps.findIndex(([done]) => !done);
+  track.innerHTML = steps.map(([done, title, text, button], i) => `<li class="${done ? "done" : (i === now ? "now" : "")}"><b>${title}</b><span>${text}</span>${button ? `<button class="quiet" id="pull">Get the merged adapter</button>` : ""}</li>`).join("");
+  const pb = document.getElementById("pull");
+  if (pb) pb.onclick = pullNow;
   if (c) {
     const people = [...new Set([...(c.members || []), ...c.uploaded_clients])].filter(p => p !== me).sort();
     others.innerHTML = people.length
@@ -191,23 +269,28 @@ function renderTrack(s) {
   } else others.textContent = "";
 }
 
-async function loadAdapters() {
+// Newest first (the server sorts); the newest is selected unless the
+// operator picked another, and a run that just finished is selected outright.
+async function loadAdapters(select) {
   const { adapters } = await get("/api/adapters");
   adapterList = adapters;
   const box = document.getElementById("adapters");
   if (!adapters.length) {
-    box.innerHTML = `<div class="empty">No trained adapter for this laptop yet. Unzip the setup bundle into the repository, or train one below.</div>`;
-    paintIdentity(); syncButtons(); return;
+    box.innerHTML = `<div class="empty">No differentially private adapter on this laptop yet. Train one below.</div>`;
+    picked = null; paintIdentity(); syncButtons(); return;
   }
-  if (!picked || !adapters.some(a => a.id === picked)) picked = adapters[adapters.length - 1].id;
-  box.innerHTML = adapters.map(a => `<label class="parcel">
+  if (select && adapters.some(a => a.id === select)) picked = select;
+  if (!picked || !adapters.some(a => a.id === picked)) picked = adapters[0].id;
+  box.innerHTML = adapters.map((a, i) => `<label class="parcel">
       <input type="radio" name="adapter" value="${esc(a.id)}" ${a.id === picked ? "checked" : ""} />
-      <div class="name">${esc(a.set)}</div>
-      <div class="meta">${esc(a.client_id)}, ${a.size_mb} MB, trained on ${esc(a.num_examples)} blocks${a.d3_alpha != null ? `, on top of the cluster adapter (α ${a.d3_alpha})` : ""}</div>
+      <div class="name">${esc(when(a.trained_utc))}</div>
+      <div class="origin ${a.trained_here && i === 0 ? "new" : ""}">${a.trained_here ? (i === 0 ? "Latest, trained on this laptop" : "Trained on this laptop") : `From the setup bundle (${esc(a.set)})`}</div>
+      <div class="meta">${esc(a.client_id)}, ${a.size_mb} MB${a.steps != null ? `, ${a.steps} training step${a.steps === 1 ? "" : "s"}` : ""}${a.d3_alpha != null ? `, on top of the cluster adapter (α ${a.d3_alpha})` : ""}</div>
       <div class="seal ${a.epsilon == null ? "off" : ""}">${a.epsilon == null ? "Trained without differential privacy" : `Differentially private, ε ${a.epsilon.toFixed(2)}`}</div>
     </label>`).join("");
-  box.querySelectorAll("input[name=adapter]").forEach(i => i.onchange = () => { picked = i.value; paintIdentity(); syncButtons(); });
+  box.querySelectorAll("input[name=adapter]").forEach(i => i.onchange = () => { picked = i.value; paintIdentity(); syncButtons(); if (lastStatus) renderTrack(lastStatus); });
   paintIdentity(); syncButtons();
+  if (lastStatus) renderTrack(lastStatus);
 }
 
 function syncButtons() {
@@ -224,7 +307,7 @@ function showResult(text, kind) {
 async function refreshJob() {
   const j = await get("/api/job");
   const wasRunning = jobRunning;
-  jobRunning = j.running; syncButtons();
+  jobRunning = j.running; jobKind = j.kind; syncButtons();
   const log = document.getElementById("log");
   if (j.lines.length !== lastLines) { log.textContent = j.lines.join("\n") || "Nothing yet."; log.scrollTop = log.scrollHeight; lastLines = j.lines.length; }
   if (j.running && j.kind === "upload") showResult("Sending…");
@@ -232,7 +315,17 @@ async function refreshJob() {
     if (j.result) showResult(`Sent. The ${j.result.cluster_id} cluster has it for round ${j.result.round_id}; ${j.result.response.pending_uploads} adapter${j.result.response.pending_uploads === 1 ? " is" : "s are"} waiting to be merged.`, "ok");
     else showResult(j.error, "bad");
   }
-  if (wasRunning && !j.running && j.kind === "train") { loadAdapters(); if (j.error) showResult(j.error, "bad"); }
+  if (wasRunning && !j.running && j.kind === "train") {
+    loadAdapters(j.result && j.result.adapter);
+    if (j.error) showResult(j.error, "bad");
+    else showResult("New adapter trained and selected. Send it when ready.", "ok");
+  }
+  if (wasRunning && !j.running && j.kind === "upload") refreshStatus();
+  if (wasRunning && !j.running && j.kind === "pull") {
+    if (j.result) showResult(`Round ${j.result.round_id}'s merged adapter is on this laptop. Training now starts from it.`, "ok");
+    else showResult(j.error, "bad");
+    refreshStatus();
+  }
 }
 
 document.getElementById("upload").onclick = async () => {
@@ -245,7 +338,7 @@ document.getElementById("train").onclick = async () => {
     client: document.getElementById("t-client").value.trim(),
     max_steps: Number(document.getElementById("t-steps").value),
     dp: document.getElementById("t-dp").checked,
-    cluster_adapter: document.getElementById("t-cluster").value.trim() || null,
+    from_cluster: document.getElementById("t-base").checked,
   });
   if (!r.ok) showResult(r.body.detail, "bad");
   refreshJob();

@@ -60,14 +60,41 @@ def _wait_job(url):
     raise AssertionError("job did not finish")
 
 
-def test_page_lists_only_this_clients_adapters(page_url):
+def test_page_lists_only_this_clients_dp_adapters(page_url):
     url, _ = page_url
     with urllib.request.urlopen(url, timeout=10) as r:
         assert b"CLASP Edge" in r.read()
     adapters = _get(f"{url}/api/adapters")["adapters"]
-    assert {a["id"] for a in adapters} == {"round1/client-flask", "round2_d3/client-flask"}
-    d3 = next(a for a in adapters if a["set"] == "round2_d3")
+    # round1/client-flask has no ε, so it is not offered (D7).
+    assert [a["id"] for a in adapters] == ["round2_d3/client-flask"]
+    d3 = adapters[0]
     assert d3["epsilon"] == 7.99 and d3["cluster"] == "web" and "path" not in d3
+    assert d3["trained_here"] is False and d3["trained_utc"]
+
+
+def test_non_dp_adapters_are_offered_only_when_allowed(tmp_path):
+    _adapter(tmp_path / "round1", "client-flask", seed=2)
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    assert page.adapters() == []
+    with pytest.raises(ValueError, match="without differential privacy"):
+        page.start_upload("round1/client-flask")
+    loose = webui.EdgePage(cluster_url="http://x", client_id="client-flask",
+                           adapters_root=tmp_path, allow_non_dp=True)
+    assert [a["id"] for a in loose.adapters()] == ["round1/client-flask"]
+
+
+def test_each_live_run_is_its_own_set_newest_first(tmp_path):
+    import json as _json
+    for stamp, utc in (("live-20261014-100000", "2026-10-14T10:00:00+00:00"),
+                       ("live-20261014-110000", "2026-10-14T11:00:00+00:00")):
+        _adapter(tmp_path / stamp, "client-flask", seed=1, epsilon=8.0)
+        m = tmp_path / stamp / "client-flask" / "manifest.json"
+        m.write_text(_json.dumps({**_json.loads(m.read_text()), "utc": utc,
+                                  "results": {"optimizer_steps": 1}}))
+    found = webui.find_adapters(tmp_path)
+    assert [a["id"] for a in found] == ["live-20261014-110000/client-flask",
+                                        "live-20261014-100000/client-flask"]
+    assert all(a["trained_here"] and a["steps"] == 1 for a in found)
 
 
 def test_status_then_upload_shows_the_client_arrive(page_url, cluster_url):  # noqa: F811
@@ -81,15 +108,19 @@ def test_status_then_upload_shows_the_client_arrive(page_url, cluster_url):  # n
     job = _wait_job(url)
     assert job["error"] is None and job["result"]["cluster_id"] == "web"
     assert job["result"]["epsilon"] == 7.99
-    web = _get(f"{url}/api/status")["clusters"]["web"]
-    assert web["uploaded_clients"] == ["client-flask"]
+    status = _get(f"{url}/api/status")
+    assert status["clusters"]["web"]["uploaded_clients"] == ["client-flask"]
+    assert status["last_sent"]["adapter"] == "round2_d3/client-flask"
+    assert status["last_sent"]["round_id"] == status["clusters"]["web"]["round_id"]
 
 
 def test_refusals_reach_the_page(page_url):
     url, _ = page_url
     code, _ = _post(f"{url}/api/upload", {"adapter": "../../etc/passwd"})
     assert code == 404
-    code, _ = _post(f"{url}/api/upload", {"adapter": "round1/client-flask"})
+    code, body = _post(f"{url}/api/upload", {"adapter": "round1/client-flask"})
+    assert code == 422 and "differential privacy" in body["detail"]
+    code, _ = _post(f"{url}/api/upload", {"adapter": "round2_d3/client-flask"})
     assert code == 202
     job = _wait_job(url)
     assert "not registered" in job["error"]  # nobody registered 'web' on the cluster
@@ -97,6 +128,89 @@ def test_refusals_reach_the_page(page_url):
     assert code == 422 and "between 1 and 2000" in body["detail"]
     code, body = _post(f"{url}/api/train", {"client": "../x", "max_steps": 5})
     assert code == 422
+    # Another client's adapter would never show on this page.
+    code, body = _post(f"{url}/api/train", {"client": "web/client-requests", "max_steps": 5,
+                                            "dp": True})
+    assert code == 422 and "this page is for client-flask" in body["detail"]
+    code, body = _post(f"{url}/api/train", {"client": "web/client-flask", "max_steps": 5})
+    assert code == 422 and "train with DP" in body["detail"]
+
+
+def _contract_adapter(root, client, *, seed, epsilon=8.0):
+    """A client adapter at the D3 contract's rank (16) and modules, tiny width."""
+    import numpy as np
+
+    from edge import wire
+
+    rng = np.random.default_rng(seed)
+    sd = {}
+    for layer in range(2):
+        for m in wire.TARGET_MODULES:
+            sd[wire.peft_key(layer, m, "lora_A")] = rng.normal(size=(16, 8)).astype(np.float32)
+            sd[wire.peft_key(layer, m, "lora_B")] = rng.normal(size=(8, 16)).astype(np.float32)
+    wire.save_peft_dir(root / client / "adapter", sd,
+                       {"r": 16, "lora_alpha": 16, "target_modules": list(wire.TARGET_MODULES)})
+    (root / client / "manifest.json").write_text(json.dumps({
+        "client_id": f"web/{client}", "seed": 0, "privacy": {"epsilon": epsilon, "delta": 1e-5},
+        "data": {"train": {"n_chunks": 10}}}), encoding="utf-8")
+    return root / client / "adapter"
+
+
+def test_merged_adapter_comes_back_and_seeds_the_next_training(page_url, cluster_url,  # noqa: F811
+                                                                tmp_path, monkeypatch):
+    import requests
+
+    from edge import upload
+    from edge.merge import CONTRACT_HYPERPARAMS, validate_compatibility
+
+    url, page = page_url
+    _register(cluster_url, "web", ["client-flask", "client-requests"])
+    assert _get(f"{url}/api/status")["pulled"] is None
+
+    # Nothing merged yet: the pull says so instead of writing anything.
+    assert _post(f"{url}/api/pull", {})[0] == 202
+    assert "not merged" in _wait_job(url)["error"]
+
+    for client, seed in (("client-flask", 1), ("client-requests", 2)):
+        upload.upload_adapter(_contract_adapter(tmp_path / "edges", client, seed=seed),
+                              cluster_url=cluster_url, log=lambda _m: None)
+    r = requests.post(f"{cluster_url}/clusters/web/aggregate", json={"aggregation": "naive"},
+                      timeout=30)
+    assert r.status_code == 200, r.text
+
+    assert _post(f"{url}/api/pull", {})[0] == 202
+    job = _wait_job(url)
+    assert job["error"] is None and job["result"]["round_id"] == 0
+    pulled = _get(f"{url}/api/status")["pulled"]
+    assert pulled["round_id"] == 0 and pulled["cluster_id"] == "web"
+    assert sorted(pulled["source_clients"]) == ["client-flask", "client-requests"]
+    assert pulled["epsilon"] == 8.0 and "path" not in pulled
+
+    # What came back is a PEFT directory the D3 stacking accepts as the cluster layer.
+    base = page.latest_pulled("web")["path"]
+    cfg = json.loads((base / "adapter_config.json").read_text())
+    peft = pytest.importorskip("peft")
+    client_cfg = peft.LoraConfig(
+        r=16, lora_alpha=16, lora_dropout=0.0, task_type="CAUSAL_LM",
+        target_modules=sorted(CONTRACT_HYPERPARAMS["target_modules"]),
+        base_model_name_or_path=CONTRACT_HYPERPARAMS["base_model_name_or_path"]).to_dict()
+    validate_compatibility([cfg, client_cfg], ["cluster", "client"])
+    # ...and is never offered as something to send.
+    assert all("from_cluster" not in a["id"] for a in _get(f"{url}/api/adapters")["adapters"])
+
+    seen = {}
+    monkeypatch.setattr(page, "start_train", lambda **kw: seen.update(kw) or {"started": "train"})
+    code, _ = _post(f"{url}/api/train", {"client": "web/client-flask", "max_steps": 5,
+                                         "dp": True, "from_cluster": True})
+    assert code == 202 and seen["cluster_adapter"] == str(base)
+
+
+def test_training_from_cluster_needs_a_pulled_adapter(page_url, cluster_url):  # noqa: F811
+    url, _ = page_url
+    _register(cluster_url, "web", ["client-flask"])
+    code, body = _post(f"{url}/api/train", {"client": "web/client-flask", "max_steps": 5,
+                                            "dp": True, "from_cluster": True})
+    assert code == 422 and "no merged cluster adapter" in body["detail"]
 
 
 def test_unreachable_cluster_is_reported(tmp_path):

@@ -204,6 +204,51 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                       status=r.status_code, hint=hints.get(r.status_code, ""))
 
 
+def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
+                         cluster_url: str = DEFAULT_CLUSTER_URL,
+                         http: Optional[requests.Session] = None,
+                         timeout: float = transport.DEFAULT_UPLOAD_TIMEOUT, log=print) -> Dict:
+    """The way back: fetch the cluster's merged adapter and write a PEFT directory.
+
+    ``GET /clusters/{id}/adapters/active`` on the same cluster service (and the
+    same mTLS session) the upload went to, so an edge needs no route to the
+    registry. Written to ``<out_root>/<cluster>-round<N>/`` with
+    ``adapter_config.json`` built from the broadcast's own ``peft_config``
+    (``wire.broadcast_to_peft``), plus ``pull_manifest.json`` recording which
+    round, clients and ε it is. That directory is what ``edge.train_client
+    --cluster-adapter`` takes for the next round (D3).
+    """
+    http = http or requests.Session()
+    url = f"{cluster_url.rstrip('/')}/clusters/{cluster_id}/adapters/active"
+    log(f"edge.pull  cluster {cluster_id!r}'s merged adapter <- {cluster_url}")
+    t0 = time.monotonic()
+    try:
+        r = http.get(url, timeout=timeout)
+    except requests.exceptions.RequestException as exc:
+        raise UploadError(f"pull from {url} failed: {exc}",
+                          hint="is laptop A's stack up and reachable on port 8002?") from exc
+    if r.status_code != 200:
+        hints = {404: "laptop A has not merged this cluster yet; wait for the round to close",
+                 403: "this client is assigned to another cluster and may not read this one"}
+        raise UploadError(f"cluster refused the pull ({r.status_code}): {_http_error(r)}",
+                          status=r.status_code, hint=hints.get(r.status_code, ""))
+    broadcast = r.json()
+    sd, cfg = wire.broadcast_to_peft(broadcast)
+    round_id = int(broadcast["round_id"])
+    dest = Path(out_root) / f"{cluster_id}-round{round_id}"
+    wire.save_peft_dir(dest, sd, cfg)
+    info = {"cluster_id": cluster_id, "round_id": round_id,
+            "source_clients": list(broadcast.get("source_clients") or []),
+            "aggregation": broadcast.get("aggregation"), "epsilon": broadcast.get("epsilon"),
+            "rank": broadcast.get("rank"), "n_tensors": len(sd),
+            "merged_utc": broadcast.get("timestamp"), "cluster_url": cluster_url,
+            "seconds": round(time.monotonic() - t0, 2)}
+    (dest / "pull_manifest.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    log(f"  round {round_id}, {len(sd)} tensors from {', '.join(info['source_clients']) or '-'}, "
+        f"epsilon {info['epsilon']}, in {info['seconds']}s -> {dest}")
+    return {**info, "path": str(dest)}
+
+
 def session_for(mtls_dir: Optional[Path], server_hostname: Optional[str] = None) -> requests.Session:
     """Plain session, or mTLS from a directory holding ca.pem, client.pem, client.key."""
     if mtls_dir is None:
