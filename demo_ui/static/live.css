@@ -192,3 +192,5 @@ details.source p { margin: 6px 0 0; max-width: 70ch; }
   .stop:first-child { border-top: 0; padding-top: 0; }
   .stop:not(:last-child)::after { right: auto; left: 0; top: auto; bottom: -8px; border: 7px solid transparent; border-top: 9px solid var(--lane); }
 }
+
+.stop pre.tail { font-size: 0.72rem; max-height: 6.5em; overflow: auto; white-space: pre-wrap; margin: 0.4rem 0 0; opacity: 0.8; }

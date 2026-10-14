@@ -163,3 +163,67 @@ def test_the_panel_has_no_synthetic_or_placeholder_paths(method, path):
     with TestClient(panel.app) as ui:
         assert ui.request(method, path).status_code == 404
         assert b"page1.html" not in ui.get("/").content
+
+
+# --------------------------------------------------------------------------- #
+# Evaluate before Promote: the candidate is judged on its own measurements
+# --------------------------------------------------------------------------- #
+FAKE_EVALUATOR = '''
+"""Stands in for the GPU scoring in scripts/evaluate_candidate.py: same CLI,
+same registry reads, same evidence file; fixed scores instead of a model."""
+import argparse, importlib.util, sys
+import requests
+spec = importlib.util.spec_from_file_location("ec", {script!r})
+ec = importlib.util.module_from_spec(spec); spec.loader.exec_module(ec)
+ap = argparse.ArgumentParser()
+for flag in ("--cluster", "--registry-url", "--registry-name", "--out-dir"):
+    ap.add_argument(flag)
+a = ap.parse_args()
+listing = requests.get(f"{{a.registry_url}}/adapters/{{a.registry_name}}/versions", timeout=10).json()
+cand, base = ec.pick_versions(listing)
+print(f"scoring v{{cand['ref']['version']}} against v{{base['ref']['version']}}", flush=True)
+score = lambda es, p: {{"in_project": {{"edit_similarity": es, "exact_match": 0.2,
+                                         "perplexity": 3.0, "n_examples": 60}}, "pass_at_1": p}}
+doc = ec.evidence_document(a.cluster, cand, base, score(0.55, 0.5), score(0.45, 0.5),
+                           band={{"value": 0.0, "client": "web/client-flask", "source": "test"}},
+                           details={{"fake": True}})
+ec.write_evidence(a.out_dir, a.cluster, doc)
+print("done", flush=True)
+'''
+
+
+def _wait_eval(ui, cid="web"):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        job = ui.get(f"/api/live/evaluate/{cid}").json()
+        if not job["running"] and job["exit_code"] is not None:
+            return job
+        time.sleep(0.2)
+    raise AssertionError("evaluation did not finish")
+
+
+def test_promote_waits_for_the_candidate_to_be_evaluated(stack, tmp_path, monkeypatch):
+    import sys
+
+    ui, cluster_url, _ = stack
+    monkeypatch.delenv("CLASP_EVAL_EVIDENCE", raising=False)
+    monkeypatch.setattr("demo_ui.evidence.LIVE_EVAL_DIR", tmp_path / "live-eval")
+    script = Path(__file__).resolve().parents[2] / "scripts" / "evaluate_candidate.py"
+    fake = tmp_path / "fake_evaluator.py"
+    fake.write_text(FAKE_EVALUATOR.format(script=str(script)), encoding="utf-8")
+    monkeypatch.setattr(panel, "EVALUATE_CMD", [sys.executable, str(fake)])
+    _, v2 = _two_published_rounds(ui, cluster_url, tmp_path)
+
+    refused = ui.post("/api/live/promote/web")
+    assert refused.status_code == 503 and "Evaluate" in refused.text
+
+    assert ui.post("/api/live/evaluate/web").status_code == 202
+    job = _wait_eval(ui)
+    assert job["exit_code"] == 0 and any("scoring v2 against v1" in line for line in job["lines"])
+    state = ui.get("/api/live/state").json()["clusters"]["web"]
+    assert state["evaluated_version"] == 2
+
+    body = ui.post("/api/live/promote/web").json()
+    assert body["decision"]["action"] == "promote"
+    assert body["sent"]["in_project"]["edit_similarity"] == 0.55
+    assert body["provenance"]["stale"] is False

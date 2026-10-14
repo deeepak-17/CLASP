@@ -24,6 +24,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -149,6 +153,11 @@ LIVE_CLUSTERS: dict[str, list[str]] = (
 )
 #: Last aggregate / publish / promote per cluster, for the panel to redraw.
 _live: dict[str, dict] = {}
+#: The evaluation of the published candidate (scripts/evaluate_candidate.py on
+#: this laptop's GPU), one subprocess per cluster at a time.
+EVALUATE_CMD = [sys.executable, str(REPO_ROOT / "scripts" / "evaluate_candidate.py")]
+_eval_jobs: dict[str, dict] = {}
+_eval_lock = threading.Lock()
 
 
 def live_registry_name(cluster_id: str) -> str:
@@ -214,7 +223,8 @@ async def _registry_summary(client: httpx.AsyncClient, cluster_id: str) -> dict:
             "version": v["ref"]["version"], "round": v.get("round"),
             "aggregation": v.get("aggregation"), "source_clients": v.get("source_clients", []),
             "epsilon": (v.get("privacy") or {}).get("epsilon"),
-            "sha256": v.get("sha256", "")[:12], "created_at": v.get("created_at"),
+            "sha256": v.get("sha256", "")[:12], "digest": v.get("sha256"),
+            "created_at": v.get("created_at"),
         } for v in body.get("versions", [])],
     }
 
@@ -230,14 +240,83 @@ async def live_state() -> dict:
         listing = r.json()["clusters"]
         out = {}
         for cid in LIVE_CLUSTERS:
+            reg = await _registry_summary(client, cid)
             out[cid] = {
                 "planned_members": LIVE_CLUSTERS[cid],
                 "registered": cid in listing,
                 "cluster": listing.get(cid),
-                "registry": await _registry_summary(client, cid),
+                "registry": reg,
                 "last": _live.get(cid, {}),
+                "evaluation": _eval_snapshot(cid, tail=4),
+                "evaluated_version": _evaluated(cid, reg),
             }
     return {"clusters": out}
+
+
+def _active_digest(reg: dict) -> str | None:
+    return next((v["digest"] for v in reg["versions"] if v["version"] == reg["active"]), None)
+
+
+def _evaluated(cluster_id: str, reg: dict) -> int | None:
+    """The active version, if it has its own evaluation (version and sha256)."""
+    from demo_ui.evidence import evaluated_version
+
+    if reg["active"] is None:
+        return None
+    ok = evaluated_version(cluster_id, reg["active"], _active_digest(reg))
+    return reg["active"] if ok else None
+
+
+def _eval_snapshot(cluster_id: str, tail: int | None = None) -> dict:
+    with _eval_lock:
+        job = dict(_eval_jobs.get(cluster_id) or {"running": False, "exit_code": None,
+                                                  "lines": []})
+        job["lines"] = list(job["lines"][-tail:] if tail else job["lines"])
+    return job
+
+
+@app.post("/api/live/evaluate/{cluster_id}", status_code=202)
+def live_evaluate(cluster_id: str) -> dict:
+    """Step 4b: score the version the registry serves, and the one before it,
+    on this laptop's GPU (scripts/evaluate_candidate.py), so Promote judges the
+    candidate on its own measurements. Runs in the background; poll GET."""
+    from demo_ui import evidence
+
+    cid = _live_cluster(cluster_id)
+    cmd = [*EVALUATE_CMD, "--cluster", cid, "--registry-url", REGISTRY_BASE,
+           "--registry-name", live_registry_name(cid), "--out-dir", str(evidence.LIVE_EVAL_DIR)]
+    with _eval_lock:
+        if (_eval_jobs.get(cid) or {}).get("running"):
+            raise HTTPException(409, f"{cid} is already being evaluated")
+        job = _eval_jobs[cid] = {"running": True, "exit_code": None, "lines": [],
+                                 "started": time.time(), "command": cmd[1:]}
+    env = dict(os.environ, PYTHONUNBUFFERED="1",
+               PYTHONPATH=os.pathsep.join(filter(None, [str(REPO_ROOT), os.environ.get("PYTHONPATH")])))
+
+    def run() -> None:
+        try:
+            proc = subprocess.Popen(cmd, cwd=str(REPO_ROOT), env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                                    errors="replace")
+            for line in proc.stdout:
+                with _eval_lock:
+                    job["lines"].append(line.rstrip())
+                    del job["lines"][:-300]
+            code = proc.wait()
+        except OSError as e:
+            with _eval_lock:
+                job["lines"].append(f"could not start the evaluation: {e}")
+            code = -1
+        with _eval_lock:
+            job["running"], job["exit_code"] = False, code
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"started": cid, "command": cmd[1:]}
+
+
+@app.get("/api/live/evaluate/{cluster_id}")
+def live_evaluate_state(cluster_id: str) -> dict:
+    return _eval_snapshot(_live_cluster(cluster_id))
 
 
 @app.post("/api/live/aggregate/{cluster_id}")
@@ -286,10 +365,6 @@ async def live_promote(cluster_id: str) -> dict:
 
     cid = _live_cluster(cluster_id)
     name = live_registry_name(cid)
-    try:
-        ev = evidence_for(cid)
-    except EvidenceMissing as e:
-        raise HTTPException(503, str(e)) from e
     async with _client(60.0) as client:
         reg = await _registry_summary(client, cid)
         if reg["active"] is None:
@@ -298,6 +373,11 @@ async def live_promote(cluster_id: str) -> dict:
             raise HTTPException(
                 409, f"{name} has only v{reg['active']}: D5 compares a candidate against the "
                      f"version before it, so publish a second round first")
+        try:
+            # the candidate's own measurements, matched by version and sha256
+            ev = evidence_for(cid, version=reg["active"], sha256=_active_digest(reg))
+        except EvidenceMissing as e:
+            raise HTTPException(503, str(e)) from e
         body = {
             "eval": {
                 "adapter": {"name": name, "version": reg["active"], "kind": "cluster",

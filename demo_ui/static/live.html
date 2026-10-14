@@ -121,7 +121,14 @@ function decisionStop(cid, c) {
   const newest = reg.versions.length ? Math.max(...reg.versions.map(v => v.version)) : null;
   // the registry only judges the version it is serving, and only once
   const decided = r && r.candidate_version === newest;
-  const canAsk = enough && reg.active === newest && !decided && !busy[cid];
+  const ev = c.evaluation || {};
+  const measured = c.evaluated_version === newest;
+  const canEval = enough && reg.active === newest && !measured && !ev.running && !busy[cid];
+  const canAsk = enough && reg.active === newest && measured && !decided && !busy[cid];
+  const evalNote = ev.running
+    ? `<p class="fine">Evaluating v${newest} on this laptop's GPU (in-project completion + HumanEval, v${newest} and the version before it)…</p><pre class="tail">${esc((ev.lines || []).join("\n"))}</pre>`
+    : ev.exit_code && !measured ? `<p class="fine warn">Evaluation failed (exit ${ev.exit_code}): ${esc((ev.lines || []).slice(-1)[0] || "")}</p>`
+    : measured && !decided ? `<p class="fine">v${newest} has been measured; the registry can decide.</p>` : "";
   let body;
   if (r) {
     const d = r.decision, s = r.sent, p = r.provenance;
@@ -143,10 +150,11 @@ function decisionStop(cid, c) {
         ${p.stale ? `<p>${esc(p.note)}</p>` : ""}</details>`;
   } else {
     body = `<p class="lead">${enough ? `Ready to judge v${newest}` : "Needs two versions to compare"}</p>
-      <p class="fine">The registry keeps the new version only if completion quality beats the last one and HumanEval does not drop.</p>`;
+      <p class="fine">The registry keeps the new version only if completion quality beats the last one and HumanEval does not drop, measured on this version itself.</p>`;
   }
-  return `<div class="stop"><h3>Decision</h3>${body}
-    <div class="act"><button class="quiet" data-act="promote" data-c="${cid}" ${canAsk ? "" : "disabled"}>${decided ? `v${newest} has been judged` : enough ? `Ask the registry about v${newest}` : "Ask the registry to decide"}</button></div></div>`;
+  return `<div class="stop"><h3>Decision</h3>${body}${evalNote}
+    <div class="act"><button class="quiet" data-act="evaluate" data-c="${cid}" ${canEval ? "" : "disabled"}>${measured ? `v${newest} is measured` : ev.running ? "Evaluating…" : enough ? `Evaluate v${newest}` : "Evaluate"}</button>
+      <button class="quiet" data-act="promote" data-c="${cid}" ${canAsk ? "" : "disabled"}>${decided ? `v${newest} has been judged` : enough ? `Ask the registry about v${newest}` : "Ask the registry to decide"}</button></div></div>`;
 }
 
 function render(state) {
@@ -181,7 +189,7 @@ async function refresh() {
   announce(r.body); render(r.body);
 }
 
-const verbs = { aggregate: "Merging", publish: "Publishing", promote: "Asking the registry" };
+const verbs = { aggregate: "Merging", publish: "Publishing", evaluate: "Starting the evaluation", promote: "Asking the registry" };
 async function act(action, cid) {
   busy[cid] = true; delete errors[cid]; refresh();
   note(`${cid}: ${verbs[action]}…`);
@@ -192,6 +200,7 @@ async function act(action, cid) {
     note(`${cid}: ${verbs[action].toLowerCase()} failed (${r.status}). ${errors[cid]}`);
   } else if (action === "aggregate") note(`${cid}: merged ${plural(r.body.manifest.num_clients, "adapter", "adapters")} into round ${r.body.manifest.round_id}`);
   else if (action === "publish") note(`${cid}: published ${r.body.version.name} v${r.body.version.version}`);
+  else if (action === "evaluate") note(`${cid}: evaluating on this laptop's GPU; it takes several minutes`);
   else note(`${cid}: ${r.body.decision.action === "promote" ? "promoted" : "rolled back"}. ${r.body.decision.reason}`);
   refresh();
 }

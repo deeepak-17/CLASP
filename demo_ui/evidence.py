@@ -8,14 +8,23 @@ absent, and D5 treats an absent guard as a failed guard (ROLLBACK).
 
 Where the numbers come from, first match wins:
 
+0. ``.runtime/live-eval/<cluster>-v<N>.json`` (``CLASP_LIVE_EVAL_DIR``):
+   ``scripts/evaluate_candidate.py`` scored version N itself — the version
+   the registry is about to judge — and its baseline on this laptop's GPU.
+   Used only when its version and sha256 are the candidate's. When Promote
+   names the candidate (it always does), this is the only source besides an
+   explicit ``CLASP_EVAL_EVIDENCE``: a version nobody evaluated is refused,
+   never judged on another adapter's numbers.
+
 1. ``CLASP_EVAL_EVIDENCE`` — a JSON file an evaluation run wrote for *this*
-   round (e.g. a GPU laptop re-scoring the live aggregate)::
+   round (an operator's explicit choice)::
 
        {"source": "...", "clusters": {"web": {
            "in_project": {...}, "baseline_in_project": {...},
            "guard": [...], "baseline_guard": [...], "noise_band": 0.0}}}
 
-2. The newest four-seam round manifest (``scripts/demo_round.py``, default
+2. Only for a caller that names no version: the newest four-seam round
+   manifest (``scripts/demo_round.py``, default
    ``experiments/w12-integration/results/round*_manifest.json``): the
    in-project completion metric (``evaluation.completion``, 60 held-out
    examples, greedy) measured on a GPU for that cluster's candidate and
@@ -43,6 +52,8 @@ EVAL_RESULTS = Path(os.environ.get(
     "CLASP_EVAL_RESULTS", REPO_ROOT / "services" / "evaluation" / "results"))
 ROUND_MANIFESTS = Path(os.environ.get(
     "CLASP_ROUND_MANIFESTS", REPO_ROOT / "experiments" / "w12-integration" / "results"))
+LIVE_EVAL_DIR = Path(os.environ.get(
+    "CLASP_LIVE_EVAL_DIR", REPO_ROOT / ".runtime" / "live-eval"))
 GUARD_BENCHMARK = "HumanEval"
 
 
@@ -118,6 +129,47 @@ def _from_override(cluster_id: str) -> Optional[Dict]:
     }
 
 
+def _from_live_eval(cluster_id: str, version: int, sha256: Optional[str]) -> Optional[Dict]:
+    """``scripts/evaluate_candidate.py``'s file for exactly this version (and sha256)."""
+    path = LIVE_EVAL_DIR / f"{cluster_id}-v{version}.json"
+    doc = _read(path)
+    if not doc or doc.get("candidate_version") != version:
+        return None
+    if sha256 is not None and doc.get("candidate_sha256") != sha256:
+        return None  # same number, other bytes: another adapter's evaluation
+    entry = (doc.get("clusters") or {}).get(cluster_id)
+    if not entry:
+        return None
+    details, band = doc.get("details") or {}, doc.get("noise_band") or {}
+    cand, base = details.get("candidate") or {}, details.get("baseline") or {}
+    rel = _rel(path)
+    sha_c, sha_b = str(doc.get("candidate_sha256", ""))[:12], str(doc.get("baseline_sha256", ""))[:12]
+    return {
+        "in_project": entry["in_project"], "baseline_in_project": entry["baseline_in_project"],
+        "guard": entry.get("guard", []), "baseline_guard": entry.get("baseline_guard", []),
+        "noise_band": float(entry.get("noise_band", 0.0)),
+        "provenance": {
+            "in_project": (f"{rel} — v{version} ({sha_c}) against v{doc.get('baseline_version')} "
+                           f"({sha_b}), each as base + {details.get('alpha')}·cluster, on "
+                           f"{details.get('client')}'s held-out files, "
+                           f"{entry['in_project'].get('n_examples')} examples, greedy"),
+            "guard": (f"HumanEval/0..{(cand.get('humaneval_n') or 20) - 1} pass@1, greedy, scored by "
+                      f"P5's executor: candidate {cand.get('humaneval_solved')}/"
+                      f"{cand.get('humaneval_n')}, baseline {base.get('humaneval_solved')}/"
+                      f"{base.get('humaneval_n')}"),
+            "noise_band": f"{entry.get('noise_band')} from {band.get('source') or 'nowhere'} "
+                          f"({band.get('client') or 'all'})",
+            "stale": False,
+            "note": f"measured on this exact version by {doc.get('source', 'evaluate_candidate.py')}",
+        },
+    }
+
+
+def evaluated_version(cluster_id: str, version: int, sha256: Optional[str]) -> bool:
+    """Whether ``version`` (with these bytes) has its own evaluation on disk."""
+    return _from_live_eval(cluster_id, version, sha256) is not None
+
+
 def _newest_round_manifest(cluster_id: str, folder: Path = ROUND_MANIFESTS) -> Optional[tuple]:
     found = []
     for path in folder.glob("round*_manifest.json"):
@@ -128,11 +180,24 @@ def _newest_round_manifest(cluster_id: str, folder: Path = ROUND_MANIFESTS) -> O
     return max(found, key=lambda t: t[0])[1:] if found else None
 
 
-def evidence_for(cluster_id: str) -> Dict:
-    """Measured EvalResult inputs for ``cluster_id``'s Promote, with provenance."""
+def evidence_for(cluster_id: str, version: Optional[int] = None,
+                 sha256: Optional[str] = None) -> Dict:
+    """Measured EvalResult inputs for ``cluster_id``'s Promote, with provenance.
+
+    With ``version`` (the candidate Promote is about to judge) only that
+    version's own evaluation — or an explicit ``CLASP_EVAL_EVIDENCE`` — will do.
+    """
     override = _from_override(cluster_id)
     if override:
         return override
+    if version is not None:
+        live = _from_live_eval(cluster_id, version, sha256)
+        if live:
+            return live
+        raise EvidenceMissing(
+            f"cluster {cluster_id!r} v{version} has not been evaluated yet: press Evaluate on the "
+            f"live panel (scripts/evaluate_candidate.py scores it and its baseline on this "
+            f"laptop's GPU)")
     hit = _newest_round_manifest(cluster_id)
     if hit is None:
         raise EvidenceMissing(

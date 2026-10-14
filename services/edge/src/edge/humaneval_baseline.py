@@ -31,8 +31,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import transformers
-from evalplus.data import get_human_eval_plus
-
 from edge.model_loader import load_model
 
 # Standard HumanEval stop sequences: a base model keeps generating past the
@@ -61,6 +59,8 @@ def select_subset(n: int) -> list[str]:
     list is still written to the manifest so the choice is explicit, not
     implied by a magic number.
     """
+    from evalplus.data import get_human_eval_plus  # only the anchor CLI needs evalplus
+
     problems = get_human_eval_plus()
     ids = sorted(problems, key=lambda t: int(t.split("/")[1]))
     return ids[:n]
@@ -159,6 +159,8 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     set_determinism(args.seed)
+    from evalplus.data import get_human_eval_plus
+
     problems = get_human_eval_plus()
     task_ids = select_subset(args.n)
 
