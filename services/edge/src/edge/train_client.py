@@ -464,7 +464,8 @@ def _security_dp():
 
 def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
              log_every: int, *, epochs: int, batch_size: int, target_epsilon: float,
-             delta: float, max_grad_norm: float) -> Dict:
+             delta: float, max_grad_norm: float,
+             max_steps: Optional[int] = None) -> Dict:
     """DP-SGD over the client's packed blocks, via ``security.make_private``.
 
     P3's ``DPConfig`` carries the budget and ``make_private`` builds the
@@ -496,6 +497,9 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
       which is what Opacus provides. D7 asks for client-level DP; that is a
       property of the federated protocol, not of one client's loop, and is
       recorded as such rather than claimed.
+    * ``max_steps`` caps the logical steps actually taken (smoke runs). The
+      noise is still calibrated over ``epochs``; stopping early only spends
+      less ε, and the accountant reports what was spent.
 
     ε is reported two ways. The one recorded (and uploaded) is the engine's
     own accountant over the steps actually taken: it is the accountant the
@@ -558,6 +562,8 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     dp_opt.attach_step_hook(_count_step)
 
     planned_steps = epochs * len(dp_loader)
+    if max_steps is not None:
+        planned_steps = min(planned_steps, max_steps)
     warmup_steps = max(1, int(planned_steps * warmup_ratio))
     scheduler = transformers.get_cosine_schedule_with_warmup(
         dp_opt, num_warmup_steps=warmup_steps, num_training_steps=planned_steps)
@@ -572,7 +578,11 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     with BatchMemoryManager(data_loader=dp_loader, max_physical_batch_size=1,
                             optimizer=dp_opt) as memory_loader:
         for _ in range(epochs):
+            if steps >= planned_steps:
+                break
             for x in memory_loader:
+                if steps >= planned_steps:
+                    break
                 if x.shape[0] == 0:
                     # Poisson sampling can draw an empty logical batch. There is
                     # nothing to forward; the step is skipped and NOT accounted.
@@ -639,6 +649,7 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
             "sample_rate": q,
             "logical_batch_size": batch_size,
             "epochs": epochs,
+            "max_logical_steps": max_steps,
             "privacy_unit": "one packed block (record-level DP-SGD); client-level DP "
                             "is a federated-protocol property and is not claimed here",
             "gradient_checkpointing": False,
@@ -668,7 +679,8 @@ def main() -> None:
     ap.add_argument("--corpus-root", default=str(DEFAULT_CORPUS_ROOT))
     ap.add_argument("--profile", default="dev", help="model profile key (config.PROFILES)")
     ap.add_argument("--seq-len", type=int, default=DEFAULT_SEQ_LEN)
-    ap.add_argument("--max-steps", type=int, help="explicit block budget (overrides --budget-plan)")
+    ap.add_argument("--max-steps", type=int, help="explicit block budget (overrides --budget-plan); under --dp it "
+                         "caps logical steps at ceil(N / --dp-batch-size)")
     ap.add_argument("--budget-plan", help="budget_plan.json from `edge.chunking --plan`")
     ap.add_argument("--lr", type=float, default=DEFAULT_LR)
     ap.add_argument("--micro-batch", type=int, default=DEFAULT_MICRO_BATCH)
@@ -758,11 +770,16 @@ def main() -> None:
     dp_epochs = None
     if args.dp:
         dp_epochs = args.dp_epochs or max(1, round(epochs))
+        # An explicit --max-steps is a hard cap under DP too: the block budget
+        # becomes logical steps of ~dp_batch_size blocks each. Without this a
+        # 1-block smoke run rounds up to a full epoch (hundreds of steps).
+        dp_max_steps = (math.ceil(args.max_steps / args.dp_batch_size)
+                        if args.max_steps else None)
         result = train_dp(model, train_split["chunks"], lr=args.lr,
                           warmup_ratio=args.warmup_ratio, log_every=args.log_every,
                           epochs=dp_epochs, batch_size=args.dp_batch_size,
                           target_epsilon=args.dp_epsilon, delta=args.dp_delta,
-                          max_grad_norm=args.dp_max_grad_norm)
+                          max_grad_norm=args.dp_max_grad_norm, max_steps=dp_max_steps)
     else:
         schedule = build_schedule(train_split["n_chunks"], budget, args.micro_batch,
                                   args.grad_accum, random.Random(args.seed))
