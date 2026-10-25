@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="CLASP: Clustered LoRA Adapter Stacking for Secure and Personalized Code Generation. Team 102, 23CSE498 Project Phase II, Amrita Vishwa Vidyapeetham, Coimbatore.">
+<title>CLASP Project</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#fbfafa; --surface:#ffffff; --fg:#1d1518; --muted:#6b5c62; --line:#e8dfe2;
+  --accent:#a4123f; --accent-soft:#f6e7ec; --good:#1d7a4f; --warn:#a35d00;
+  --display:"Archivo",system-ui,sans-serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141012; --surface:#1d181a; --fg:#f1eaec; --muted:#ab9ca2; --line:#342b2e;
+  --accent:#ec6d93; --accent-soft:#3a1b25; --good:#5cc895; --warn:#e8a54a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141012; --surface:#1d181a; --fg:#f1eaec; --muted:#ab9ca2; --line:#342b2e;
+  --accent:#ec6d93; --accent-soft:#3a1b25; --good:#5cc895; --warn:#e8a54a; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--body);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.wrap{max-width:980px;margin:0 auto}
+a{color:var(--accent)} a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line);
+  display:flex;gap:18px;overflow-x:auto;font:500 13px var(--body);white-space:nowrap}
+nav a{color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;min-height:44px} nav a:hover{color:var(--accent)}
+.skip{position:absolute;left:16px;top:-48px;z-index:20;background:var(--accent);color:var(--bg);padding:10px 14px;border-radius:6px;font:600 14px var(--body);text-decoration:none}
+.skip:focus{top:12px}
+.video{margin:20px 0 12px}
+.video .link{margin-top:14px}
+.video .frame{position:relative;aspect-ratio:16/9;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
+.video iframe,.video video{position:absolute;inset:0;width:100%;height:100%;border:0}
+.video .btn{display:inline-flex;align-items:center;min-height:44px}
+header{padding-block:56px 40px;display:grid;gap:18px}
+.eyebrow{font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font:800 clamp(34px,6vw,58px)/1.04 var(--display);margin:0;letter-spacing:-.02em;text-wrap:balance}
+.formula{font:500 clamp(15px,2.4vw,20px) var(--mono);background:var(--accent-soft);border-radius:6px;padding:14px 18px;overflow-x:auto;white-space:nowrap}
+.formula b{color:var(--accent);font-weight:500}
+.lede{font-size:18px;max-width:64ch;margin:0;color:var(--fg)}
+.cta{display:flex;flex-wrap:wrap;gap:12px}
+.btn{font:600 14px var(--body);text-decoration:none;padding:10px 16px;border-radius:6px;border:1px solid var(--accent)}
+.btn.primary{background:var(--accent);color:var(--bg)} .btn.ghost{color:var(--accent)}
+section{padding-block:36px;border-top:1px solid var(--line);scroll-margin-top:48px}
+h2{font:700 26px/1.2 var(--display);margin:0 0 16px;letter-spacing:-.01em}
+h3{font:600 16px var(--body);margin:0 0 6px}
+p{max-width:68ch;margin:0 0 12px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px}
+.cols>*{min-width:0}
+.step{display:grid;grid-template-columns:44px 1fr;gap:12px;padding-block:14px;border-bottom:1px solid var(--line)}
+.step .n{font:500 13px var(--mono);color:var(--accent);padding-top:2px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px var(--body);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+td.num{font:400 14px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{display:inline-block;font:500 12px var(--mono);padding:2px 8px;border-radius:99px;border:1px solid currentColor;white-space:nowrap}
+.ok{color:var(--good)} .wip{color:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-block:8px 24px}
+.stat{border-left:2px solid var(--accent);padding-left:14px}
+.stat .v{font:700 28px var(--display)} .stat .k{font-size:14px;color:var(--muted)}
+pre{font:13px/1.55 var(--mono);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px;overflow-x:auto;margin:0 0 12px}
+.note{font-size:14px;color:var(--muted)}
+footer{padding-block:32px 48px;border-top:1px solid var(--line);font-size:14px;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+html{scroll-behavior:smooth}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="wrap">
+<nav aria-label="Sections">
+  <a href="#problem">Problem</a><a href="#objectives">Objectives</a><a href="#method">Methodology</a>
+  <a href="#results">Results</a><a href="#progress">Progress</a><a href="#roadmap">Roadmap</a><a href="#docs">Documentation</a>
+  <a href="#demo">Demo</a><a href="#team">Team</a>
+</nav>
+<main id="main">
+
+<header>
+  <div class="eyebrow">23CSE498 Project Phase II · Team 102 · Amrita Vishwa Vidyapeetham, Coimbatore</div>
+  <h1>CLASP: Clustered LoRA Adapter Stacking for Secure and Personalized Code Generation</h1>
+  <div class="formula">W = W<sub>base</sub> + <b>α·ΔW<sub>cluster</sub></b> + β·ΔW<sub>client</sub></div>
+  <p class="lede">An on-premise federated code-generation system. Each developer's model is composed from a frozen base model, a cluster adapter learned jointly by clients whose code is alike, and a personal adapter. No source code leaves local infrastructure.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/deeepak-17/CLASP">GitHub repository</a>
+    <a class="btn ghost" href="#demo">Run the demo</a>
+  </div>
+</header>
+
+<section id="problem">
+  <h2>Problem statement</h2>
+  <div class="cols">
+    <div><h3>Cloud assistants need your code</h3><p>Hosted code assistants learn a project's context by sending its source off-site. Many organizations cannot allow proprietary code to leave their network.</p></div>
+    <div><h3>Local models learn alone</h3><p>Fine-tuning one model per developer keeps code private, but what one engineer's files teach the model never reaches a colleague on the same project.</p></div>
+    <div><h3>Federated LoRA is not plug-and-play</h3><p>Averaging LoRA factors separately does not average the updates they represent, and a system that keeps producing adapters needs a safe way to decide which one is served and to undo a bad one.</p></div>
+  </div>
+</section>
+
+<section id="objectives">
+  <h2>Objectives</h2>
+  <div class="cols">
+    <p>Personalize code completion to both the project and the individual developer, with all training on local machines.</p>
+    <p>Share project knowledge across a team through federated aggregation of LoRA adapters, with differential privacy and mutual TLS on the channels.</p>
+    <p>Version every adapter immutably, promote only candidates that improve in-project quality without regressing general coding ability, and roll back otherwise.</p>
+  </div>
+</section>
+
+<section id="method">
+  <h2>Methodology: one federated round</h2>
+  <div class="step"><div class="n">A</div><div><h3>Edge trains and uploads</h3>Each client trains a rank-16 LoRA (q/k/v/o, 24 layers) on its own repository over a 4-bit base model with the FedProx proximal term, then uploads it to <code>POST /uploads</code>. The personal adapter is trained on the frozen base plus cluster layer, not on the bare base.</div></div>
+  <div class="step"><div class="n">B</div><div><h3>Cluster aggregates exactly</h3>The server averages the clients' products B·A weighted by sample count, then re-factorizes to rank 16 by truncated SVD computed through thin QR, so the dense update is never formed. The result is published to the registry. Rounds 1–2 use the two project clusters; from round 3, clients are re-clustered by k-means (k = 2) on the cosine similarity of their updates, with static assignment as the fallback.</div></div>
+  <div class="step"><div class="n">C1</div><div><h3>Registry serves the active version</h3>Immutable, sha256-verified safetensors versions with an <code>active</code> pointer. On promotion the registry stores one pre-merged composite (α·cluster + β·client) per developer, and the edge serves that single adapter on the 4-bit base.</div></div>
+  <div class="step"><div class="n">C2</div><div><h3>Two-sided promotion</h3>Promote only if in-project completion improves beyond the noise band and HumanEval pass@1 drops by at most 2 points; otherwise roll back. Every decision goes to an audit trail.</div></div>
+  <p class="note" style="margin-top:14px">Stack: DeepSeek-Coder · PyTorch · PEFT · bitsandbytes (NF4) · Flower · FedProx · Opacus · mTLS · FastAPI · safetensors · React · Docker Compose.</p>
+</section>
+
+<section id="results">
+  <h2>Measured results</h2>
+  <p class="note">DeepSeek-Coder-1.3B-base (NF4) on an RTX 2050 (4 GB), seed 0. Six clients in two clusters: web (Flask, Requests, Werkzeug in place of Django) and scientific (NumPy, pandas, scikit-learn), with 10% of each repository's files held out for in-project evaluation.</p>
+  <div class="stats">
+    <div class="stat"><div class="v">1.92–2.15×</div><div class="k">closer to the exact average than per-factor averaging</div></div>
+    <div class="stat"><div class="v">14.0–17.9 min</div><div class="k">one round across all four seams (budget 30 min)</div></div>
+    <div class="stat"><div class="v">+66 ms</div><div class="k">worst time-to-first-token overhead (budget 200 ms)</div></div>
+    <div class="stat"><div class="v">0.026 s</div><div class="k">registry restore to previous version (budget 10 s)</div></div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Client</th><th>Cluster layer effect, round 1</th><th>Round 2 (trained on base + cluster)</th></tr></thead>
+    <tbody>
+      <tr><td>Flask</td><td class="num">+0.000</td><td class="num">−0.047</td></tr>
+      <tr><td>Requests</td><td class="num">+0.002</td><td class="num">−0.064</td></tr>
+      <tr><td>Werkzeug</td><td class="num">+0.012</td><td class="num">−0.047</td></tr>
+      <tr><td>NumPy</td><td class="num">+0.011</td><td class="num">−0.016</td></tr>
+      <tr><td>pandas</td><td class="num">+0.010</td><td class="num">−0.022</td></tr>
+      <tr><td>scikit-learn</td><td class="num">+0.014</td><td class="num">−0.021</td></tr>
+    </tbody></table></div>
+  <p class="note" style="margin-top:10px">Change in held-out perplexity when the cluster layer is added at α = 0.5 (negative = helps). Training clients on top of the frozen cluster layer is what makes it contribute.</p>
+</section>
+
+<section id="progress">
+  <h2>Project progress</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Subsystem</th><th>State</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Contracts</td><td>Shared typed messages, fp32 wire contract enforced at the boundary</td><td><span class="pill ok">Frozen v1.0</span></td></tr>
+      <tr><td>Edge: training</td><td>LoRA/PEFT on real repository partitions, 1024-token packing</td><td><span class="pill ok">Functional</span></td></tr>
+      <tr><td>Edge: inference</td><td>4-bit NF4 loading, composite merge, TTFT and swap benchmarks</td><td><span class="pill ok">Functional</span></td></tr>
+      <tr><td>Cluster</td><td>Weighted exact SVD aggregation over 2 clusters, straggler policy, FastAPI service</td><td><span class="pill ok">Functional</span></td></tr>
+      <tr><td>Dynamic re-clustering</td><td>k-means on update similarity after round 2, static fallback; dynamic-vs-static ablation planned for Phase III</td><td><span class="pill ok">Implemented</span></td></tr>
+      <tr><td>Registry</td><td>Immutable versions, sha256, active tag, two-sided promote/rollback audit, composite storage, retention policy, run manifests</td><td><span class="pill ok">Functional</span></td></tr>
+      <tr><td>Evaluation</td><td>In-project edit similarity, exact match, perplexity</td><td><span class="pill ok">Functional</span></td></tr>
+      <tr><td>Integration</td><td>All four seams live over HTTP; one-command round</td><td><span class="pill ok">Integrated</span></td></tr>
+      <tr><td>Round 2 (training order)</td><td>Clients retrained on base + cluster; cluster layer helps on all six</td><td><span class="pill ok">Done</span></td></tr>
+      <tr><td>Security</td><td>DP-SGD run at ε = 7.99; registry behind mTLS overlay; not yet on every channel</td><td><span class="pill wip">In progress</span></td></tr>
+      <tr><td>HumanEval guard</td><td>Completions generated; scoring needs a Linux container</td><td><span class="pill wip">In progress</span></td></tr>
+      <tr><td>Dashboard (React)</td><td>Scaffold; metrics read from JSON artifacts</td><td><span class="pill wip">In progress</span></td></tr>
+    </tbody></table></div>
+</section>
+
+<section id="roadmap">
+  <h2>Roadmap</h2>
+  <div class="cols">
+    <div><h3>Phase II · 23CSE498 · Build and integrate</h3><p>Contracts v1.0 frozen (week 2)<br>Panel Review 1: every module demoed in isolation (week 6)<br>G1: edge and cluster live over mTLS (week 7)<br>G2: three-layer composition, 6 clients in 2 clusters (week 8)<br>G3: full end-to-end federated round (week 9)<br>Panel Review 2: integrated demo (week 12)<br>End-semester review (week 16)</p></div>
+    <div><h3>Phase III · 23CSE499 · Validate, ablate, publish</h3><p>Rank sweep over {4, 8, 16, 32}<br>α/β grid, composition-order and dynamic-vs-static clustering ablations<br>Privacy sweep ε ∈ {2, 4, 8, ∞} with a membership-inference test<br>vLLM vs transformers serving ablation<br>Paper submission and a public reproducibility release (configs, seeds, manifests)</p></div>
+  </div>
+  <p class="note">Design targets: time-to-first-token overhead ≤ 200 ms, adapter swap ≤ 2 s, one round ≤ 30 min, registry restore ≤ 10 s, ε ≤ 8 at δ = 1e-5.</p>
+</section>
+
+<section id="docs">
+  <h2>Documentation</h2>
+  <div class="cols">
+    <div><h3>In the repository</h3><p><code>docs/architecture.md</code> modules and data flow<br><code>services/registry/README.md</code> registry endpoints<br><code>docs/devops.md</code> build, CI, mTLS, NFRs<br><code>docs/dataset.md</code> corpus and partitions<br><code>docs/threat_model.md</code>, <code>docs/dp_config.md</code></p></div>
+    <div><h3>Experiment records</h3><p><code>experiments/w3-edge-lora-composite</code><br><code>experiments/w4w5-g2-g3-round</code><br><code>experiments/w12-integration</code><br><code>experiments/d3-round2-dp</code><br>Each has a seeded config and a results write-up.</p></div>
+  </div>
+  <p><a href="https://github.com/deeepak-17/CLASP">github.com/deeepak-17/CLASP</a></p>
+</section>
+
+<section id="demo">
+  <h2>Demonstration</h2>
+  <p>Bring up the registry, cluster service and demo UI with one command, or run a full federated round across all four seams.</p>
+<pre>git clone https://github.com/deeepak-17/CLASP && cd CLASP
+docker compose --profile demo up --build      # registry :8004, cluster :8002, demo UI :8010
+
+python scripts/run_services.py --background   # or run the services on the host
+python scripts/demo_round.py --round 1        # one round: upload, aggregate, publish, pull, promote
+
+curl -s localhost:8004/adapters/cluster-web/versions | python -m json.tool
+curl -s localhost:8004/adapters/cluster-web/promotions</pre>
+  <!-- Demonstration video: paste a YouTube, Google Drive or .mp4 link into data-video-url. -->
+  <figure class="video" id="demo-video" data-video-url="" hidden>
+    <h3>Demonstration video</h3>
+    <div class="frame" hidden></div>
+    <p class="link" hidden><a class="btn primary" target="_blank" rel="noopener">Watch the demonstration video</a></p>
+  </figure>
+</section>
+
+<section id="team">
+  <h2>Team</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Name</th><th>Register number</th></tr></thead>
+    <tbody>
+      <tr><td>Adithyaa Seyyone D R</td><td class="num">CB.SC.U4CSE23305</td></tr>
+      <tr><td>Prasanth P M</td><td class="num">CB.SC.U4CSE23263</td></tr>
+      <tr><td>Kapilan V</td><td class="num">CB.SC.U4CSE23224</td></tr>
+      <tr><td>Deepak S</td><td class="num">CB.SC.U4CSE23267</td></tr>
+      <tr><td>Aditya S</td><td class="num">CB.SC.U4CSE23210</td></tr>
+    </tbody></table></div>
+  <p style="margin-top:14px">Guide: <strong>Dr. Swapna T R</strong>, Associate Professor, Department of CSE, Amrita Vishwa Vidyapeetham, Coimbatore.</p>
+</section>
+
+</main>
+<footer>CLASP · Team 102 · 23CSE498 Project Phase II · Software project (Type 3)</footer>
+</div>
+<script>
+(function () {
+  var box = document.getElementById("demo-video");
+  var raw = (box.getAttribute("data-video-url") || "").trim();
+  if (!raw) return;
+  var url;
+  try { url = new URL(raw); } catch (e) { return; }
+  if (url.protocol !== "https:") return;
+
+  function embedSrc(u) {
+    var host = u.hostname.replace(/^www\./, "");
+    var id = null;
+    if (host === "youtu.be") id = u.pathname.slice(1);
+    if (host === "youtube.com" || host === "m.youtube.com") {
+      id = u.searchParams.get("v") || (u.pathname.match(/^\/(?:shorts|embed)\/([\w-]+)/) || [])[1];
+    }
+    if (id && /^[\w-]{6,}$/.test(id)) return "https://www.youtube-nocookie.com/embed/" + id;
+    var drive = host === "drive.google.com" && u.pathname.match(/^\/file\/d\/([\w-]+)/);
+    if (drive) return "https://drive.google.com/file/d/" + drive[1] + "/preview";
+    return null;
+  }
+
+  var frame = box.querySelector(".frame");
+  var src = embedSrc(url);
+  if (src) {
+    var iframe = document.createElement("iframe");
+    iframe.src = src;
+    iframe.title = "CLASP demonstration video";
+    iframe.loading = "lazy";
+    iframe.referrerPolicy = "strict-origin-when-cross-origin";
+    iframe.allow = "encrypted-media; picture-in-picture; fullscreen";
+    iframe.allowFullscreen = true;
+    frame.appendChild(iframe);
+    frame.hidden = false;
+  } else if (/\.(mp4|webm)$/i.test(url.pathname)) {
+    var video = document.createElement("video");
+    video.src = url.href;
+    video.controls = true;
+    video.preload = "none";
+    frame.appendChild(video);
+    frame.hidden = false;
+  }
+  var link = box.querySelector(".link");
+  link.querySelector("a").href = url.href;
+  link.hidden = false;
+  box.hidden = false;
+})();
+</script>
+</body>
+</html>
