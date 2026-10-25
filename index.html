@@ -153,9 +153,9 @@ html{scroll-behavior:smooth}
       <tr><td>Evaluation</td><td>In-project edit similarity, exact match, perplexity</td><td><span class="pill ok">Functional</span></td></tr>
       <tr><td>Integration</td><td>All four seams live over HTTP; one-command round</td><td><span class="pill ok">Integrated</span></td></tr>
       <tr><td>Round 2 (training order)</td><td>Clients retrained on base + cluster; cluster layer helps on all six</td><td><span class="pill ok">Done</span></td></tr>
-      <tr><td>Security</td><td>DP-SGD run at ε = 7.99; registry behind mTLS overlay; not yet on every channel</td><td><span class="pill wip">In progress</span></td></tr>
-      <tr><td>HumanEval guard</td><td>Completions generated; scoring needs a Linux container</td><td><span class="pill wip">In progress</span></td></tr>
-      <tr><td>Dashboard (React)</td><td>Scaffold; metrics read from JSON artifacts</td><td><span class="pill wip">In progress</span></td></tr>
+      <tr><td>Security</td><td>mTLS (TLS 1.3, client certificates) verified on edge→cluster and cluster→registry; uploads screened for invalid or poisoned updates; DP-SGD at ε = 7.99</td><td><span class="pill wip">In progress</span></td></tr>
+      <tr><td>HumanEval guard</td><td>Generated code runs in a no-network Docker sandbox; base pass@1 0.50 on a 20-task subset; each candidate scored on the same subset before promotion</td><td><span class="pill wip">Subset scored</span></td></tr>
+      <tr><td>Dashboard (React)</td><td>Personalization, adapter-lineage, and noise &amp; guard pages over the evaluation results</td><td><span class="pill ok">Functional</span></td></tr>
     </tbody></table></div>
 </section>
 
