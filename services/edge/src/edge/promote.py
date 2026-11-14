@@ -39,6 +39,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+#: Edge-local ``decision.action`` for a promote that was never sent (not a
+#: contracts ``PromotionAction``; the registry never produces it).
+NOT_SENT = "not_sent"
+
 GUARD_BENCHMARK = "LineCompletion"  # evaluation.eval_harness.line_guard.GUARD_BENCHMARK
 
 #: The edit-similarity drop the line-completion guard tolerates
@@ -260,7 +264,8 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         baseline_noise_band=noise_band, seed=seed)
     baseline_guard: List[Dict] = [guard.baseline] if guard.available else []
     # Read before C2: a rollback moves the active pointer, not the history.
-    versions = [v["ref"]["version"] for v in client.list_versions(adapter_name)["versions"]]
+    listing = client.list_versions(adapter_name)
+    versions = [v["ref"]["version"] for v in listing["versions"]]
     previous_version = _previous_version(versions, version)
     expected_action, expected_why = predict_decision(
         eval_result, baseline_guard, previous_version)
@@ -268,16 +273,15 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         decision = client.promote(adapter_name, eval_result, baseline_guard)
     else:
         # The registry refuses a promote that carries no guard (422, nothing
-        # recorded), so it is not asked. What is recorded here is the rule's own
-        # reading of the inputs, and the registry's pointer was NOT moved.
+        # recorded), so it is not asked. This is an edge-local record, not a
+        # registry decision: its pointer is where it was.
         decision = {
             "adapter": eval_result["adapter"],
-            "action": expected_action,
-            "active_version_after": previous_version,
-            "reason": expected_why,
+            "action": NOT_SENT,
+            "active_version_after": listing.get("active"),
             "registry_called": False,
-            "registry_note": ("not sent: the registry refuses a promote without "
-                              "LineCompletion guard metrics; its active pointer is unchanged"),
+            "reason": f"promote not sent: {guard.reason}",
+            "predicted": {"action": expected_action, "why": expected_why},
         }
     return {
         "adapter": adapter_name,
@@ -293,7 +297,7 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         "locally_predicted": {"action": expected_action, "why": expected_why,
                               "rule": "registry.promotion.decide"},
         "registry_agrees_with_local_prediction":
-            (None if expected_action == "unavailable"
+            (None if expected_action == "unavailable" or decision["action"] == NOT_SENT
              else decision["action"] == expected_action),
         "in_project_measured": measured,
         "in_project_note": (

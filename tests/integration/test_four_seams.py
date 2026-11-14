@@ -533,9 +533,9 @@ def test_seam_c2_rolls_back_when_the_guard_regresses(
     assert "LineCompletion edit similarity dropped" in record["decision"]["reason"]
 
 
-def test_seam_c2_rolls_back_when_the_guard_is_unavailable(
+def test_seam_c2_is_not_sent_when_the_guard_is_unavailable(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    """The sprint's F3 position, asserted: a missing guard is a failed guard."""
+    """A missing guard is never a pass: the registry refuses it, so the edge does not send it."""
     publish_two_versions(cluster_client, registry_client, monkeypatch)
     guard = resolve_guard()
     assert not guard.available
@@ -545,10 +545,15 @@ def test_seam_c2_rolls_back_when_the_guard_is_unavailable(
         in_project=_metrics(0.99), baseline_in_project=_metrics(0.10),
         guard=guard, noise_band=0.0)
 
-    assert record["decision"]["action"] == "rollback"
+    assert record["decision"]["action"] == "not_sent"
+    assert record["decision"]["registry_called"] is False
+    assert record["decision"]["active_version_after"] == 2
     assert record["decision_is_authoritative"] is False
     assert "PROVISIONAL" in record["authority_note"]
     assert "guard" in record["decision"]["reason"].lower()
+    assert record["decision"]["predicted"]["action"] == "rollback"
+    assert edge_registry.list_promotions(REGISTRY_NAME) == []
+    assert edge_registry.get_active(REGISTRY_NAME)["ref"]["version"] == 2
 
 
 def test_seam_c2_marks_an_unmeasured_metric_instead_of_inventing_one(

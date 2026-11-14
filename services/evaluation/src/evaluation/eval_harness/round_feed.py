@@ -226,7 +226,7 @@ def d5_alerts(round_entry: Mapping[str, Any]) -> list[dict[str, Any]]:
         common = {"round": round_entry["round"], "cluster_id": cluster["cluster_id"]}
         for kind, message in reasons:
             alerts.append({**common, "kind": kind, "message": message})
-        if predicted != actual:
+        if predicted != actual and actual != "not_sent":  # not sent: guard_unavailable says why
             alerts.append(
                 {
                     **common,

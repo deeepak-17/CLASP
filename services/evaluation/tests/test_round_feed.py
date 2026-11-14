@@ -200,7 +200,7 @@ def test_feed_reads_what_the_real_producers_write(tmp_path, monkeypatch) -> None
         cluster["seam_a_b"]["versions"][label]["registry_version"] = published[label]
     feed = build_feed([_manifest(1, {"web": cluster}, guard.as_dict())])
     web = feed["rounds"][0]["clusters"][0]
-    assert web["decision"]["action"] == "rollback" and web["decision"]["active_version_after"] == 1
+    assert web["decision"]["action"] == "not_sent" and web["decision"]["active_version_after"] == 2
     assert web["candidate"]["sha256"] == published["candidate"]["sha256"]
     assert [a["kind"] for a in feed["alerts"]] == ["guard_unavailable"]
 

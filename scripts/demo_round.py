@@ -454,10 +454,13 @@ def main() -> None:
             in_project=(cand_metrics["in_project"] if cand_metrics else None),
             baseline_in_project=(base_metrics["in_project"] if base_metrics else None),
             guard=guard, noise_band=args.noise_band, seed=args.seed)
-        counters["decisions"] += 1
         d = promotion["decision"]
-        log(f"  C2 {d['action'].upper()}  active v{d['active_version_after']}")
-        log(f"     reason: {d['reason']}")
+        if d.get("registry_called") is False:
+            log(f"  C2 NOT SENT — {d['reason']}")
+        else:
+            counters["decisions"] += 1
+            log(f"  C2 {d['action'].upper()}  active v{d['active_version_after']}")
+            log(f"     reason: {d['reason']}")
         log(f"     {promotion['authority_note']}")
 
         results[cluster_id] = {

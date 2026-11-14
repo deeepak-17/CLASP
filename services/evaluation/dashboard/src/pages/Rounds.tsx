@@ -36,10 +36,11 @@ function versionCell(v: VersionBlock) {
 
 function DecisionBadge({ c }: { c: ClusterRound }) {
   const promote = c.decision.action === "promote";
+  const notSent = c.decision.action === "not_sent";
   return (
     <span className={"badge " + (promote ? "badge-real" : "badge-demo")}>
       <span className="badge-dot" />
-      {promote ? "▲ PROMOTE" : "▼ ROLLBACK"} → v{c.decision.active_version_after}
+      {notSent ? "NOT SENT" : promote ? "▲ PROMOTE" : "▼ ROLLBACK"} · active v{c.decision.active_version_after}
       {c.authoritative ? "" : " · provisional"}
     </span>
   );
