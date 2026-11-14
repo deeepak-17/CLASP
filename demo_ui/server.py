@@ -25,6 +25,7 @@ running on :8002/:8004) — or ``python scripts/run_services.py --ui``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -246,11 +247,103 @@ async def _registry_summary(client: httpx.AsyncClient, cluster_id: str) -> dict:
     }
 
 
+#: Only one reconciliation runs at a time, so two page polls (or a poll and a
+#: Promote) never send the same cluster step twice.
+_reconciling = False
+
+
+def _step_error(what: str, resp: httpx.Response | None = None, exc: Exception | None = None) -> str:
+    if resp is not None:
+        return f"{what} -> {resp.status_code}: {_detail(resp)}"
+    detail = exc.detail if isinstance(exc, HTTPException) else exc
+    return f"{what}: {detail}"
+
+
+def _already_done(row: dict, cluster: dict | None) -> bool:
+    """A cluster 409 means the step is already in effect when, for a promote,
+    the cluster serves the row's sha256, or, for a reject, it has no pending
+    candidate or its pending candidate is another one."""
+    if cluster is None:
+        return False
+    if row["action"] == "promote":
+        return cluster.get("active_sha256") == row["sha256"]
+    return cluster.get("candidate_sha256") in (None, "") or cluster["candidate_sha256"] != row["sha256"]
+
+
+async def _apply_cluster_step(client: httpx.AsyncClient, row: dict) -> tuple[bool, dict]:
+    """Send one row's step to its cluster: (landed, result or ``{"error": ...}``)."""
+    what = f"cluster candidate/{row['action']}"
+    try:
+        cr = await _send(client, "POST",
+                         f"{CLUSTER_BASE}/clusters/{row['cluster_id']}/adapters/candidate/{row['action']}",
+                         json={"sha256": row["sha256"]})
+        if cr.status_code == 200:
+            return True, cr.json()
+        if cr.status_code == 409:
+            listing = await _send(client, "GET", f"{CLUSTER_BASE}/clusters")
+            cluster = (listing.json().get("clusters") or {}).get(row["cluster_id"])                 if listing.status_code == 200 else None
+            if _already_done(row, cluster):
+                return True, {"already_applied": True,
+                              "active_sha256": (cluster or {}).get("active_sha256")}
+        return False, {"error": _step_error(what, resp=cr)}
+    except (HTTPException, httpx.HTTPError, ValueError) as e:
+        return False, {"error": _step_error(what, exc=e)}
+
+
+async def _reconcile_cluster_sync(client: httpx.AsyncClient) -> dict:
+    """Apply the registry's pending cluster steps (``GET /sync/pending``) and
+    report each outcome (``POST /sync/{id}/done``). Never raises: a step that
+    does not land stays pending in the registry, and is returned here.
+
+    Returns ``{"pending": [rows still open, with attempts and last_error],
+    "results": {sync id: {adapter, version, landed, result}}, "error": why the list itself was unavailable}``.
+    """
+    global _reconciling
+    while _reconciling:
+        await asyncio.sleep(0.05)
+    _reconciling = True
+    try:
+        results: dict[int, dict] = {}  # sync id -> adapter, version, landed, result
+        try:
+            r = await _send(client, "GET", f"{REGISTRY_BASE}/sync/pending")
+            if r.status_code != 200:
+                return {"pending": [], "results": results,
+                        "error": _step_error("registry GET /sync/pending", resp=r)}
+            rows = r.json()["pending"]
+        except (HTTPException, httpx.HTTPError, ValueError, KeyError) as e:
+            return {"pending": [], "results": results,
+                    "error": _step_error("registry GET /sync/pending", exc=e)}
+        still = []
+        for row in rows:
+            landed, result = await _apply_cluster_step(client, row)
+            error = None if landed else result["error"]
+            try:
+                rep = await _send(client, "POST", f"{REGISTRY_BASE}/sync/{row['id']}/done",
+                                  json={"ok": landed, "error": error})
+                if rep.status_code != 200:
+                    landed, result = False, {"error": _step_error("registry POST /sync/done", resp=rep)}
+                    error = result["error"]
+            except (HTTPException, httpx.HTTPError) as e:
+                landed, result = False, {"error": _step_error("registry POST /sync/done", exc=e)}
+                error = result["error"]
+            results[row["id"]] = {"adapter": row["adapter"], "version": row["version"],
+                                   "landed": landed, "result": result}
+            if not landed:
+                still.append({**row, "attempts": row["attempts"] + 1, "last_error": error})
+        return {"pending": still, "results": results, "error": None}
+    finally:
+        _reconciling = False
+
+
 @app.get("/api/live/state")
 async def live_state() -> dict:
     """What the live panel draws: each cluster's round, members, who has
-    uploaded, its registry versions, and the last action results."""
+    uploaded, its registry versions, and the last action results. First it
+    finishes any cluster promote/reject the registry still has open, so a
+    restarted panel completes the job; a step that does not land is reported
+    under ``cluster_sync`` (and per cluster), never raised."""
     async with _client(10.0) as client:
+        sync = await _reconcile_cluster_sync(client)
         r = await _send(client, "GET", f"{CLUSTER_BASE}/clusters")
         if r.status_code != 200:
             raise HTTPException(502, f"GET /clusters -> {r.status_code}: {_detail(r)}")
@@ -267,10 +360,12 @@ async def live_state() -> dict:
                 "candidate_sha256": (cluster or {}).get("candidate_sha256"),
                 "registry": reg,
                 "last": _live.get(cid, {}),
+                "cluster_sync": [p for p in sync["pending"] if p["cluster_id"] == cid],
                 "evaluation": _eval_snapshot(cid, tail=4),
                 "evaluated_version": _evaluated(cid, reg),
             }
-    return {"clusters": out}
+    return {"clusters": out, "cluster_sync": sync["pending"],
+            "cluster_sync_error": sync["error"]}
 
 
 def _digest(reg: dict, version: int | None) -> str | None:
@@ -379,6 +474,20 @@ async def live_publish(cluster_id: str) -> dict:
     return {"version": summary}
 
 
+def _cluster_outcome(sync: dict, name: str, version: int) -> dict:
+    """What happened to this decision's cluster step: the cluster's answer, or
+    ``error`` (with ``pending``) while it has not landed."""
+    if sync["error"]:
+        return {"pending": True, "error": f"{sync['error']} (cluster not yet updated; will retry)"}
+    for entry in sync["results"].values():
+        if (entry["adapter"], entry["version"]) == (name, version):
+            if entry["landed"]:
+                return entry["result"]
+            return {"pending": True,
+                    "error": f"{entry['result']['error']} (cluster not yet updated; will retry)"}
+    return {"error": "the registry recorded no cluster step for this decision"}
+
+
 @app.post("/api/live/promote/{cluster_id}")
 async def live_promote(cluster_id: str) -> dict:
     """Step 5: D5 on the pending candidate, with evaluation's measured
@@ -419,11 +528,10 @@ async def live_promote(cluster_id: str) -> dict:
             raise HTTPException(r.status_code, f"promote {name}: {_detail(r)}")
         decision = r.json()
         step = "promote" if decision.get("action") == "promote" else "reject"
-        cr = await _send(client, "POST",
-                         f"{CLUSTER_BASE}/clusters/{cid}/adapters/candidate/{step}",
-                         json={"sha256": digest})
-        cluster_result = cr.json() if cr.status_code == 200 else {
-            "error": f"cluster candidate/{step} -> {cr.status_code}: {_detail(cr)}"}
+        # the registry recorded the cluster's step with its decision; apply it
+        # now, and if it does not land the next state call retries it
+        sync = await _reconcile_cluster_sync(client)
+    cluster_result = _cluster_outcome(sync, name, cand)
     sent = {k: body["eval"][k] for k in ("in_project", "baseline_in_project", "guard",
                                          "baseline_noise_band")}
     sent["baseline_guard"] = body["baseline_guard"]

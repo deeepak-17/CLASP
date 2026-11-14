@@ -356,3 +356,137 @@ def test_promote_waits_for_the_candidate_to_be_evaluated(stack, tmp_path, monkey
     assert body["decision"]["action"] == "promote"
     assert body["sent"]["in_project"]["edit_similarity"] == 0.55
     assert body["provenance"]["stale"] is False
+
+
+# --------------------------------------------------------------------------- #
+# The cluster's promote / reject is retried from the registry's cluster_sync rows
+# --------------------------------------------------------------------------- #
+def _registry_pending(registry_url) -> list:
+    import requests
+
+    return requests.get(f"{registry_url}/sync/pending", timeout=10).json()["pending"]
+
+
+def _cluster_steps(sent) -> list:
+    return [(url.rsplit("/", 1)[1], j) for _, url, j in sent if "/adapters/candidate/" in url]
+
+
+def test_a_promote_with_the_cluster_unreachable_is_finished_by_the_next_state_call(
+        stack, tmp_path, monkeypatch):
+    ui, cluster_url, registry_url = stack
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    monkeypatch.setattr(panel, "CLUSTER_BASE", "http://127.0.0.1:9")  # nothing listens there
+    body = ui.post("/api/live/promote/web")
+    assert body.status_code == 200, body.text  # the registry decided; only the cluster step is open
+    body = body.json()
+    assert body["decision"]["action"] == "promote"
+    assert body["cluster"]["step"] == "promote" and "not reachable" in body["cluster"]["error"]
+    (row,) = _registry_pending(registry_url)
+    assert row["action"] == "promote" and row["sha256"] == v1["sha256"] and row["attempts"] == 1
+    assert row["last_error"]
+
+    # a state call while the cluster is still down reports the open step and does not raise
+    down = ui.get("/api/live/state")
+    assert down.status_code == 502  # GET /clusters itself is unreachable: the pre-existing answer
+    assert _registry_pending(registry_url)[0]["attempts"] == 2
+
+    monkeypatch.setattr(panel, "CLUSTER_BASE", cluster_url)  # the cluster comes back
+    sent = _spy_sends(monkeypatch)
+    state = ui.get("/api/live/state").json()
+    assert _cluster_steps(sent) == [("promote", {"sha256": v1["sha256"]})]
+    assert _registry_pending(registry_url) == []
+    assert _cluster_web(cluster_url)["active_sha256"] == v1["sha256"]
+    assert state["cluster_sync"] == []
+
+    sent.clear()  # a second call has nothing left to send
+    ui.get("/api/live/state")
+    assert _cluster_steps(sent) == []
+    assert not any(m == "POST" and "/sync/" in url for m, url, _ in sent)
+
+
+def test_state_reports_a_pending_step_instead_of_raising(stack, tmp_path, monkeypatch):
+    ui, cluster_url, registry_url = stack
+    assert ui.post("/api/live/register").status_code == 200
+    _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+
+    # the cluster answers GET /clusters but refuses the step: a 5xx
+    real_send = panel._send
+
+    async def broken(client, method, url, **kw):
+        if "/adapters/candidate/" in url:
+            return httpx.Response(500, text="boom", request=httpx.Request(method, url))
+        return await real_send(client, method, url, **kw)
+
+    import httpx
+
+    monkeypatch.setattr(panel, "_send", broken)
+    body = ui.post("/api/live/promote/web").json()
+    assert body["cluster"]["step"] == "promote" and "500" in body["cluster"]["error"]
+    state = ui.get("/api/live/state").json()
+    (open_step,) = state["clusters"]["web"]["cluster_sync"]
+    assert open_step["action"] == "promote" and open_step["attempts"] == 2
+    assert "500" in open_step["last_error"]
+    assert state["cluster_sync"] == [open_step]
+
+
+def test_a_409_for_a_step_the_cluster_already_took_counts_as_done(stack, tmp_path, monkeypatch):
+    import requests
+
+    ui, cluster_url, registry_url = stack
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    monkeypatch.setattr(panel, "CLUSTER_BASE", "http://127.0.0.1:9")
+    assert ui.post("/api/live/promote/web").status_code == 200
+    # the cluster took the step meanwhile (a previous attempt whose report was lost)
+    assert requests.post(f"{cluster_url}/clusters/web/adapters/candidate/promote",
+                         json={"sha256": v1["sha256"]}, timeout=10).status_code == 200
+    monkeypatch.setattr(panel, "CLUSTER_BASE", cluster_url)
+    sent = _spy_sends(monkeypatch)
+    state = ui.get("/api/live/state").json()
+    assert [s for s, _ in _cluster_steps(sent)] == ["promote"]  # answered 409, judged done
+    assert _registry_pending(registry_url) == [] and state["cluster_sync"] == []
+
+
+def test_a_409_for_a_different_state_stays_pending(stack, tmp_path, monkeypatch):
+    ui, cluster_url, registry_url = stack
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    monkeypatch.setattr(panel, "CLUSTER_BASE", "http://127.0.0.1:9")
+    assert ui.post("/api/live/promote/web").status_code == 200
+    monkeypatch.setattr(panel, "CLUSTER_BASE", cluster_url)
+    # the cluster dropped the candidate by other means, so the promote has no
+    # candidate to take and the cluster is not serving the row's sha either
+    import requests
+
+    assert requests.post(f"{cluster_url}/clusters/web/adapters/candidate/reject",
+                         json={"sha256": v1["sha256"]}, timeout=10).status_code == 200
+    state = ui.get("/api/live/state").json()
+    (row,) = _registry_pending(registry_url)
+    assert row["attempts"] >= 2 and "409" in row["last_error"]
+    assert state["clusters"]["web"]["cluster_sync"][0]["id"] == row["id"]
+
+
+def test_a_reject_whose_candidate_is_gone_counts_as_done(stack, tmp_path, monkeypatch):
+    ui, cluster_url, registry_url = stack
+    v1, v2 = _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.40, 0.45))
+    monkeypatch.setattr(panel, "CLUSTER_BASE", "http://127.0.0.1:9")
+    body = ui.post("/api/live/promote/web").json()
+    assert body["decision"]["action"] == "reject" and body["cluster"]["step"] == "reject"
+    (row,) = _registry_pending(registry_url)
+    assert row["action"] == "reject" and row["sha256"] == v2["sha256"]
+    monkeypatch.setattr(panel, "CLUSTER_BASE", cluster_url)
+    sent = _spy_sends(monkeypatch)
+    ui.get("/api/live/state")
+    assert _cluster_steps(sent) == [("reject", {"sha256": v2["sha256"]})]
+    assert _registry_pending(registry_url) == []
+    listing = _cluster_web(cluster_url)
+    assert listing["candidate_sha256"] is None and listing["active_sha256"] == v1["sha256"]
+    sent.clear()
+    ui.get("/api/live/state")
+    assert _cluster_steps(sent) == []

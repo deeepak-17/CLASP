@@ -103,28 +103,69 @@ commands, and the debt log.
 ## 4. Registry internals (P4 — this repo's primary module)
 
 Storage layout on the persistent volume (`CLASP_REGISTRY_DATA`, default
-`/data/registry`):
+`/data/registry`): **metadata lives in SQLite, weights stay on disk.**
 
 ```
+registry.db                  # SQLite (WAL): adapters, versions, active pointer,
+                             # composite parts, promotion decisions, cluster sync
 adapters/<name>/
-  v1/  adapter.safetensors   metadata.json
-  v2/  adapter.safetensors   metadata.json
-  active                     # text file: the promoted version int
+  v1/  adapter.safetensors   # weights only; the file is the source of the sha256
+  v2/  adapter.safetensors
 ```
 
-- **Immutable versions** — a new adapter version is a new directory; `save`
-  refuses to clobber an existing version (D9). Every payload gets a sha256.
+- **Immutable versions** — a new adapter version is a new row and a new
+  directory; `save` refuses to clobber an existing version (D9). Every payload
+  gets a sha256.
 - **Opaque payloads** — the registry treats adapter tensors as bytes, so the
-  service needs no torch/numpy/safetensors at runtime (stdlib-only storage layer,
-  with a structural safetensors-header validity check on write).
-- **`metadata.json`** — an `AdapterMetadata` record: ref, LoRA hyperparams,
-  privacy spec (ε, δ), aggregation method (cluster adapters), round, seed, sha256,
-  size, source clients, timestamp.
+  service needs no torch/numpy/safetensors at runtime, with a structural
+  safetensors-header validity check on write.
+- **Version metadata** — an `AdapterMetadata` record (ref, LoRA hyperparams,
+  privacy spec (ε, δ), aggregation method, round, seed, sha256, size, source
+  clients, timestamp) is stored as JSON in `versions.metadata_json`, with the
+  columns the registry queries (sha256, size, created_at) alongside it. A volume
+  written by the older file-based registry is imported into the database on the
+  first start.
 - **Run manifests** — `RunManifest` (run_id, seed, config hash, adapter versions,
   GPU-hrs estimate/actual) written per experiment for reproducibility (D9).
 
+**The promotion transaction.** A promote (and an operator restore) changes
+several things that must stand or fall together: the active pointer, the
+decision record, any composite built on promote (its version row and parts) and
+the `cluster_sync` row. They commit as one SQLite transaction. The weight files
+of a new composite are written *before* the transaction and are not served
+until it registers them; if the transaction fails, the files written by that
+request are removed.
+
+**Orphan sweep.** A crash between writing files and committing leaves a version
+directory with no row. `retention.sweep_orphans` removes such unregistered
+directories; it runs before every non-dry-run GC, never on a dry run.
+
+**Cluster sync and retry.** The cluster service must also switch to a promoted
+candidate or drop a rejected one, and that crosses services, so it cannot be
+part of the registry's transaction. Instead the promotion transaction writes a
+`cluster_sync` row (`pending`, with the cluster id, the version's sha256 and
+`promote` or `reject`). The caller applies the step and reports back:
+`GET /sync/pending` lists open rows, `POST /sync/{id}/done` marks one done or
+counts a failed attempt. The demo panel does this at the end of Promote and at
+the start of every state poll, so a cluster that was down, or a panel that was
+restarted, catches up. A cluster 409 counts as done when the cluster already
+serves the row's sha256 (promote) or has no such pending candidate (reject).
+
+### Data model
+
+Six tables (`registry/db.py`); foreign keys are enforced.
+
+| Table | Holds | Keys and indices |
+|---|---|---|
+| `adapters` | one row per adapter name, with its kind | PK `id`; unique `name` |
+| `versions` | one row per immutable version: sha256, size, created_at, metadata JSON | PK `id`; unique `(adapter_id, version)` |
+| `active_pointer` | the served version per adapter | PK `adapter_id`; `version_id` references `versions` |
+| `composite_parts` | which cluster and client versions a composite was built from, with weights | PK `(composite_version_id, role)`, role is `cluster` or `client`; index `ix_composite_parts_part_version_id` on `part_version_id` |
+| `promotion_decisions` | the audit trail: action, active version after, reason, decision JSON | PK `id`; index `ix_promotion_decisions_adapter_id_id` on `(adapter_id, id)` |
+| `cluster_sync` | the cluster step of a decision: action `promote` or `reject`, status `pending` or `done`, attempts, last error | PK `id`; unique `decision_id` |
+
 The endpoint contract is the route list in the module docstring of
-`services/registry/src/registry/app.py` (14 routes).
+`services/registry/src/registry/app.py` (16 routes).
 
 ## 5. Process & reproducibility (D9)
 

@@ -49,7 +49,7 @@ class MetadataRepository(Protocol):
     def composites_built_from(self, name: str, version: int) -> list[AdapterRef]: ...
     def add_cluster_sync(self, decision_id: int, cluster_id: str, sha256: str, action: str) -> int: ...
     def pending_cluster_sync(self) -> list[dict]: ...
-    def mark_cluster_sync(self, sync_id: int, *, done: bool, error: str | None = None) -> None: ...
+    def mark_cluster_sync(self, sync_id: int, *, done: bool, error: str | None = None) -> bool: ...
 
 
 class SqlMetadataRepository:
@@ -309,17 +309,34 @@ class SqlMetadataRepository:
             ).inserted_primary_key[0]
 
     def pending_cluster_sync(self) -> list[dict[str, Any]]:
+        """Pending rows, oldest first, each with the ``adapter`` and ``version`` decided."""
         with self._connection() as conn:
             rows = conn.execute(
-                select(cluster_sync).where(cluster_sync.c.status == "pending").order_by(cluster_sync.c.id)
+                select(
+                    *cluster_sync.c,
+                    adapters.c.name.label("adapter"),
+                    promotion_decisions.c.version.label("version"),
+                )
+                .select_from(cluster_sync)
+                .join(promotion_decisions, promotion_decisions.c.id == cluster_sync.c.decision_id)
+                .join(adapters, adapters.c.id == promotion_decisions.c.adapter_id)
+                .where(cluster_sync.c.status == "pending")
+                .order_by(cluster_sync.c.id)
             ).mappings()
             return [dict(r) for r in rows]
 
-    def mark_cluster_sync(self, sync_id: int, *, done: bool, error: str | None = None) -> None:
+    def mark_cluster_sync(self, sync_id: int, *, done: bool, error: str | None = None) -> bool:
+        """Mark a row done, or count a failed attempt (only while it is pending).
+
+        Returns False when no row was changed (unknown id; or a failure
+        reported for a row that is already done).
+        """
         values: dict[str, Any] = {"updated_at": utcnow_iso(), "last_error": error}
+        stmt = update(cluster_sync).where(cluster_sync.c.id == sync_id)
         if done:
             values["status"] = "done"
         else:
             values["attempts"] = cluster_sync.c.attempts + 1
+            stmt = stmt.where(cluster_sync.c.status == "pending")
         with self._connection() as conn:
-            conn.execute(update(cluster_sync).where(cluster_sync.c.id == sync_id).values(**values))
+            return conn.execute(stmt.values(**values)).rowcount > 0

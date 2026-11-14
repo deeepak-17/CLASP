@@ -17,6 +17,15 @@ Endpoints:
     POST /adapters/{name}/gc                       retention: keep last N + ever-live
     POST /gc                                       retention across every adapter
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
+    GET  /sync/pending                             cluster steps of decisions not yet applied
+    POST /sync/{id}/done                           report one: {"ok": bool, "error"?: str}
+
+A decision on a cluster adapter also has to reach the cluster service (switch
+to the candidate, or drop it), which cannot share the registry's database
+transaction. The promotion transaction therefore writes a ``cluster_sync`` row;
+``GET /sync/pending`` lists the rows still to apply and ``POST /sync/{id}/done``
+marks one applied (``ok: true``) or counts a failed attempt (``ok: false``,
+the row stays pending). The caller (the demo panel) retries until it lands.
 
 Every mutating route runs under one process-wide write lock: FastAPI serves
 sync routes from a threadpool, and without it two concurrent saves race for
@@ -576,3 +585,29 @@ def list_promotions(name: str) -> dict:
         "name": name,
         "decisions": [_promotion_decision_to_dict(d) for d in store.list_promotions(name)],
     }
+
+
+@app.get("/sync/pending")
+def sync_pending() -> dict:
+    """Cluster promote/reject steps recorded with a decision and not yet applied."""
+    keys = ("id", "adapter", "version", "cluster_id", "sha256", "action", "attempts", "last_error")
+    return {"pending": [{k: row[k] for k in keys}
+                        for row in get_store().repo.pending_cluster_sync()]}
+
+
+@app.post("/sync/{sync_id}/done")
+def sync_done(sync_id: int, body: dict = Body(...)) -> dict:
+    """Report a cluster step. Body: ``{"ok": bool, "error"?: str | null}``.
+
+    ``ok: true`` marks the row done; ``ok: false`` counts an attempt and stores
+    ``error``, and the row stays pending. 404 for an unknown row.
+    """
+    ok, error = body.get("ok"), body.get("error")
+    if not isinstance(ok, bool):
+        raise HTTPException(422, f"ok must be a boolean, got {ok!r}")
+    if error is not None and not isinstance(error, str):
+        raise HTTPException(422, f"error must be a string or null, got {error!r}")
+    with _WRITE_LOCK:
+        if not get_store().repo.mark_cluster_sync(sync_id, done=ok, error=error):
+            raise HTTPException(404, f"no pending cluster sync with id {sync_id}")
+    return {"id": sync_id, "ok": ok}
