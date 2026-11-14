@@ -95,8 +95,10 @@ class TestSummarizeRound:
         assert (web["baseline"]["aggregation"], web["candidate"]["aggregation"]) == ("naive", "svd")
         assert web["edit_similarity_delta"] == pytest.approx(0.0133)
         assert web["decision"]["action"] == "rollback" and not web["authoritative"]
-        assert entry["guard"] == {"available": False, "reason": "no HumanEval anchor supplied",
-                                  "candidate_pass_at_1": None, "baseline_pass_at_1": None}
+        assert entry["guard"] == {"kind": "humaneval", "available": False,
+                                  "reason": "no HumanEval anchor supplied",
+                                  "candidate_pass_at_1": None, "baseline_pass_at_1": None,
+                                  "candidate": None, "baseline": None}
 
     def test_unmeasured_metric_stays_null(self) -> None:
         entry = summarize_round(_manifest(1, {"web": _cluster("web", None, None, "rollback")}))
@@ -201,3 +203,68 @@ def test_feed_reads_what_the_real_producers_write(tmp_path, monkeypatch) -> None
     assert web["decision"]["action"] == "rollback" and web["decision"]["active_version_after"] == 1
     assert web["candidate"]["sha256"] == published["candidate"]["sha256"]
     assert [a["kind"] for a in feed["alerts"]] == ["guard_unavailable"]
+
+
+def _line_guard(candidate: float | None = None, baseline: float | None = None) -> dict:
+    """``edge.promote.GuardStatus.as_dict()`` for the line-completion guard."""
+    available = candidate is not None and baseline is not None
+
+    def side(es: float) -> dict:
+        return {"benchmark": "LineCompletion", "edit_similarity": es, "exact_match": 0.1, "n_examples": 300}
+
+    return {
+        "available": available,
+        "reason": "scored" if available else "the line-completion guard was not scored",
+        "source": None,
+        "benchmark": "LineCompletion",
+        "tolerance_edit_similarity": 0.02,
+        "candidate": side(candidate) if available else None,
+        "baseline": side(baseline) if available else None,
+    }
+
+
+def _new_style(guard: dict) -> dict:
+    """A manifest as demo_round writes it now: ``line_guard`` per cluster, no ``humaneval_guard``."""
+    m = _manifest(1, {"web": _cluster("web", 0.50, 0.55, "promote", authoritative=True)})
+    del m["humaneval_guard"]
+    m["line_guard"] = {"web": guard}
+    return m
+
+
+class TestLineGuardManifests:
+    def test_new_manifest_reports_line_completion_fields(self) -> None:
+        entry = summarize_round(_new_style(_line_guard(0.60, 0.61)))
+        web = entry["clusters"][0]["guard"]
+        assert web["kind"] == "line_completion" and web["available"]
+        assert web["candidate"] == {"edit_similarity": 0.60, "exact_match": 0.1, "n_examples": 300}
+        assert web["baseline"]["edit_similarity"] == 0.61
+        assert web["candidate_pass_at_1"] is None and web["baseline_pass_at_1"] is None
+        assert entry["guard"]["kind"] == "line_completion" and entry["guard"]["available"]
+        assert d5_alerts(entry) == []
+
+    def test_new_manifest_alerts_on_an_edit_similarity_drop(self) -> None:
+        entry = summarize_round(_new_style(_line_guard(0.50, 0.60)))
+        alerts = d5_alerts(entry)
+        assert [a["kind"] for a in alerts] == ["guard_regression", "decision_mismatch"]
+        assert "line-completion" in alerts[0]["message"] and "HumanEval" not in alerts[0]["message"]
+
+    def test_new_manifest_without_a_guard_invents_no_numbers(self) -> None:
+        entry = summarize_round(_new_style(_line_guard()))
+        web = entry["clusters"][0]["guard"]
+        assert not web["available"] and web["candidate"] is None and web["baseline"] is None
+        assert not entry["guard"]["available"]
+        kinds = [a["kind"] for a in d5_alerts(entry)]
+        assert "guard_unavailable" in kinds
+
+    def test_old_manifest_keeps_the_humaneval_fields(self) -> None:
+        entry = summarize_round(_manifest(1, {"web": _cluster("web", 0.50, 0.55, "promote")}, _guard(0.28, 0.30)))
+        assert entry["guard"]["kind"] == "humaneval"
+        assert entry["guard"]["candidate_pass_at_1"] == 0.28 and entry["guard"]["baseline_pass_at_1"] == 0.30
+        assert entry["guard"]["candidate"] is None
+        assert entry["clusters"][0]["guard"] == entry["guard"]
+        assert d5_alerts(entry) == []
+
+    def test_feed_carries_both_tolerances(self) -> None:
+        feed = build_feed([_new_style(_line_guard(0.60, 0.61))])
+        assert feed["guard_edit_similarity_tolerance"] == 0.02
+        assert feed["guard_pass_at_1_tolerance"] == 0.02

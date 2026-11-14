@@ -11,6 +11,27 @@ export interface InProjectBlock {
   examples_sha256: string | null;
 }
 
+/** One side of the line-completion guard (LineCompletion); null = not scored. */
+export interface LineGuardSide {
+  edit_similarity: number;
+  exact_match: number | null;
+  n_examples: number | null;
+}
+
+/**
+ * The regression guard. `kind` "line_completion" fills candidate/baseline and leaves the
+ * pass@1 fields null; "humaneval" (manifests from before the line guard) is the reverse.
+ */
+export interface GuardBlock {
+  kind?: "line_completion" | "humaneval";
+  available: boolean;
+  reason: string;
+  candidate_pass_at_1: number | null;
+  baseline_pass_at_1: number | null;
+  candidate?: LineGuardSide | null;
+  baseline?: LineGuardSide | null;
+}
+
 export interface VersionBlock {
   version: number;
   aggregation: string;
@@ -28,6 +49,7 @@ export interface ClusterRound {
   edit_similarity_delta: number | null;
   decision: { action: string; active_version_after: number; reason: string };
   authoritative: boolean;
+  guard?: GuardBlock;
 }
 
 export interface RoundEntry {
@@ -38,12 +60,7 @@ export interface RoundEntry {
   nfr_met: boolean | null;
   noise_band: number;
   counters: Record<string, number>;
-  guard: {
-    available: boolean;
-    reason: string;
-    candidate_pass_at_1: number | null;
-    baseline_pass_at_1: number | null;
-  };
+  guard: GuardBlock;
   clusters: ClusterRound[];
 }
 
@@ -58,12 +75,27 @@ export interface RoundsFeed {
   feed_version: string;
   generated_at: string;
   guard_pass_at_1_tolerance: number;
+  guard_edit_similarity_tolerance?: number;
   rounds: RoundEntry[];
   alerts: RoundAlert[];
 }
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null;
 const isNumOrNull = (x: unknown) => x === null || typeof x === "number";
+
+const isLineSide = (x: unknown) =>
+  x === undefined || x === null || (isObj(x) && typeof x.edit_similarity === "number");
+
+function isGuardBlock(x: unknown): x is GuardBlock {
+  return (
+    isObj(x) &&
+    typeof x.available === "boolean" &&
+    isNumOrNull(x.candidate_pass_at_1) &&
+    isNumOrNull(x.baseline_pass_at_1) &&
+    isLineSide(x.candidate) &&
+    isLineSide(x.baseline)
+  );
+}
 
 function isVersionBlock(x: unknown): x is VersionBlock {
   if (!isObj(x)) return false;
@@ -85,18 +117,16 @@ function isClusterRound(x: unknown): x is ClusterRound {
     isNumOrNull(x.edit_similarity_delta) &&
     typeof x.decision.action === "string" &&
     typeof x.decision.active_version_after === "number" &&
-    typeof x.authoritative === "boolean"
+    typeof x.authoritative === "boolean" &&
+    (x.guard === undefined || isGuardBlock(x.guard))
   );
 }
 
 function isRoundEntry(x: unknown): x is RoundEntry {
-  if (!isObj(x) || !isObj(x.guard)) return false;
+  if (!isObj(x) || !isGuardBlock(x.guard)) return false;
   return (
     typeof x.round === "number" &&
     typeof x.noise_band === "number" &&
-    typeof x.guard.available === "boolean" &&
-    isNumOrNull(x.guard.candidate_pass_at_1) &&
-    isNumOrNull(x.guard.baseline_pass_at_1) &&
     Array.isArray(x.clusters) &&
     x.clusters.every(isClusterRound)
   );

@@ -2,8 +2,9 @@
 
 ``scripts/demo_round.py`` (the one-command four-seam round) writes everything
 a round did to ``experiments/<run>/results/round{N}_manifest.json``: both
-registry versions per cluster, their in-project metrics, the HumanEval guard
-status and the registry's D5 decision. That file is large and nested; the
+registry versions per cluster, their in-project metrics, the regression guard
+status (``line_guard``, per cluster; manifests from before the line-completion
+guard carry one ``humaneval_guard`` instead) and the registry's D5 decision. That file is large and nested; the
 dashboard is a static app that reads small JSON from ``public/data/``. This
 module is the bridge: it reads one or more round manifests and writes the
 compact ``results/rounds.json`` the dashboard's Rounds page
@@ -18,7 +19,8 @@ Regression alerts (D5 cross-check)
 -----------------------------------
 For each cluster the feed raises an alert for every reason the registry's D5
 rule (``registry.promotion.decide``) would refuse a promotion — in-project
-gain not beyond the noise band, HumanEval pass@1 drop beyond tolerance, or an
+gain not beyond the noise band, a guard drop beyond tolerance (HumanEval pass@1, or
+line-completion edit similarity), or an
 input that was not measured — plus a round-over-round drop of a cluster's
 candidate edit similarity. From the D5 reasons it predicts the action and
 records whether the registry's actual decision agrees; a disagreement is
@@ -38,6 +40,10 @@ FEED_VERSION = "1.0.0"
 #: Mirrors ``registry.promotion.GUARD_PASS_AT_1_TOLERANCE`` (asserted equal in
 #: the tests when the registry package is importable).
 GUARD_PASS_AT_1_TOLERANCE = 0.02
+
+#: The line-completion guard's tolerated edit-similarity drop
+#: (``configs/guard_thresholds.yaml``: ``line_guard.tolerance_edit_similarity``).
+GUARD_EDIT_SIMILARITY_TOLERANCE = 0.02
 
 _LABELS = ("baseline", "candidate")
 
@@ -74,10 +80,59 @@ def _pass_at_1(guard_side: Mapping[str, Any] | None) -> float | None:
     return None if value is None else float(value)
 
 
+def _line_side(side: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """One side of a ``LineCompletion`` guard, or ``None`` when it was not scored."""
+    if not side or side.get("edit_similarity") is None:
+        return None
+    return {
+        "edit_similarity": float(side["edit_similarity"]),
+        "exact_match": None if side.get("exact_match") is None else float(side["exact_match"]),
+        "n_examples": None if side.get("n_examples") is None else int(side["n_examples"]),
+    }
+
+
+def _guard_entry(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """A guard status dict (``edge.promote.GuardStatus.as_dict``) -> the feed's shape.
+
+    ``LineCompletion`` carries edit similarity / exact match / n_examples;
+    HumanEval (old manifests) carries pass@1. The other kind's fields stay null.
+    """
+    line = raw.get("benchmark") == "LineCompletion"
+    candidate = _line_side(raw.get("candidate")) if line else None
+    baseline = _line_side(raw.get("baseline")) if line else None
+    return {
+        "kind": "line_completion" if line else "humaneval",
+        "available": bool(raw.get("available", False)),
+        "reason": str(raw.get("reason", "")),
+        "candidate_pass_at_1": None if line else _pass_at_1(raw.get("candidate")),
+        "baseline_pass_at_1": None if line else _pass_at_1(raw.get("baseline")),
+        "candidate": candidate,
+        "baseline": baseline,
+    }
+
+
+def _round_guards(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """(round-level guard, per-cluster guards) from ``line_guard``, else ``humaneval_guard``."""
+    if "line_guard" in manifest:
+        per_cluster = {cid: _guard_entry(g) for cid, g in _get(manifest, "line_guard").items()}
+        values = list(per_cluster.values())
+        overall = {
+            "kind": "line_completion",
+            "available": bool(values) and all(v["available"] for v in values),
+            "reason": "; ".join(f"{cid}: {v['reason']}" for cid, v in sorted(per_cluster.items())),
+            "candidate_pass_at_1": None,
+            "baseline_pass_at_1": None,
+            "candidate": None,
+            "baseline": None,
+        }
+        return overall, per_cluster
+    return _guard_entry(_get(manifest, "humaneval_guard")), {}
+
+
 def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """One round manifest -> one ``rounds.json`` round entry."""
     # Read one demo_round manifest and keep only what the Rounds page shows.
-    guard = _get(manifest, "humaneval_guard")
+    guard, cluster_guards = _round_guards(manifest)
     noise_band = float(_get(manifest, "config", "noise_band"))
     clusters_out: list[dict[str, Any]] = []
     for cluster_id, block in sorted(_get(manifest, "clusters").items()):
@@ -115,6 +170,7 @@ def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
                     "reason": str(decision.get("reason", "")),
                 },
                 "authoritative": bool(block["seam_c2"].get("decision_is_authoritative", False)),
+                "guard": cluster_guards.get(cluster_id, guard),
             }
         )
     return {
@@ -125,12 +181,7 @@ def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "nfr_met": manifest.get("nfr_met"),
         "noise_band": noise_band,
         "counters": dict(manifest.get("counters") or {}),
-        "guard": {
-            "available": bool(guard.get("available", False)),
-            "reason": str(guard.get("reason", "")),
-            "candidate_pass_at_1": _pass_at_1(guard.get("candidate")),
-            "baseline_pass_at_1": _pass_at_1(guard.get("baseline")),
-        },
+        "guard": guard,
         "clusters": clusters_out,
     }
 
@@ -138,9 +189,9 @@ def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
 def d5_alerts(round_entry: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Alerts for one round, plus the D5 cross-check against the registry's decision."""
     alerts: list[dict[str, Any]] = []
-    guard = round_entry["guard"]
     band = float(round_entry["noise_band"])
     for cluster in round_entry["clusters"]:
+        guard = cluster.get("guard") or round_entry["guard"]
         reasons: list[tuple[str, str]] = []
         delta = cluster["edit_similarity_delta"]
         if delta is None:
@@ -149,7 +200,18 @@ def d5_alerts(round_entry: Mapping[str, Any]) -> list[dict[str, Any]]:
             reasons.append(
                 ("in_project_not_improved", f"edit_similarity delta {delta:+.4f} does not clear band {band:.4f}")
             )
-        if not guard["available"] or guard["candidate_pass_at_1"] is None or guard["baseline_pass_at_1"] is None:
+        if guard["kind"] == "line_completion":
+            cand, base = guard["candidate"], guard["baseline"]
+            if not guard["available"] or cand is None or base is None:
+                reasons.append(("guard_unavailable",
+                                "line-completion guard not scored for candidate and baseline"))
+            else:
+                drop = base["edit_similarity"] - cand["edit_similarity"]
+                if drop > GUARD_EDIT_SIMILARITY_TOLERANCE:
+                    reasons.append(("guard_regression",
+                                    f"line-completion edit similarity dropped {drop:.4f} "
+                                    f"(> {GUARD_EDIT_SIMILARITY_TOLERANCE:.2f})"))
+        elif not guard["available"] or guard["candidate_pass_at_1"] is None or guard["baseline_pass_at_1"] is None:
             reasons.append(("guard_unavailable", "HumanEval guard not scored for candidate and baseline"))
         else:
             drop = guard["baseline_pass_at_1"] - guard["candidate_pass_at_1"]
@@ -210,6 +272,7 @@ def build_feed(manifests: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "feed_version": FEED_VERSION,
         "generated_at": utc_timestamp(),
         "guard_pass_at_1_tolerance": GUARD_PASS_AT_1_TOLERANCE,
+        "guard_edit_similarity_tolerance": GUARD_EDIT_SIMILARITY_TOLERANCE,
         "rounds": rounds,
         "alerts": alerts,
     }
