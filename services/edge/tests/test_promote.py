@@ -12,17 +12,29 @@ import builtins
 
 import pytest
 
-from edge.promote import GuardStatus, _previous_version, build_eval_result, predict_decision
+import json
+
+from edge.promote import (
+    GuardStatus,
+    _previous_version,
+    build_eval_result,
+    predict_decision,
+    resolve_guard,
+)
 
 
 def metrics(es: float) -> dict:
     return {"edit_similarity": es, "exact_match": 0.1, "perplexity": 2.5, "n_examples": 60}
 
 
+def _lc(edit_similarity: float) -> dict:
+    return {"benchmark": "LineCompletion", "edit_similarity": edit_similarity,
+            "exact_match": 0.1, "n_examples": 300}
+
+
 def guard(candidate: float, baseline: float) -> GuardStatus:
-    return GuardStatus(available=True, reason="test anchors",
-                       candidate={"benchmark": "HumanEval", "pass_at_k": {"1": candidate}},
-                       baseline={"benchmark": "HumanEval", "pass_at_k": {"1": baseline}})
+    return GuardStatus(available=True, reason="test guard",
+                       candidate=_lc(candidate), baseline=_lc(baseline))
 
 
 NO_GUARD = GuardStatus(available=False, reason="no anchors — test")
@@ -90,3 +102,42 @@ def test_promote_needs_no_previous_version(registry_rule):
 def test_previous_version_is_the_one_just_before():
     assert _previous_version([1, 2, 4, 5], 4) == 2
     assert _previous_version([1, 2, 3], 1) is None
+
+
+def _evidence_file(tmp_path, cluster="web", **entry):
+    doc = {"candidate_version": 2, "candidate_sha256": "b" * 64,
+           "clusters": {cluster: {"guard": [_lc(0.60)], "baseline_guard": [_lc(0.61)], **entry}}}
+    path = tmp_path / f"{cluster}-v2.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def test_resolve_guard_reads_the_line_guard_evidence_file(tmp_path):
+    status = resolve_guard(_evidence_file(tmp_path))
+    assert status.available and status.candidate == _lc(0.60) and status.baseline == _lc(0.61)
+    assert status.candidate["benchmark"] == "LineCompletion"
+    assert "line-completion" in status.reason
+    assert status.as_dict()["benchmark"] == "LineCompletion"
+
+
+def test_resolve_guard_without_a_file_says_so_and_invents_nothing(tmp_path):
+    for status in (resolve_guard(), resolve_guard(tmp_path / "absent.json")):
+        assert not status.available and status.candidate is None and status.baseline is None
+        assert "line-completion guard" in status.reason and "HumanEval" not in status.reason
+
+
+def test_resolve_guard_refuses_evidence_without_a_line_guard(tmp_path):
+    path = _evidence_file(tmp_path, guard=[{"benchmark": "HumanEval", "pass_at_k": {"1": 0.3}}])
+    status = resolve_guard(path)
+    assert not status.available and "LineCompletion" in status.reason
+    assert not resolve_guard(_evidence_file(tmp_path, cluster="web", guard=[],
+                                            baseline_guard=[])).available
+
+
+def test_resolve_guard_with_several_clusters_needs_the_cluster_named(tmp_path):
+    path = _evidence_file(tmp_path)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["clusters"]["scientific"] = doc["clusters"]["web"]
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert not resolve_guard(path).available
+    assert resolve_guard(path, cluster_id="scientific").available

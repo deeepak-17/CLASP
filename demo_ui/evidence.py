@@ -30,11 +30,12 @@ Where the numbers come from, first match wins:
    examples, greedy) measured on a GPU for that cluster's candidate and
    baseline versions.
 
-The HumanEval guard comes from evaluation's anchors in
-``services/evaluation/results/humaneval_guard/``: ``base_anchor.json`` is the
-baseline; a candidate anchor (``<registry name>_anchor.json``) is used only if
-evaluation has scored one. The D5 noise band is P5's ``noise_report.json``
-value for the cluster's representative client.
+The regression guard is next-line completion on evaluation's frozen 300-example
+line-completion guard set (``evaluation.eval_harness.line_guard``). Only
+source 0 or 1 measures it, for the candidate and its baseline; the round
+manifests of option 2 predate it, so that fallback carries no guard and says
+the line-completion guard was not scored. The D5 noise band is P5's
+``noise_report.json`` value for the cluster's representative client.
 
 Option 2 measures an earlier aggregate of the same cluster, not the one just
 built live (scoring a 1.3B model needs a GPU, which laptop A may not have).
@@ -45,7 +46,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EVAL_RESULTS = Path(os.environ.get(
@@ -54,7 +55,9 @@ ROUND_MANIFESTS = Path(os.environ.get(
     "CLASP_ROUND_MANIFESTS", REPO_ROOT / "experiments" / "w12-integration" / "results"))
 LIVE_EVAL_DIR = Path(os.environ.get(
     "CLASP_LIVE_EVAL_DIR", REPO_ROOT / ".runtime" / "live-eval"))
-GUARD_BENCHMARK = "HumanEval"
+GUARD_BENCHMARK = "LineCompletion"  # evaluation.eval_harness.line_guard.GUARD_BENCHMARK
+GUARD_NOT_SCORED = ("the line-completion guard was not scored for this candidate and its baseline "
+                    "(scripts/evaluate_candidate.py measures it) — D5 counts a missing guard as failed")
 
 
 class EvidenceMissing(LookupError):
@@ -74,25 +77,6 @@ def _read(path: Path) -> Optional[Dict]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-
-
-def _guard(pass_at_1: float) -> List[Dict]:
-    return [{"benchmark": GUARD_BENCHMARK, "pass_at_k": {"1": float(pass_at_1)}}]
-
-
-def guard_anchors(registry_name: str, results: Path = EVAL_RESULTS) -> Dict:
-    """Evaluation's measured HumanEval pass@1 for the baseline and, if scored, the candidate."""
-    folder = results / "humaneval_guard"
-    base = _read(folder / "base_anchor.json") or {}
-    cand = _read(folder / f"{registry_name}_anchor.json") or {}
-    out = {"baseline": None, "candidate": None, "n_problems": base.get("n_problems")}
-    if base.get("base_pass_at_1") is not None:
-        out["baseline"] = float(base["base_pass_at_1"])
-        out["baseline_source"] = _rel(folder / "base_anchor.json")
-    if cand.get("base_pass_at_1") is not None:
-        out["candidate"] = float(cand["base_pass_at_1"])
-        out["candidate_source"] = _rel(folder / f"{registry_name}_anchor.json")
-    return out
 
 
 def noise_band(cluster_id: str, results: Path = EVAL_RESULTS) -> Dict:
@@ -133,6 +117,20 @@ def _from_override(cluster_id: str, version: Optional[int] = None,
     }
 
 
+def _live_guard_text(entry: Dict, cand: Dict, base: Dict) -> str:
+    """What the guard numbers are, for the panel: set, size, both scores, paired noise."""
+    guards = entry.get("guard") or []
+    base_guards = entry.get("baseline_guard") or []
+    if not guards or not base_guards:
+        return GUARD_NOT_SCORED
+    g, b = guards[0], base_guards[0]
+    sha = str(cand.get("guard_examples_sha256") or "")[:12]
+    return (f"{g.get('benchmark')}: next-line completion on the frozen {g.get('n_examples')}-example "
+            f"guard set ({sha or 'fingerprint unrecorded'}), greedy: candidate edit similarity "
+            f"{g.get('edit_similarity'):.4f} against baseline {b.get('edit_similarity'):.4f}; "
+            f"paired noise {entry.get('guard_noise')}")
+
+
 def _from_live_eval(cluster_id: str, version: int, sha256: Optional[str]) -> Optional[Dict]:
     """``scripts/evaluate_candidate.py``'s file for exactly this version (and sha256)."""
     path = LIVE_EVAL_DIR / f"{cluster_id}-v{version}.json"
@@ -157,10 +155,7 @@ def _from_live_eval(cluster_id: str, version: int, sha256: Optional[str]) -> Opt
                            f"({sha_b}), each as base + {details.get('alpha')}·cluster, on "
                            f"{details.get('client')}'s held-out files, "
                            f"{entry['in_project'].get('n_examples')} examples, greedy"),
-            "guard": (f"HumanEval/0..{(cand.get('humaneval_n') or 20) - 1} pass@1, greedy, scored by "
-                      f"P5's executor: candidate {cand.get('humaneval_solved')}/"
-                      f"{cand.get('humaneval_n')}, baseline {base.get('humaneval_solved')}/"
-                      f"{base.get('humaneval_n')}"),
+            "guard": _live_guard_text(entry, cand, base),
             "noise_band": f"{entry.get('noise_band')} from {band.get('source') or 'nowhere'} "
                           f"({band.get('client') or 'all'})",
             "stale": False,
@@ -214,25 +209,20 @@ def evidence_for(cluster_id: str, version: Optional[int] = None,
     registry_name = cluster.get("seam_a_b", {}).get("registry_name", f"cluster-{cluster_id}")
     versions = {k: v.get("registry_version", {}).get("ref", {}).get("version")
                 for k, v in cluster.get("seam_a_b", {}).get("versions", {}).items()}
-    anchors = guard_anchors(registry_name)
     band = noise_band(cluster_id)
     rel = _rel(path)
     return {
         "in_project": ev["candidate"]["in_project"],
         "baseline_in_project": ev["baseline"]["in_project"],
-        "guard": _guard(anchors["candidate"]) if anchors["candidate"] is not None else [],
-        "baseline_guard": _guard(anchors["baseline"]) if anchors["baseline"] is not None else [],
+        "guard": [],           # no line-guard score exists for an aggregate built live
+        "baseline_guard": [],
         "noise_band": band["value"],
         "provenance": {
             "in_project": (f"{rel} — round {doc.get('round')}, {cluster.get('representative_client')}'s "
                            f"held-out files, {ev['candidate']['in_project'].get('n_examples')} examples; "
                            f"candidate {registry_name} v{versions.get('candidate')} vs baseline "
                            f"v{versions.get('baseline')}, measured {doc.get('finished_utc', '')[:10]}"),
-            "guard": (f"baseline pass@1 {anchors['baseline']} over {anchors['n_problems']} HumanEval "
-                      f"problems ({anchors.get('baseline_source')}); candidate "
-                      + (f"{anchors['candidate']} ({anchors['candidate_source']})"
-                         if anchors["candidate"] is not None else
-                         "not scored by evaluation — D5 counts a missing guard as failed")),
+            "guard": GUARD_NOT_SCORED[0].upper() + GUARD_NOT_SCORED[1:],
             "noise_band": f"{band['value']} from {band['source'] or 'nowhere'} ({band.get('client') or 'all'})",
             "stale": True,
             "note": ("measured on this cluster's round-"

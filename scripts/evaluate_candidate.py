@@ -11,12 +11,16 @@ earlier round's adapter:
   exact match) on the held-out files of the client the noise band was
   measured on (``demo_ui.evidence.noise_band``), plus held-out perplexity;
   ``edge.completion_eval``, greedy, the same examples for both versions;
-* **HumanEval guard**: the frozen first-20 subset, greedy, generated with
-  ``edge.humaneval_baseline.generate_completions`` and scored on P5's executor
-  against the original HumanEval tests (``evaluation.eval_harness.guard_anchor``).
+* **line-completion guard** (D5's regression side): next-line completion on the
+  frozen 300-example guard set (``evaluation.eval_harness.line_guard``; click,
+  jinja and colorama, which no cluster trains on), the same
+  ``edge.completion_eval.evaluate_completion`` call, greedy, the same examples
+  for both versions. The per-example edit similarities are kept so the paired
+  noise of the candidate-minus-baseline difference can be reported.
 
-Each version is scored once: results are cached by the payload's sha256, so
-the previous candidate is the next round's baseline for free. The output,
+Each version is scored once: results are cached by the payload's sha256 and
+the guard set's fingerprint, so the previous candidate is the next round's
+baseline for free and a score taken on another guard set is never reused. The output,
 ``<out-dir>/<cluster>-v<N>.json``, is the evidence file ``demo_ui`` hands
 Promote — only for that version and that sha256.
 
@@ -34,15 +38,13 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))  # demo_ui.evidence, for the noise band
 
 DEFAULT_OUT = REPO_ROOT / ".runtime" / "live-eval"
-GUARD_BENCHMARK = "HumanEval"
-GUARD_N = 20  # the frozen subset base_anchor.json was scored on
 
 
 def log(msg: str) -> None:
@@ -80,14 +82,22 @@ def evidence_path(out_dir: Path | str, cluster_id: str, version: int) -> Path:
     return Path(out_dir) / f"{cluster_id}-v{version}.json"
 
 
-def _guard(pass_at_1: float):
-    return [{"benchmark": GUARD_BENCHMARK, "pass_at_k": {"1": float(pass_at_1)}}]
+def _guard(metrics: Dict) -> List[Dict]:
+    """One version's guard as ``GuardMetrics.to_json`` carries it (contracts 1.2.0)."""
+    return [{"benchmark": metrics["benchmark"],
+             "edit_similarity": float(metrics["edit_similarity"]),
+             "exact_match": float(metrics["exact_match"]),
+             "n_examples": int(metrics["n_examples"])}]
 
 
 def evidence_document(cluster_id: str, cand: Dict, base: Dict, cand_scores: Dict,
                       base_scores: Dict, *, band: Dict, details: Dict) -> Dict:
     """The file demo_ui.evidence reads (the CLASP_EVAL_EVIDENCE shape, plus
     which exact versions were measured)."""
+    from evaluation.eval_harness.line_guard import paired_noise
+
+    guard_noise = float(paired_noise(base_scores["guard_rows"], cand_scores["guard_rows"]))
+    guard_sha = cand_scores.get("guard_examples_sha256")
     return {
         "source": (f"scripts/evaluate_candidate.py on {platform.node()}, "
                    f"{datetime.now(timezone.utc).isoformat(timespec='seconds')}"),
@@ -96,11 +106,15 @@ def evidence_document(cluster_id: str, cand: Dict, base: Dict, cand_scores: Dict
         "clusters": {cluster_id: {
             "in_project": cand_scores["in_project"],
             "baseline_in_project": base_scores["in_project"],
-            "guard": _guard(cand_scores["pass_at_1"]),
-            "baseline_guard": _guard(base_scores["pass_at_1"]),
+            "guard": _guard(cand_scores["guard"]),
+            "baseline_guard": _guard(base_scores["guard"]),
+            "guard_noise": guard_noise,
+            "guard_examples_sha256": guard_sha,
             "noise_band": float(band["value"]),
         }},
         "noise_band": band,
+        "guard_noise": guard_noise,
+        "guard_examples_sha256": guard_sha,
         "details": details,
     }
 
@@ -145,14 +159,18 @@ def _composite(rc, name: str, version: int, alpha: float, work: Path) -> Path:
 
 
 def score_version(state: Dict, rc, name: str, meta: Dict, args, work: Path) -> Dict:
-    """In-project + HumanEval for one version, cached by its sha256."""
+    """In-project + line-completion guard for one version, cached by its sha256
+    and the guard set's fingerprint."""
     from edge.completion_eval import evaluate_completion
-    from edge.humaneval_baseline import generate_completions
     from edge.train_client import evaluate as perplexity
-    from evaluation.eval_harness.guard_anchor import build_anchor, score_samples
+    from evaluation.completion import examples_fingerprint
+    from evaluation.eval_harness.line_guard import guard_metrics
 
     version, sha = meta["ref"]["version"], meta["sha256"]
-    cache = work / "cache" / f"{sha}-alpha{args.alpha:g}-{state['client'].replace('/', '_')}.json"
+    guard_examples = state["guard_examples"]
+    guard_sha = examples_fingerprint(guard_examples)
+    cache = work / "cache" / (f"{sha}-alpha{args.alpha:g}-guard{guard_sha[:12]}-"
+                              f"{state['client'].replace('/', '_')}.json")
     if cache.exists():
         log(f"  v{version} ({sha[:12]}) already scored: {cache.name}")
         return json.loads(cache.read_text(encoding="utf-8"))
@@ -178,22 +196,16 @@ def score_version(state: Dict, rc, name: str, meta: Dict, args, work: Path) -> D
         f"exact match {completion['in_project']['exact_match']:.4f} "
         f"({len(state['examples'])} examples, {completion['wall_seconds']} s)")
 
-    problems = {t: {"prompt": state["tasks"][t].prompt} for t in state["task_ids"]}
-    samples = generate_completions(model, state["tokenizer"], problems, state["task_ids"],
-                                   max_new_tokens=args.max_new_tokens)
-    samples_path = work / f"{sha}-humaneval.jsonl"
-    samples_path.write_text("".join(json.dumps(s) + "\n" for s in samples), encoding="utf-8")
-    outcomes = score_samples(samples, state["tasks"], timeout_seconds=10.0, sandbox="auto")
-    anchor = build_anchor(outcomes, samples_path=samples_path,
-                          generation_manifest={"subset": {"n": len(state["task_ids"]),
-                                                          "task_ids": state["task_ids"]}})
-    log(f"  v{version}: HumanEval pass@1 {anchor['base_pass_at_1']} "
-        f"({anchor['base_solved']}/{anchor['n_problems']})")
+    scored = evaluate_completion(model, state["tokenizer"], guard_examples, ppl["perplexity"])
+    guard = guard_metrics(scored["in_project"], len(guard_examples))
+    log(f"  v{version}: line-completion guard edit similarity {guard['edit_similarity']:.4f}, "
+        f"exact match {guard['exact_match']:.4f} "
+        f"({guard['n_examples']} examples, {scored['wall_seconds']} s)")
     if len(model.peft_config) > 1:
         model.delete_adapter(label)
     result = {"version": version, "sha256": sha, "in_project": completion["in_project"],
-              "pass_at_1": anchor["base_pass_at_1"], "humaneval_solved": anchor["base_solved"],
-              "humaneval_n": anchor["n_problems"], "perplexity_blocks": len(held),
+              "guard": guard, "guard_rows": [r["edit_similarity"] for r in scored["rows"]],
+              "guard_examples_sha256": guard_sha, "perplexity_blocks": len(held),
               "examples_sha256": completion["examples_sha256"],
               "wall_seconds": round(time.time() - t0, 1)}
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -214,7 +226,6 @@ def main(argv=None) -> int:
                          "the D5 noise band was measured on")
     ap.add_argument("--max-examples", type=int, default=60)
     ap.add_argument("--ppl-max-blocks", type=int, default=16)
-    ap.add_argument("--max-new-tokens", type=int, default=384, help="HumanEval generation cap")
     ap.add_argument("--profile", default="dev")
     args = ap.parse_args(argv)
     name = args.registry_name or f"cluster-{args.cluster}"
@@ -237,26 +248,22 @@ def main(argv=None) -> int:
     from edge.completion_eval import client_examples
     from edge.model_loader import load_model
     from edge.train_client import set_determinism
-    from evaluation.eval_harness.harness import load_evaluation_config
-    from evaluation.eval_harness.registry import build_adapter
-    from evaluation.interfaces.contracts import BenchmarkName
+    from evaluation.eval_harness.line_guard import load_guard_set
 
     client_dir = DEFAULT_CORPUS_ROOT / client
     examples = client_examples(client_dir, max_examples=args.max_examples)
     if not examples:
         raise SystemExit(f"no held-out examples under {client_dir}/held_out")
-    tasks = {t.task_id: t for t in build_adapter(BenchmarkName.HUMANEVAL,
-                                                 load_evaluation_config(None)).load_tasks()}
-    task_ids = sorted(tasks, key=lambda t: int(t.split("/")[1]))[:GUARD_N]
+    guard_examples = load_guard_set()
     log(f"in-project: {client}'s held-out files, {len(examples)} examples; "
-        f"guard: HumanEval/0..{GUARD_N - 1}")
+        f"guard: line completion, {len(guard_examples)} frozen examples")
 
     set_determinism(0)
     model, tokenizer, _ = load_model(args.profile)
     _, held = pack_client(client_dir, tokenizer, seq_len=DEFAULT_SEQ_LEN)
     state = {"model": model, "tokenizer": tokenizer, "peft": None, "client": client,
-             "examples": examples, "held_chunks": held["chunks"], "tasks": tasks,
-             "task_ids": task_ids}
+             "examples": examples, "guard_examples": guard_examples,
+             "held_chunks": held["chunks"]}
     work = args.out_dir / "work"
     work.mkdir(parents=True, exist_ok=True)
     scores = {}
@@ -273,8 +280,9 @@ def main(argv=None) -> int:
     path = write_evidence(args.out_dir, args.cluster, doc)
     c, b = scores["candidate"], scores["baseline"]
     log(f"edit similarity {c['in_project']['edit_similarity']:.4f} vs "
-        f"{b['in_project']['edit_similarity']:.4f}, HumanEval {c['pass_at_1']} vs {b['pass_at_1']}, "
-        f"noise band {band['value']} -> {path}")
+        f"{b['in_project']['edit_similarity']:.4f}, line-completion guard "
+        f"{c['guard']['edit_similarity']:.4f} vs {b['guard']['edit_similarity']:.4f} "
+        f"(paired noise {doc['guard_noise']:.4f}), noise band {band['value']} -> {path}")
     return 0
 
 

@@ -463,15 +463,17 @@ def test_completion_metric_produces_a_fillable_in_project_block(tmp_path):
 # --------------------------------------------------------------------------- #
 # seam C2 — both D5 outcomes
 # --------------------------------------------------------------------------- #
-def _guard(candidate_pass1: float, baseline_pass1: float, tmp_path):
-    """Two anchor files shaped like ``edge.humaneval_baseline``'s output."""
-    paths = []
-    for label, value in (("candidate", candidate_pass1), ("baseline", baseline_pass1)):
-        p = tmp_path / f"{label}_anchor.json"
-        p.write_text(json.dumps({"base_pass_at_1": value, "subset": {"n": 20}}),
-                     encoding="utf-8")
-        paths.append(p)
-    return resolve_guard(*paths)
+def _guard(candidate_edit_similarity: float, baseline_edit_similarity: float, tmp_path):
+    """A line-guard evidence file shaped like ``scripts/evaluate_candidate.py``'s output."""
+    def side(es: float) -> dict:
+        return {"benchmark": "LineCompletion", "edit_similarity": es, "exact_match": 0.1,
+                "n_examples": 300}
+
+    path = tmp_path / "web-v2.json"
+    path.write_text(json.dumps({"clusters": {CLUSTER_ID: {
+        "guard": [side(candidate_edit_similarity)],
+        "baseline_guard": [side(baseline_edit_similarity)]}}}), encoding="utf-8")
+    return resolve_guard(path)
 
 
 def _metrics(edit_similarity: float):
@@ -482,7 +484,7 @@ def _metrics(edit_similarity: float):
 def test_seam_c2_promotes_when_both_halves_of_d5_hold(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
     publish_two_versions(cluster_client, registry_client, monkeypatch)
-    guard = _guard(candidate_pass1=0.30, baseline_pass1=0.30, tmp_path=tmp_path)
+    guard = _guard(candidate_edit_similarity=0.30, baseline_edit_similarity=0.30, tmp_path=tmp_path)
     assert guard.available
 
     record = promote_candidate(
@@ -503,7 +505,7 @@ def test_seam_c2_promotes_when_both_halves_of_d5_hold(
 def test_seam_c2_rolls_back_when_the_in_project_metric_does_not_improve(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
     publish_two_versions(cluster_client, registry_client, monkeypatch)
-    guard = _guard(candidate_pass1=0.30, baseline_pass1=0.30, tmp_path=tmp_path)
+    guard = _guard(candidate_edit_similarity=0.30, baseline_edit_similarity=0.30, tmp_path=tmp_path)
 
     record = promote_candidate(
         edge_registry, REGISTRY_NAME, version=2, kind="cluster", cluster_id=CLUSTER_ID,
@@ -520,7 +522,7 @@ def test_seam_c2_rolls_back_when_the_guard_regresses(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
     """The rule is two-sided: an in-project win does not buy a pass@1 regression."""
     publish_two_versions(cluster_client, registry_client, monkeypatch)
-    guard = _guard(candidate_pass1=0.20, baseline_pass1=0.30, tmp_path=tmp_path)
+    guard = _guard(candidate_edit_similarity=0.20, baseline_edit_similarity=0.30, tmp_path=tmp_path)
 
     record = promote_candidate(
         edge_registry, REGISTRY_NAME, version=2, kind="cluster", cluster_id=CLUSTER_ID,

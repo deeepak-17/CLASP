@@ -30,7 +30,7 @@ What actually happens, per cluster (web, scientific):
      registry applies D5 and answers PROMOTE or ROLLBACK.
 
 Nothing here is stubbed and nothing is back-filled from a previous run. If a
-step cannot run — no GPU, no HumanEval guard — the manifest says so in that
+step cannot run — no GPU, no line-completion guard evidence — the manifest says so in that
 step's own record and the affected numbers are absent, not invented.
 
 Results land in ``experiments/w12-integration/results/``.
@@ -335,8 +335,11 @@ def main() -> None:
                          "recorded per number in the manifest.")
     ap.add_argument("--noise-band", type=float, default=0.0,
                     help="edit-similarity improvement required (P5's measured band)")
-    ap.add_argument("--candidate-anchor", help="HumanEval anchor.json for the candidate")
-    ap.add_argument("--baseline-anchor", help="HumanEval anchor.json for the baseline")
+    ap.add_argument("--guard-evidence", metavar="PATH",
+                    help="the evidence JSON scripts/evaluate_candidate.py wrote "
+                         "(<cluster>-v<N>.json): the line-completion guard of the candidate and "
+                         "its baseline. It holds one cluster, so it feeds that cluster only; "
+                         "without it the guard is reported unavailable.")
     ap.add_argument("--skip-eval", action="store_true",
                     help="skip the model-backed evaluation (no GPU): seams A/B/C1 "
                          "still run and C2 goes out with the metric marked unmeasured")
@@ -353,9 +356,10 @@ def main() -> None:
     banner("0", "preflight — services answering")
     health = preflight(args.cluster_url, args.registry_url)
 
-    guard = resolve_guard(args.candidate_anchor, args.baseline_anchor)
-    log(f"\n  HumanEval guard: {'AVAILABLE' if guard.available else 'UNAVAILABLE'}")
-    log(f"    {guard.reason}")
+    guard_by_cluster = {cid: resolve_guard(args.guard_evidence, cid) for cid in selected}
+    for cid, g in guard_by_cluster.items():
+        log(f"\n  line-completion guard, {cid}: {'AVAILABLE' if g.available else 'UNAVAILABLE'}")
+        log(f"    {g.reason}")
 
     banner("0", "packing client corpora (real FedAvg weights + held-out splits)")
     members = [c for cl in selected for c in CLUSTERS[cl]]
@@ -437,6 +441,7 @@ def main() -> None:
                 evals[label] = None
 
         banner("C2", f"cluster-{cluster_id}: D5 promotion decision")
+        guard = guard_by_cluster[cluster_id]
         cand_v = ab["versions"]["candidate"]["registry_version"]["ref"]["version"]
         cand_metrics = evals.get("candidate")
         base_metrics = evals.get("baseline")
@@ -499,7 +504,7 @@ def main() -> None:
             "adapters_root": str(args.adapters), "corpus_root": str(args.corpus_root),
         },
         "counters": counters,
-        "humaneval_guard": guard.as_dict(),
+        "line_guard": {cid: g.as_dict() for cid, g in guard_by_cluster.items()},
         "evaluation_note": eval_note,
         "clusters": results,
         "promotion_audit_trail": audit,
@@ -513,7 +518,8 @@ def main() -> None:
                 f"band = {args.noise_band}; the measured band is still P5's "
                 f"outstanding deliverable. At 0.0, 'improved' means 'improved by "
                 f"any amount'."),
-            "d5_regression_guard": guard.reason,
+            "d5_regression_guard": "; ".join(f"{cid}: {g.reason}"
+                                             for cid, g in guard_by_cluster.items()),
             "d1_web_cluster": (
                 "on disk the web cluster is {flask, requests, werkzeug}; D1 "
                 "specifies {django, flask, requests}"),

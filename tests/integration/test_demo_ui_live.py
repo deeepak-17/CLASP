@@ -99,7 +99,8 @@ def _evidence(candidate_es: float, baseline_es: float):
                     "n_examples": 60}
         base = {"edit_similarity": baseline_es, "exact_match": 0.2, "perplexity": 3.0,
                 "n_examples": 60}
-        guard = [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.5}}]
+        guard = [{"benchmark": "LineCompletion", "edit_similarity": 0.6, "exact_match": 0.1,
+                  "n_examples": 300}]
         return {"in_project": measured, "baseline_in_project": base, "guard": guard,
                 "baseline_guard": guard, "noise_band": 0.0,
                 "provenance": {"stale": False, "note": "test"}}
@@ -136,6 +137,27 @@ def test_a_rollback_on_promote_puts_the_previous_merge_back_on_the_cluster(stack
     again = upload.pull_cluster_adapter(tmp_path / "from_cluster2", cluster_id="web",
                                         cluster_url=cluster_url, log=lambda *_: None)
     assert again["sha256"] == v1["sha256"]
+
+
+def test_promote_posts_a_line_completion_guard_for_candidate_and_baseline(stack, tmp_path,
+                                                                           monkeypatch):
+    ui, cluster_url, _ = stack
+    _two_published_rounds(ui, cluster_url, tmp_path)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    posted = []
+    real_send = panel._send
+
+    async def spy(client, method, url, **kw):
+        if url.endswith("/promote"):
+            posted.append(kw["json"])
+        return await real_send(client, method, url, **kw)
+
+    monkeypatch.setattr(panel, "_send", spy)
+    assert ui.post("/api/live/promote/web").status_code == 200
+    (body,) = posted
+    assert [g["benchmark"] for g in body["eval"]["guard"]] == ["LineCompletion"]
+    assert [g["benchmark"] for g in body["baseline_guard"]] == ["LineCompletion"]
+    assert body["eval"]["guard"][0]["n_examples"] == 300
 
 
 def test_a_promote_leaves_the_cluster_serving_the_new_merge(stack, tmp_path, monkeypatch):
@@ -183,9 +205,12 @@ a = ap.parse_args()
 listing = requests.get(f"{{a.registry_url}}/adapters/{{a.registry_name}}/versions", timeout=10).json()
 cand, base = ec.pick_versions(listing)
 print(f"scoring v{{cand['ref']['version']}} against v{{base['ref']['version']}}", flush=True)
-score = lambda es, p: {{"in_project": {{"edit_similarity": es, "exact_match": 0.2,
-                                         "perplexity": 3.0, "n_examples": 60}}, "pass_at_1": p}}
-doc = ec.evidence_document(a.cluster, cand, base, score(0.55, 0.5), score(0.45, 0.5),
+score = lambda es, g: {{"in_project": {{"edit_similarity": es, "exact_match": 0.2,
+                                         "perplexity": 3.0, "n_examples": 60}},
+                       "guard": {{"benchmark": "LineCompletion", "edit_similarity": g,
+                                 "exact_match": 0.1, "n_examples": 4}},
+                       "guard_rows": [g] * 4, "guard_examples_sha256": "f" * 64}}
+doc = ec.evidence_document(a.cluster, cand, base, score(0.55, 0.6), score(0.45, 0.6),
                            band={{"value": 0.0, "client": "web/client-flask", "source": "test"}},
                            details={{"fake": True}})
 ec.write_evidence(a.out_dir, a.cluster, doc)

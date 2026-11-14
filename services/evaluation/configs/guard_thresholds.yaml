@@ -5,8 +5,21 @@
 # this file, recomputes every derived number from the scored anchor, and writes
 # results/noise_report.json + reports/eval_noise_report.md.
 
+line_guard:
+  # The promotion guard: next-line completion on a frozen 300-example set drawn
+  # from click, jinja and colorama (evaluation.eval_harness.line_guard; built by
+  # scripts/build_line_guard.py, fingerprint in datasets/guard/*.manifest.json).
+  # A candidate may lose at most this much edit similarity against its baseline.
+  tolerance_edit_similarity: 0.02
+  size: 300
+  seed: 0
+  file: datasets/guard/line_guard_v1.jsonl
+
+# No longer the promotion guard: HumanEval stays as a reportable number. These
+# keys are still read by build_noise_report.py and score_humaneval_samples.py
+# to regenerate that report, so the block is kept (renamed in a later cleanup).
 humaneval_guard:
-  # The D5 rule as the registry implements it (registry.promotion
+  # The former D5 rule as the registry implements it (registry.promotion
   # GUARD_PASS_AT_1_TOLERANCE). Owned by P4; P5 does not change it.
   tolerance_pass_at_1: 0.02
   # Scored baseline anchor the noise floor is measured from.
