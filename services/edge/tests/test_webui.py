@@ -169,7 +169,7 @@ def test_merged_adapter_comes_back_and_seeds_the_next_training(page_url, cluster
 
     # Nothing merged yet: the pull says so instead of writing anything.
     assert _post(f"{url}/api/pull", {})[0] == 202
-    assert "not merged" in _wait_job(url)["error"]
+    assert "promoted" in _wait_job(url)["error"]
 
     for client, seed in (("client-flask", 1), ("client-requests", 2)):
         upload.upload_adapter(_contract_adapter(tmp_path / "edges", client, seed=seed),
@@ -177,6 +177,12 @@ def test_merged_adapter_comes_back_and_seeds_the_next_training(page_url, cluster
     r = requests.post(f"{cluster_url}/clusters/web/aggregate", json={"aggregation": "naive"},
                       timeout=30)
     assert r.status_code == 200, r.text
+    # merged, but a candidate: nothing comes back until laptop A promotes it
+    assert _get(f"{url}/api/status")["merge"]["state"] == "awaiting"
+    assert _post(f"{url}/api/pull", {})[0] == 202
+    assert "promoted" in _wait_job(url)["error"]
+    _promote(cluster_url, r.json()["sha256"])
+    assert _get(f"{url}/api/status")["merge"]["label"] == "Merged and promoted"
 
     assert _post(f"{url}/api/pull", {})[0] == 202
     job = _wait_job(url)
@@ -245,7 +251,15 @@ def test_train_command_carries_fedprox_and_the_dp_sequence_length(tmp_path):
     assert plain[plain.index("--fedprox-mu") + 1] == "0.1" and "--seq-len" not in plain
 
 
-def _plain_round(url, root, round_id, seeds):
+def _promote(url, sha256):
+    import requests
+
+    r = requests.post(f"{url}/clusters/web/adapters/candidate/promote",
+                      json={"sha256": sha256}, timeout=10)
+    assert r.status_code == 200, r.text
+
+
+def _plain_round(url, root, round_id, seeds, *, promote=True):
     import requests
 
     from edge import upload
@@ -258,13 +272,15 @@ def _plain_round(url, root, round_id, seeds):
     r = requests.post(f"{url}/clusters/web/aggregate", json={"aggregation": "naive"},
                       timeout=30)
     assert r.status_code == 200, r.text
+    if promote:
+        _promote(url, r.json()["sha256"])
     return r.json()
 
 
 def test_the_page_follows_the_adapter_the_cluster_serves_not_the_round_number(
         page_url, cluster_url, tmp_path):  # noqa: F811
-    """A rollback (or a restarted cluster) can serve a different adapter under a
-    round number this laptop already has. The page compares digests."""
+    """An operator restore (or a restarted cluster) can serve a different adapter
+    under a round number this laptop already has. The page compares digests."""
     url, page = page_url
     _register(cluster_url, "web", ["client-flask", "client-requests"])
     first = _plain_round(cluster_url, tmp_path / "e", 0, (1, 2))
@@ -308,3 +324,87 @@ def test_cards_say_what_an_adapter_was_built_on(tmp_path):
     assert card["base_round"] == 3 and card["base_sha256"] == "ab" * 32 and card["fedprox_mu"] == 0.01
     with pytest.raises(ValueError, match="did not come from this cluster"):
         page.start_upload("round2_d3/client-flask")
+
+
+# --------------------------------------------------------------------------- #
+# step 4 of the tracker follows the candidate: awaiting, promoted or rejected
+# --------------------------------------------------------------------------- #
+def _fake_clusters(monkeypatch, page, responses):
+    """``GET /clusters`` answers each of ``responses`` in turn (web only)."""
+    from edge import upload
+
+    queue = list(responses)
+
+    def fake(http, url, timeout=5):
+        active, candidate = queue.pop(0)
+        return {"web": {"round_id": 1, "pending_uploads": 0, "members": ["client-flask"],
+                        "uploaded_clients": [], "aggregated_clients": ["client-flask"],
+                        "aggregated_round_id": 0, "has_active_adapter": active is not None,
+                        "active_sha256": active, "candidate_sha256": candidate}}
+
+    monkeypatch.setattr(upload, "list_clusters", fake)
+
+
+def _step4(page):
+    return page.status()["merge"]
+
+
+def test_the_tracker_awaits_evaluation_then_shows_the_promote(tmp_path, monkeypatch):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    a, b = "a" * 64, "b" * 64
+    _fake_clusters(monkeypatch, page, [(a, b), (a, b), (b, None), (b, None)])
+    for _ in range(2):
+        m = _step4(page)
+        assert m["state"] == "awaiting" and m["label"] == "Awaiting evaluation"
+        assert m["candidate_sha256"] == b and m["active_sha256"] == a
+    m = _step4(page)
+    assert m["state"] == "promoted" and m["label"] == "Merged and promoted"
+    assert m["active_sha256"] == b and m["decided_sha256"] == b
+    assert _step4(page)["label"] == "Merged and promoted"  # stays until the next candidate
+
+
+def test_the_tracker_shows_a_reject_and_keeps_the_previous_adapter(tmp_path, monkeypatch):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    a, b, c = "a" * 64, "b" * 64, "c" * 64
+    _fake_clusters(monkeypatch, page, [(a, b), (a, None), (a, None), (a, c)])
+    assert _step4(page)["label"] == "Awaiting evaluation"
+    m = _step4(page)
+    assert m["state"] == "rejected" and m["label"] == "Rejected, previous adapter kept"
+    assert m["active_sha256"] == a and m["decided_sha256"] == b
+    assert _step4(page)["state"] == "rejected"
+    # the next round's candidate starts the wait again
+    assert _step4(page)["state"] == "awaiting"
+
+
+def test_the_tracker_follows_the_very_first_candidate(tmp_path, monkeypatch):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    b = "b" * 64
+    _fake_clusters(monkeypatch, page, [(None, None), (None, b), (None, None)])
+    assert _step4(page)["state"] is None  # nothing merged yet
+    assert _step4(page)["state"] == "awaiting"
+    m = _step4(page)  # rejected with nothing active: still nothing to pull
+    assert m["state"] == "rejected" and m["active_sha256"] is None
+
+
+def test_a_candidate_is_never_pulled_and_a_reject_keeps_the_pulled_adapter(
+        page_url, cluster_url, tmp_path):  # noqa: F811
+    """Against the real cluster: auto-pull keys on active_sha256 only."""
+    import requests
+
+    url, page = page_url
+    _register(cluster_url, "web", ["client-flask", "client-requests"])
+    first = _plain_round(cluster_url, tmp_path / "e", 0, (1, 2))
+    _post(f"{url}/api/pull", {})
+    _wait_job(url)
+    second = _plain_round(cluster_url, tmp_path / "e", 1, (3, 4), promote=False)
+    status = _get(f"{url}/api/status")
+    assert status["merge"]["label"] == "Awaiting evaluation"
+    assert status["clusters"]["web"]["active_sha256"] == first["sha256"]
+    assert status["pulled"]["sha256"] == first["sha256"] and status["pulled"]["current"] is True
+    r = requests.post(f"{cluster_url}/clusters/web/adapters/candidate/reject",
+                      json={"sha256": second["sha256"]}, timeout=10)
+    assert r.status_code == 200, r.text
+    status = _get(f"{url}/api/status")
+    assert status["merge"]["label"] == "Rejected, previous adapter kept"
+    assert status["pulled"]["sha256"] == first["sha256"] and status["pulled"]["current"] is True
+    assert page.latest_pulled("web", second["sha256"]) is None

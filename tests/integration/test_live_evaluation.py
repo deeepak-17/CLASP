@@ -1,7 +1,9 @@
 """Promote judges the candidate on its own measurements (D5), never on another adapter's.
 
-``scripts/evaluate_candidate.py`` scores the registry's active version and the
-one before it on laptop A's GPU and writes ``<cluster>-v<N>.json``;
+``scripts/evaluate_candidate.py`` scores the registry's pending candidate (the
+newest version above the active one) and the active version — or the bare base
+model when nothing is active yet — on laptop A's GPU and writes
+``<cluster>-v<N>.json``;
 ``demo_ui.evidence.evidence_for`` hands Promote that file only when its
 version and sha256 are the candidate's. The GPU scoring itself runs in the
 live check; here its pure parts and the selection rule are pinned.
@@ -47,15 +49,29 @@ SCORES = {
 }
 
 
-def test_the_candidate_is_the_active_version_and_the_baseline_the_one_before():
+def test_the_candidate_is_the_newest_above_the_active_and_the_baseline_the_active():
     mod = _script()
-    listing = {"active": 3, "versions": [_v(1, "a" * 64), _v(3, "c" * 64), _v(2, "b" * 64)]}
-    cand, base = mod.pick_versions(listing)
+    listing = {"active": 2, "versions": [_v(1, "a" * 64), _v(3, "c" * 64), _v(2, "b" * 64)]}
+    cand, base = mod.pick_versions(listing, 2)
     assert cand["ref"]["version"] == 3 and base["ref"]["version"] == 2
-    with pytest.raises(SystemExit, match="previous version"):
-        mod.pick_versions({"active": 1, "versions": [_v(1, "a" * 64)]})
-    with pytest.raises(SystemExit, match="no active version"):
-        mod.pick_versions({"active": None, "versions": []})
+
+
+def test_with_nothing_active_the_candidate_is_compared_with_the_bare_base_model():
+    mod = _script()
+    listing = {"active": None, "versions": [_v(1, "a" * 64)]}
+    cand, base = mod.pick_versions(listing, None)
+    assert cand["ref"]["version"] == 1 and base is None
+    # the newest version wins when several are pending and nothing is active
+    listing = {"active": None, "versions": [_v(2, "b" * 64), _v(1, "a" * 64)]}
+    assert mod.pick_versions(listing, None)[0]["ref"]["version"] == 2
+
+
+def test_without_a_pending_candidate_there_is_nothing_to_evaluate():
+    mod = _script()
+    with pytest.raises(SystemExit, match="no candidate"):
+        mod.pick_versions({"active": 2, "versions": [_v(1, "a" * 64), _v(2, "b" * 64)]}, 2)
+    with pytest.raises(SystemExit, match="no candidate"):
+        mod.pick_versions({"active": None, "versions": []}, None)
 
 
 def _write(tmp_path, mod, version=2, sha="b" * 64):
@@ -113,13 +129,27 @@ def test_an_override_file_for_another_version_does_not_win(tmp_path, monkeypatch
     assert evidence.evidence_for("web", version=1, sha256="a" * 64)["in_project"]
 
 
-def test_the_baseline_is_the_candidates_parent_not_the_highest_lower_number():
-    """Review #2: v4 built on v2 (v3 was rolled back) is compared with v2."""
+def test_a_rejected_version_in_between_is_never_the_baseline():
+    """v3 was rejected (never live); v4 is judged against the active v2."""
     mod = _script()
-    listing = {"active": 4, "versions": [_v(1, "a" * 64), _v(2, "b" * 64), _v(3, "c" * 64),
+    listing = {"active": 2, "versions": [_v(1, "a" * 64), _v(2, "b" * 64), _v(3, "c" * 64),
                                          _v(4, "d" * 64)]}
-    cand, base = mod.pick_versions(listing, parent_sha256="b" * 64)
+    cand, base = mod.pick_versions(listing, 2)
     assert cand["ref"]["version"] == 4 and base["ref"]["version"] == 2
+
+
+def test_the_first_candidates_evidence_names_the_base_model_as_its_baseline(tmp_path, monkeypatch):
+    mod = _script()
+    doc = mod.evidence_document("web", _v(1, "a" * 64), None, SCORES["candidate"],
+                                SCORES["baseline"], band={"value": 0.0}, details={"alpha": 0.5})
+    assert doc["baseline_version"] is None and doc["baseline_sha256"] is None
+    assert doc["clusters"]["web"]["baseline_guard"] == [SCORES["baseline"]["guard"]]
+    monkeypatch.delenv("CLASP_EVAL_EVIDENCE", raising=False)
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    mod.write_evidence(tmp_path, "web", doc)
+    ev = evidence.evidence_for("web", version=1, sha256="a" * 64)
+    assert "bare base model" in ev["provenance"]["in_project"]
+    assert "vNone" not in ev["provenance"]["in_project"]
 
 
 # --------------------------------------------------------------------------- #
@@ -208,6 +238,24 @@ def test_the_cache_key_carries_the_guard_fingerprint(tmp_path, monkeypatch):
     n = len(calls)
     again = mod.score_version(state, None, "cluster-web", _v(2, "b" * 64), args, work)
     assert len(calls) == n and "guard" in again  # served from the new cache, not the old file
+
+
+def test_the_bare_base_model_is_scored_with_no_adapter_and_cached_as_base(tmp_path, monkeypatch):
+    """C7: with nothing active the baseline is the base model itself, no adapter loaded."""
+    mod, state, args, work, _, calls = _score_with_fake_model(tmp_path, monkeypatch)
+    composed = []
+    monkeypatch.setattr(mod, "_composite", lambda *a, **k: composed.append(a) or tmp_path / "c")
+    state["peft"], plain = None, _FakeModel()
+    state["model"] = plain
+    result = mod.score_version(state, None, "cluster-web", None, args, work)
+    assert composed == [] and plain.peft_config == {} and state["peft"] is None
+    assert result["version"] is None and result["sha256"] == "base"
+    assert result["guard"]["benchmark"] == "LineCompletion"
+    cached = [p.name for p in (work / "cache").glob("base-*.json")]
+    assert len(cached) == 1
+    n = len(calls)
+    mod.score_version(state, None, "cluster-web", None, args, work)
+    assert len(calls) == n  # served from the "base" cache entry
 
 
 def test_the_guard_benchmark_name_is_the_one_evaluation_froze():

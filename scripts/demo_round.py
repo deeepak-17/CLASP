@@ -1,9 +1,10 @@
 """One-command integration round across all four seams (Integration Sprint · B7).
 
     A   Edge  -> Cluster    POST /uploads                 (6 real client adapters)
-    B   Cluster -> Registry POST /versions                (via /publish)
-    C1  Registry -> Edge    GET  /active + /file          (sha256 verified)
-    C2  Edge  -> Registry   POST /promote                 (D5 decision)
+    B   Cluster -> Registry POST /versions                (via /publish, inactive)
+    C1  Registry -> Edge    GET  /versions/{n}/file       (sha256 verified)
+    C2  Edge  -> Registry   POST /promote                 (D5 decision), then the
+                            cluster's candidate/promote or candidate/reject
 
 Run it:
 
@@ -15,19 +16,22 @@ What actually happens, per cluster (web, scientific):
   1. Its three real trained LoRA adapters are uploaded over HTTP. The FedAvg
      sample weight is each client's block count, recomputed here by packing the
      client's corpus — not copied out of an old manifest.
-  2. The cluster aggregates the SAME uploads twice: once with the naive
-     per-factor average (D2's ablation baseline) and once with the exact
-     SVD path. Both are published to the registry as immutable versions, v1 and
-     v2, so the promotion rule has a baseline to judge the candidate against —
-     which it must, because D5 rolls back when there is nothing to compare to.
-  3. Both versions are pulled back out of the registry and materialized into
+  2. The cluster aggregates them with the exact SVD path. The result is the
+     cluster's candidate: edges keep pulling the active adapter until it is
+     promoted. It is published to the registry as a new, inactive version.
+  3. The candidate, and the active version it is judged against (if there is
+     one), are pulled back out of the registry by number and materialized into
      PEFT directories, sha256-verified against what the registry recorded.
   4. For one representative client per cluster, a composite
      `base + alpha*cluster + beta*client` is built from each version and scored
      with the in-project next-line completion metric on that client's held-out
-     files.
-  5. The candidate (v2) goes to POST /promote with the baseline's metrics. The
-     registry applies D5 and answers PROMOTE or ROLLBACK.
+     files. With nothing active yet the baseline is the bare base model, no
+     adapter loaded (C7).
+  5. The candidate goes to POST /promote with the baseline's metrics. The
+     registry applies D5 and answers PROMOTE or REJECT; the cluster is then
+     told to promote or reject its candidate (by the registry's sha256), so a
+     rejected candidate is never served. A promote that is not sent (no guard)
+     leaves the candidate pending on both sides.
 
 Nothing here is stubbed and nothing is back-filled from a previous run. If a
 step cannot run — no GPU, no line-completion guard evidence — the manifest says so in that
@@ -146,7 +150,7 @@ def pack_corpora(corpus_root: Path, clients: List[str], seq_len: int) -> Tuple[D
 def run_seam_a_b(cluster_url: str, registry_url: str, cluster_id: str,
                  members: List[str], adapters_root: Path, packs: Dict[str, Dict],
                  round_no: int, seed: int) -> Dict:
-    """Upload three clients, aggregate twice (naive then svd), publish both."""
+    """Upload three clients, aggregate (the cluster's candidate), publish it inactive."""
     registry_name = f"cluster-{cluster_id}"
     health = requests.get(f"{cluster_url}/healthz", timeout=10).json()
     cluster_round = health["clusters"].get(cluster_id, {}).get("round_id", 0)
@@ -173,43 +177,54 @@ def run_seam_a_b(cluster_url: str, registry_url: str, cluster_id: str,
         log(f"  A  {short:22s} {body['tensors_received']:3d} tensors, "
             f"{payload['num_layers']} layers  ->  201  ({dt}s)")
 
-    versions = {}
-    for label, method, retain in (("baseline", "naive", True), ("candidate", "svd", False)):
-        t0 = time.time()
-        r = requests.post(f"{cluster_url}/aggregate", json={
-            "cluster_id": cluster_id, "aggregation": method,
-            "include_manifest": True, "retain_uploads": retain,
-            "exact_lowrank": True}, timeout=1800)
-        if r.status_code != 200:
-            raise SystemExit(f"A: aggregate({method}) failed {r.status_code}: {r.text[:400]}")
-        broadcast = r.json()
-        manifest = requests.get(f"{cluster_url}/adapters/{cluster_id}/manifest",
-                                timeout=60).json()
-        agg_s = round(time.time() - t0, 2)
-        err = manifest.get("svd_reconstruction_error", {})
-        log(f"  A  aggregate {method:6s} -> rank {broadcast['rank']}, "
-            f"{broadcast['num_layers']} layers, {len(broadcast['tensors'])} tensors  "
-            f"({agg_s}s)")
-        if err:
-            log(f"       vs exact weighted average: mean {err.get('mean', float('nan')):.6f}  "
-                f"max {err.get('max', float('nan')):.6f}  over {err.get('n_modules')} modules")
+    t0 = time.time()
+    r = requests.post(f"{cluster_url}/aggregate", json={
+        "cluster_id": cluster_id, "aggregation": "svd",
+        "include_manifest": True, "exact_lowrank": True}, timeout=1800)
+    if r.status_code == 409:
+        raise SystemExit(f"A: {cluster_id} still has an undecided candidate ({r.text[:200]}): "
+                         f"promote or reject it before the next round")
+    if r.status_code != 200:
+        raise SystemExit(f"A: aggregate failed {r.status_code}: {r.text[:400]}")
+    broadcast = r.json()
+    manifest = requests.get(f"{cluster_url}/adapters/{cluster_id}/manifest", timeout=60).json()
+    agg_s = round(time.time() - t0, 2)
+    err = manifest.get("svd_reconstruction_error", {})
+    log(f"  A  aggregate svd -> candidate, rank {broadcast['rank']}, "
+        f"{broadcast['num_layers']} layers, {len(broadcast['tensors'])} tensors  ({agg_s}s)")
+    if err:
+        log(f"       vs exact weighted average: mean {err.get('mean', float('nan')):.6f}  "
+            f"max {err.get('max', float('nan')):.6f}  over {err.get('n_modules')} modules")
 
-        t0 = time.time()
-        r = requests.post(f"{cluster_url}/adapters/{cluster_id}/publish", json={
-            "registry_url": registry_url, "adapter_name": registry_name,
-            "round": round_no, "seed": seed, "set_active": True}, timeout=900)
-        if r.status_code != 201:
-            raise SystemExit(f"B: publish({method}) failed {r.status_code}: {r.text[:400]}")
-        version_meta = r.json()["version"]
-        log(f"  B  publish {method:6s} -> {registry_name} v{version_meta['ref']['version']}  "
-            f"sha256 {version_meta['sha256'][:16]}...  "
-            f"clients {version_meta['source_clients']}  ({round(time.time()-t0,2)}s)")
-        versions[label] = {
-            "aggregation": method, "seconds": agg_s,
-            "aggregation_manifest": manifest, "registry_version": version_meta,
-        }
+    t0 = time.time()
+    r = requests.post(f"{cluster_url}/adapters/{cluster_id}/publish", json={
+        "registry_url": registry_url, "adapter_name": registry_name,
+        "round": round_no, "seed": seed}, timeout=900)
+    if r.status_code != 201:
+        raise SystemExit(f"B: publish failed {r.status_code}: {r.text[:400]}")
+    version_meta = r.json()["version"]
+    log(f"  B  publish -> {registry_name} v{version_meta['ref']['version']} (candidate, inactive)  "
+        f"sha256 {version_meta['sha256'][:16]}...  "
+        f"clients {version_meta['source_clients']}  ({round(time.time()-t0,2)}s)")
+    listing = requests.get(f"{registry_url}/adapters/{registry_name}/versions", timeout=30).json()
+    active = listing.get("active")
+    versions = {"candidate": {"aggregation": "svd", "seconds": agg_s,
+                              "aggregation_manifest": manifest, "registry_version": version_meta}}
+    if active is not None:
+        versions["baseline"] = {"registry_version": next(
+            v for v in listing["versions"] if v["ref"]["version"] == active)}
     return {"registry_name": registry_name, "cluster_round_id": cluster_round,
-            "uploads": uploads, "versions": versions}
+            "uploads": uploads, "versions": versions, "active_version_before": active}
+
+
+def decide_on_cluster(cluster_url: str, cluster_id: str, action: str, sha256: str) -> Dict:
+    """Carry the registry's decision to the cluster the edges pull from."""
+    step = "promote" if action == "promote" else "reject"
+    r = requests.post(f"{cluster_url}/clusters/{cluster_id}/adapters/candidate/{step}",
+                      json={"sha256": sha256}, timeout=60)
+    if r.status_code != 200:
+        return {"step": step, "error": f"{r.status_code}: {r.text[:400]}"}
+    return {"step": step, **r.json()}
 
 
 # --------------------------------------------------------------------------- #
@@ -258,10 +273,11 @@ def build_composite(cluster_dir: Path, client_dir: Path, alpha: float, beta: flo
             "merge_self_check": err, "compatibility": info}
 
 
-def evaluate_composite(model_bundle, composite_dir: Path, pack: Dict, examples,
+def evaluate_composite(model_bundle, composite_dir: Optional[Path], pack: Dict, examples,
                        adapter_name: str, batch_size: int, max_new_tokens: int,
                        prompt_tokens: int, ppl_max_blocks: Optional[int]) -> Dict:
     """Load a composite as a PEFT adapter and measure perplexity + completion.
+    ``composite_dir=None`` measures the bare base model, no adapter loaded (C7).
 
     ``ppl_max_blocks`` caps the held-out perplexity pass the same way
     ``edge.round``'s ``--grid-max-blocks`` caps its alpha sweep: scikit-learn's
@@ -274,6 +290,28 @@ def evaluate_composite(model_bundle, composite_dir: Path, pack: Dict, examples,
 
     model, tokenizer, holder = model_bundle
     model = holder["model"]
+    chunks = pack["held"]["chunks"]
+    capped = chunks[:ppl_max_blocks] if ppl_max_blocks else chunks
+
+    def measure(m) -> Dict:
+        ppl = ppl_evaluate(m, capped, tokenizer.pad_token_id)
+        out = evaluate_completion(m, tokenizer, examples, ppl["perplexity"],
+                                  batch_size=batch_size, max_new_tokens=max_new_tokens,
+                                  prompt_tokens=prompt_tokens)
+        out["perplexity_detail"] = {**ppl, "blocks_scored": len(capped),
+                                    "blocks_available": len(chunks),
+                                    "capped": len(capped) < len(chunks)}
+        return out
+
+    if composite_dir is None:
+        if holder["anchored"]:
+            with model.disable_adapter():
+                result = measure(model)
+        else:
+            result = measure(model)
+        result["adapter_name"] = None
+        return result
+
     safe = adapter_name.replace("/", "_").replace(".", "_").replace("-", "_")
     if holder["anchored"]:
         model.load_adapter(str(composite_dir), adapter_name=safe)
@@ -284,19 +322,7 @@ def evaluate_composite(model_bundle, composite_dir: Path, pack: Dict, examples,
         holder["model"] = model
         holder["anchored"] = True
     model.set_adapter(safe)
-
-    chunks = pack["held"]["chunks"]
-    capped = chunks[:ppl_max_blocks] if ppl_max_blocks else chunks
-    ppl = ppl_evaluate(model, capped, tokenizer.pad_token_id)
-    result = evaluate_completion(model, tokenizer, examples, ppl["perplexity"],
-                                 batch_size=batch_size, max_new_tokens=max_new_tokens,
-                                 prompt_tokens=prompt_tokens)
-    result["perplexity_detail"] = {
-        **ppl,
-        "blocks_scored": len(capped),
-        "blocks_available": len(chunks),
-        "capped": len(capped) < len(chunks),
-    }
+    result = measure(model)
     result["adapter_name"] = safe
     if len(getattr(model, "peft_config", {})) > 1:
         model.delete_adapter(safe)
@@ -401,10 +427,11 @@ def main() -> None:
         ab = run_seam_a_b(args.cluster_url, args.registry_url, cluster_id, members,
                           Path(args.adapters), packs, args.round, args.seed)
         counters["uploads"] += len(ab["uploads"])
-        counters["aggregations"] += len(ab["versions"])
-        counters["snapshots"] += len(ab["versions"])
+        counters["aggregations"] += 1  # one candidate per round
+        counters["snapshots"] += 1
 
-        banner("C1", f"cluster-{cluster_id}: pull both versions back, verify sha256")
+        banner("C1", f"cluster-{cluster_id}: pull the candidate (and the active baseline) back, "
+                     f"verify sha256")
         pulled = run_seam_c1(rc, ab["registry_name"], ab["versions"], pulled_root)
 
         rep = REPRESENTATIVE[cluster_id]
@@ -426,6 +453,12 @@ def main() -> None:
             log(f"  D6 composite {label:9s} rank {composites[label]['rank']}  "
                 f"a={args.alpha} b={args.beta}  "
                 f"merge self-check rel {composites[label]['merge_self_check']['max_rel_err']:.2e}")
+        # nothing active yet: the candidate is judged against the bare base model
+        to_score = {label: composite_root / ab["registry_name"] / label for label in pulled}
+        if "baseline" not in to_score:
+            to_score["baseline"] = None
+            log("  baseline: the bare base model (no version of this cluster is active yet)")
+        for label, comp_dir in to_score.items():
             if model_bundle is not None and examples:
                 t0 = time.time()
                 ev = evaluate_composite(model_bundle, comp_dir, packs[rep], examples,
@@ -447,7 +480,7 @@ def main() -> None:
         base_metrics = evals.get("baseline")
         if cand_metrics is None:
             log("  !! in-project metric unmeasured this run — the D5 rule is being "
-                "given no edit_similarity, which is a ROLLBACK by construction (F3).")
+                "given no edit_similarity, which is a REJECT by construction (F3).")
         promotion = promote_candidate(
             rc, ab["registry_name"], version=cand_v, kind="cluster",
             cluster_id=cluster_id,
@@ -455,12 +488,21 @@ def main() -> None:
             baseline_in_project=(base_metrics["in_project"] if base_metrics else None),
             guard=guard, noise_band=args.noise_band, seed=args.seed)
         d = promotion["decision"]
+        cand_sha = ab["versions"]["candidate"]["registry_version"]["sha256"]
         if d.get("registry_called") is False:
             log(f"  C2 NOT SENT — {d['reason']}")
+            log("     the candidate stays pending on the registry and the cluster")
+            promotion["cluster"] = None
         else:
             counters["decisions"] += 1
-            log(f"  C2 {d['action'].upper()}  active v{d['active_version_after']}")
+            after = d["active_version_after"]
+            log(f"  C2 {d['action'].upper()}  active {f'v{after}' if after else 'none'}")
             log(f"     reason: {d['reason']}")
+            promotion["cluster"] = decide_on_cluster(args.cluster_url, cluster_id,
+                                                     d["action"], cand_sha)
+            c = promotion["cluster"]
+            log(f"  C2 cluster candidate/{c['step']}  ->  "
+                + (c["error"] if "error" in c else f"serving {str(c.get('active_sha256'))[:16]}"))
         log(f"     {promotion['authority_note']}")
 
         results[cluster_id] = {
@@ -478,12 +520,16 @@ def main() -> None:
         name = f"cluster-{cluster_id}"
         audit[name] = rc.list_promotions(name)
         versions = rc.list_versions(name)
-        log(f"\n  {name}: {len(versions['versions'])} versions, active v{versions['active']}")
+        active = versions["active"]
+        log(f"\n  {name}: {len(versions['versions'])} versions, "
+            f"active {f'v{active}' if active is not None else 'none'}")
         for v in versions["versions"]:
             log(f"    v{v['ref']['version']}  {v['aggregation']:10s}  "
                 f"sha256 {v['sha256'][:16]}...  clients {v['source_clients']}")
         for dec in audit[name]:
-            log(f"    decision: {dec['action'].upper()} -> active v{dec['active_version_after']}")
+            after = dec["active_version_after"]
+            log(f"    decision on v{dec['adapter']['version']}: {dec['action'].upper()} -> active "
+                f"{f'v{after}' if after else 'none'}")
 
     manifest = {
         "task": "Integration Sprint B7 — four-seam round (A: edge->cluster, "

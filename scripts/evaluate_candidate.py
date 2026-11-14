@@ -2,10 +2,12 @@
 
     python scripts/evaluate_candidate.py --cluster web --registry-url http://localhost:8004
 
-Promote (D5) compares the version the registry is serving with the one before
-it. This measures exactly those two, as the edges use them — ``base + alpha *
-cluster`` (D3/D6) — so the decision is about the candidate itself, not about an
-earlier round's adapter:
+Promote (D5) judges the registry's pending candidate — the newest version above
+the active one, uploaded inactive — against the version the registry is
+serving. This measures exactly those two, as the edges use them — ``base +
+alpha * cluster`` (D3/D6) — so the decision is about the candidate itself, not
+about an earlier round's adapter. When nothing is active yet (the first
+candidate), the baseline is the bare base model with no adapter loaded (C7):
 
 * **in-project** (D5's primary metric): next-line completion (edit similarity,
   exact match) on the held-out files of the client the noise band was
@@ -19,8 +21,9 @@ earlier round's adapter:
   noise of the candidate-minus-baseline difference can be reported.
 
 Each version is scored once: results are cached by the payload's sha256 and
-the guard set's fingerprint, so the previous candidate is the next round's
-baseline for free and a score taken on another guard set is never reused. The output,
+the guard set's fingerprint (the bare base model under ``base``), so a promoted
+candidate is the next round's baseline for free and a score taken on another
+guard set is never reused. The output,
 ``<out-dir>/<cluster>-v<N>.json``, is the evidence file ``demo_ui`` hands
 Promote — only for that version and that sha256.
 
@@ -51,31 +54,24 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def payload_header(blob: bytes) -> Dict:
-    """The ``__metadata__`` of a safetensors payload (update_rule, base_sha256, ...)."""
-    return json.loads(blob[8:8 + int.from_bytes(blob[:8], "little")]).get("__metadata__") or {}
-
-
-def pick_versions(listing: Dict, parent_sha256: str | None = None) -> Tuple[Dict, Dict]:
-    """(candidate, baseline): the registry's active version and the one it was
-    built on (its ``base_sha256``); without one, the version before it. A
-    rolled-back version in between is never the baseline."""
-    active = listing.get("active")
-    if active is None:
-        raise SystemExit("the registry has no active version for this cluster: publish first")
+def pick_versions(listing: Dict, active_version: int | None) -> Tuple[Dict, Dict | None]:
+    """(candidate, baseline): the candidate is the newest version above the
+    active one; the baseline is the active version's metadata, or ``None`` when
+    nothing is active (the candidate is then compared with the bare base
+    model). A rejected version in between is never the baseline: it was never
+    active."""
     versions = sorted(listing["versions"], key=lambda v: v["ref"]["version"])
-    cand = next(v for v in versions if v["ref"]["version"] == active)
-    if parent_sha256:
-        parent = next((v for v in versions if v["sha256"] == parent_sha256), None)
-        if parent is None:
-            raise SystemExit(f"v{active} was built on {parent_sha256[:12]}, which is not a "
-                             f"version of this adapter in the registry")
-        return cand, parent
-    earlier = [v for v in versions if v["ref"]["version"] < active]
-    if not earlier:
-        raise SystemExit(f"v{active} has no previous version to compare with (D5): publish a "
-                         f"second round first")
-    return cand, earlier[-1]
+    floor = active_version if active_version is not None else 0
+    pending = [v for v in versions if v["ref"]["version"] > floor]
+    if not pending:
+        raise SystemExit("the registry has no candidate above the active version for this "
+                         "cluster: aggregate and publish first")
+    if active_version is None:
+        return pending[-1], None
+    base = next((v for v in versions if v["ref"]["version"] == active_version), None)
+    if base is None:
+        raise SystemExit(f"the registry reports v{active_version} active but does not list it")
+    return pending[-1], base
 
 
 def evidence_path(out_dir: Path | str, cluster_id: str, version: int) -> Path:
@@ -90,10 +86,11 @@ def _guard(metrics: Dict) -> List[Dict]:
              "n_examples": int(metrics["n_examples"])}]
 
 
-def evidence_document(cluster_id: str, cand: Dict, base: Dict, cand_scores: Dict,
+def evidence_document(cluster_id: str, cand: Dict, base: Dict | None, cand_scores: Dict,
                       base_scores: Dict, *, band: Dict, details: Dict) -> Dict:
     """The file demo_ui.evidence reads (the CLASP_EVAL_EVIDENCE shape, plus
-    which exact versions were measured)."""
+    which exact versions were measured). ``base`` is None when the baseline was
+    the bare base model."""
     from evaluation.eval_harness.line_guard import paired_noise
 
     guard_noise = float(paired_noise(base_scores["guard_rows"], cand_scores["guard_rows"]))
@@ -102,7 +99,8 @@ def evidence_document(cluster_id: str, cand: Dict, base: Dict, cand_scores: Dict
         "source": (f"scripts/evaluate_candidate.py on {platform.node()}, "
                    f"{datetime.now(timezone.utc).isoformat(timespec='seconds')}"),
         "candidate_version": cand["ref"]["version"], "candidate_sha256": cand["sha256"],
-        "baseline_version": base["ref"]["version"], "baseline_sha256": base["sha256"],
+        "baseline_version": base["ref"]["version"] if base else None,
+        "baseline_sha256": base["sha256"] if base else None,
         "clusters": {cluster_id: {
             "in_project": cand_scores["in_project"],
             "baseline_in_project": base_scores["in_project"],
@@ -158,51 +156,68 @@ def _composite(rc, name: str, version: int, alpha: float, work: Path) -> Path:
     return out
 
 
-def score_version(state: Dict, rc, name: str, meta: Dict, args, work: Path) -> Dict:
+def score_version(state: Dict, rc, name: str, meta: Dict | None, args, work: Path) -> Dict:
     """In-project + line-completion guard for one version, cached by its sha256
-    and the guard set's fingerprint."""
+    and the guard set's fingerprint. ``meta=None`` scores the bare base model
+    (no adapter loaded), cached under the key ``"base"`` (C7)."""
     from edge.completion_eval import evaluate_completion
     from edge.train_client import evaluate as perplexity
     from evaluation.completion import examples_fingerprint
     from evaluation.eval_harness.line_guard import guard_metrics
 
-    version, sha = meta["ref"]["version"], meta["sha256"]
+    bare = meta is None
+    version, sha = (None, "base") if bare else (meta["ref"]["version"], meta["sha256"])
+    label = "base model" if bare else f"v{version}"
     guard_examples = state["guard_examples"]
     guard_sha = examples_fingerprint(guard_examples)
-    cache = work / "cache" / (f"{sha}-alpha{args.alpha:g}-guard{guard_sha[:12]}-"
+    key = "base" if bare else f"{sha}-alpha{args.alpha:g}"
+    cache = work / "cache" / (f"{key}-guard{guard_sha[:12]}-"
                               f"{state['client'].replace('/', '_')}.json")
     if cache.exists():
-        log(f"  v{version} ({sha[:12]}) already scored: {cache.name}")
+        log(f"  {label} ({sha[:12]}) already scored: {cache.name}")
         return json.loads(cache.read_text(encoding="utf-8"))
     t0 = time.time()
-    adapter_dir = _composite(rc, name, version, args.alpha, work)
-    model = state["model"]
-    label = f"v{version}"
-    if state["peft"] is None:
-        from peft import PeftModel
 
-        model = state["peft"] = PeftModel.from_pretrained(model, str(adapter_dir), adapter_name=label)
+    def measure(model):
+        held = state["held_chunks"][: args.ppl_max_blocks]
+        ppl = perplexity(model, held, state["tokenizer"].pad_token_id)
+        log(f"  {label}: held-out perplexity {ppl['perplexity']} over {len(held)} blocks")
+        completion = evaluate_completion(model, state["tokenizer"], state["examples"],
+                                         ppl["perplexity"])
+        log(f"  {label}: edit similarity {completion['in_project']['edit_similarity']:.4f}, "
+            f"exact match {completion['in_project']['exact_match']:.4f} "
+            f"({len(state['examples'])} examples, {completion['wall_seconds']} s)")
+        scored = evaluate_completion(model, state["tokenizer"], guard_examples, ppl["perplexity"])
+        guard = guard_metrics(scored["in_project"], len(guard_examples))
+        log(f"  {label}: line-completion guard edit similarity {guard['edit_similarity']:.4f}, "
+            f"exact match {guard['exact_match']:.4f} "
+            f"({guard['n_examples']} examples, {scored['wall_seconds']} s)")
+        return held, completion, scored, guard
+
+    if bare:
+        if state["peft"] is None:
+            model = state["model"]
+            model.eval()
+            held, completion, scored, guard = measure(model)
+        else:  # adapters are already injected: switch them off for the base model
+            with state["peft"].disable_adapter():
+                held, completion, scored, guard = measure(state["peft"])
     else:
-        model = state["peft"]
-        model.load_adapter(str(adapter_dir), adapter_name=label)
-    model.set_adapter(label)
-    model.eval()
+        adapter_dir = _composite(rc, name, version, args.alpha, work)
+        model = state["model"]
+        if state["peft"] is None:
+            from peft import PeftModel
 
-    held = state["held_chunks"][: args.ppl_max_blocks]
-    ppl = perplexity(model, held, state["tokenizer"].pad_token_id)
-    log(f"  v{version}: held-out perplexity {ppl['perplexity']} over {len(held)} blocks")
-    completion = evaluate_completion(model, state["tokenizer"], state["examples"], ppl["perplexity"])
-    log(f"  v{version}: edit similarity {completion['in_project']['edit_similarity']:.4f}, "
-        f"exact match {completion['in_project']['exact_match']:.4f} "
-        f"({len(state['examples'])} examples, {completion['wall_seconds']} s)")
-
-    scored = evaluate_completion(model, state["tokenizer"], guard_examples, ppl["perplexity"])
-    guard = guard_metrics(scored["in_project"], len(guard_examples))
-    log(f"  v{version}: line-completion guard edit similarity {guard['edit_similarity']:.4f}, "
-        f"exact match {guard['exact_match']:.4f} "
-        f"({guard['n_examples']} examples, {scored['wall_seconds']} s)")
-    if len(model.peft_config) > 1:
-        model.delete_adapter(label)
+            model = state["peft"] = PeftModel.from_pretrained(model, str(adapter_dir),
+                                                              adapter_name=label)
+        else:
+            model = state["peft"]
+            model.load_adapter(str(adapter_dir), adapter_name=label)
+        model.set_adapter(label)
+        model.eval()
+        held, completion, scored, guard = measure(model)
+        if len(model.peft_config) > 1:
+            model.delete_adapter(label)
     result = {"version": version, "sha256": sha, "in_project": completion["in_project"],
               "guard": guard, "guard_rows": [r["edit_similarity"] for r in scored["rows"]],
               "guard_examples_sha256": guard_sha, "perplexity_blocks": len(held),
@@ -233,10 +248,11 @@ def main(argv=None) -> int:
 
     rc = _registry(args.registry_url)
     listing = rc.list_versions(name)
-    blob, _ = rc.fetch_verified(name, listing.get("active"))
-    cand, base = pick_versions(listing, payload_header(blob).get("base_sha256"))
+    cand, base = pick_versions(listing, listing.get("active"))
+    against = (f"baseline v{base['ref']['version']} ({base['sha256'][:12]})" if base
+               else "the bare base model (nothing active yet)")
     log(f"{name}: candidate v{cand['ref']['version']} ({cand['sha256'][:12]}) against "
-        f"baseline v{base['ref']['version']} ({base['sha256'][:12]}), alpha {args.alpha:g}")
+        f"{against}, alpha {args.alpha:g}")
 
     from demo_ui.evidence import noise_band
     band = noise_band(args.cluster)
@@ -268,7 +284,7 @@ def main(argv=None) -> int:
     work.mkdir(parents=True, exist_ok=True)
     scores = {}
     for role, meta in (("baseline", base), ("candidate", cand)):
-        log(f"scoring the {role}, v{meta['ref']['version']}")
+        log(f"scoring the {role}, " + (f"v{meta['ref']['version']}" if meta else "bare base model"))
         scores[role] = score_version(state, rc, name, meta, args, work)
 
     doc = evidence_document(args.cluster, cand, base, scores["candidate"], scores["baseline"],

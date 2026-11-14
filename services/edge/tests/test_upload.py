@@ -142,7 +142,8 @@ def test_cli(cluster_url, tmp_path, capsys):
 # --------------------------------------------------------------------------- #
 # FedProx under D3: a residual names the merged adapter it was trained on
 # --------------------------------------------------------------------------- #
-def _merge_round(url, tmp_path, cluster="web", clients=("client-flask", "client-requests")):
+def _merge_round(url, tmp_path, cluster="web", clients=("client-flask", "client-requests"),
+                 *, promote=True):
     import requests
 
     _register(url, cluster, list(clients))
@@ -151,7 +152,13 @@ def _merge_round(url, tmp_path, cluster="web", clients=("client-flask", "client-
                               cluster_url=url, log=lambda *_: None)
     r = requests.post(f"{url}/clusters/{cluster}/aggregate", json={}, timeout=60)
     assert r.status_code == 200, r.text
-    return r.json()
+    merged = r.json()
+    # the aggregate is a candidate; edges see it only once it is promoted
+    if promote:
+        p = requests.post(f"{url}/clusters/{cluster}/adapters/candidate/promote",
+                          json={"sha256": merged["sha256"]}, timeout=10)
+        assert p.status_code == 200, p.text
+    return merged
 
 
 def _residual(root, client, pulled: dict | None, *, seed, alpha=0.5, cluster="web"):
@@ -178,6 +185,25 @@ def test_pull_records_the_merged_adapters_digest(cluster_url, tmp_path):
     assert on_disk["sha256"] == merged["sha256"]
     assert upload.pull_provenance(Path(info["path"]))["sha256"] == merged["sha256"]
     assert upload.pull_provenance(tmp_path) is None
+
+
+def test_a_merge_that_is_not_promoted_is_not_pulled(cluster_url, tmp_path):
+    import requests
+
+    merged = _merge_round(cluster_url, tmp_path, promote=False)
+    listing = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]["web"]
+    assert listing["candidate_sha256"] == merged["sha256"] and listing["active_sha256"] is None
+    with pytest.raises(upload.UploadError) as err:
+        upload.pull_cluster_adapter(tmp_path / "from_cluster", cluster_id="web",
+                                    cluster_url=cluster_url, log=lambda *_: None)
+    assert err.value.status == 404 and "promoted" in err.value.hint
+    # rejected: still nothing to pull
+    r = requests.post(f"{cluster_url}/clusters/web/adapters/candidate/reject",
+                      json={"sha256": merged["sha256"]}, timeout=10)
+    assert r.status_code == 200 and r.json()["active_sha256"] is None
+    with pytest.raises(upload.UploadError):
+        upload.pull_cluster_adapter(tmp_path / "from_cluster", cluster_id="web",
+                                    cluster_url=cluster_url, log=lambda *_: None)
 
 
 def test_residual_upload_declares_its_base_and_is_accumulated(cluster_url, tmp_path):

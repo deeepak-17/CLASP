@@ -93,69 +93,74 @@ function mergeStop(cid, c) {
       <p class="fine">The cluster adds the laptops' updates onto the adapter they trained on (or averages them in the first round) exactly, then compresses the result back to rank 16.</p>`;
   }
   if (m && pending) body += `<p class="fine">${plural(pending, "new adapter has", "new adapters have")} arrived for round ${st.round_id}.</p>`;
+  const waiting = !!c.candidate_sha256;
+  if (waiting) body += `<p class="fine">The merge ${esc(c.candidate_sha256.slice(0, 12))} is a candidate: the laptops keep the adapter they have until it is promoted, and the next merge waits for the decision.</p>`;
   return `<div class="stop"><h3>Cluster merge</h3>${body}
-    <div class="act"><button data-act="aggregate" data-c="${cid}" ${!pending || busy[cid] ? "disabled" : ""}>${pending ? `Merge ${plural(pending, "adapter", "adapters")}` : "Merge adapters"}</button></div></div>`;
+    <div class="act"><button data-act="aggregate" data-c="${cid}" ${!pending || waiting || busy[cid] ? "disabled" : ""}>${pending ? `Merge ${plural(pending, "adapter", "adapters")}` : "Merge adapters"}</button></div></div>`;
 }
 
 function registryStop(cid, c) {
-  const reg = c.registry, st = c.cluster || {};
+  const reg = c.registry;
   const p = (c.last || {}).publish;
-  const list = reg.versions.slice(-4).reverse().map(v => `<li class="${v.version === reg.active ? "active" : ""}">
-      <b>v${v.version}</b><span>round ${esc(v.round)}, ${esc(v.source_clients.join(", "))}</span></li>`).join("");
-  const lead = reg.active ? `${esc(reg.name)}, v${reg.active} serving` : `Nothing published to ${esc(reg.name)} yet`;
-  // a merge is published once a version carries its round and its laptops
-  const merged = st.aggregated_round_id;
-  const done = merged != null && reg.versions.some(v => v.round === merged &&
-    v.source_clients.join() === (st.aggregated_clients || []).join());
-  const label = !st.has_active_adapter ? "Publish merged adapter" : done ? `Round ${merged} is published` : `Publish round ${merged}`;
+  const list = reg.versions.slice(-4).reverse().map(v => {
+    const tag = v.version === reg.active ? "serving" : v.rejected ? "rejected" : v.version === reg.candidate ? "candidate" : "";
+    return `<li class="${v.version === reg.active ? "active" : ""}">
+      <b>v${v.version}</b><span>round ${esc(v.round)}, ${esc(v.source_clients.join(", "))}${tag ? ` · ${tag}` : ""}</span></li>`;
+  }).join("");
+  const lead = reg.active ? `${esc(reg.name)}, v${reg.active} serving`
+    : reg.versions.length ? `Nothing serving from ${esc(reg.name)} yet` : `Nothing published to ${esc(reg.name)} yet`;
+  // the cluster's candidate is published once a version carries its fingerprint
+  const cand = c.candidate_sha256;
+  const done = !!cand && reg.versions.some(v => v.digest === cand);
+  const label = !cand ? "Publish the candidate" : done ? "The candidate is published" : "Publish the candidate";
   return `<div class="stop"><h3>Registry</h3><p class="lead">${lead}</p>
-    ${p ? `<p class="fine">Published v${p.version}, fingerprint ${esc(p.sha256.slice(0, 12))}.</p>` : ""}
+    ${p ? `<p class="fine">Published v${p.version} as a candidate, fingerprint ${esc(p.sha256.slice(0, 12))}. It is served only once it is promoted.</p>` : ""}
     ${list ? `<ul class="versions">${list}</ul>` : ""}
-    <div class="act"><button class="quiet" data-act="publish" data-c="${cid}" ${st.has_active_adapter && !done && !busy[cid] ? "" : "disabled"}>${label}</button></div></div>`;
+    <div class="act"><button class="quiet" data-act="publish" data-c="${cid}" ${cand && !done && !busy[cid] ? "" : "disabled"}>${label}</button></div></div>`;
 }
 
 function decisionStop(cid, c) {
   const r = (c.last || {}).promote;
   const reg = c.registry;
-  const enough = reg.versions.length >= 2;
-  const newest = reg.versions.length ? Math.max(...reg.versions.map(v => v.version)) : null;
-  // the registry only judges the version it is serving, and only once
-  const decided = r && r.candidate_version === newest;
+  const cand = reg.candidate;
   const ev = c.evaluation || {};
-  const measured = c.evaluated_version === newest;
-  const canEval = enough && reg.active === newest && !measured && !ev.running && !busy[cid];
-  const canAsk = enough && reg.active === newest && measured && !decided && !busy[cid];
+  const measured = cand != null && c.evaluated_version === cand;
+  const against = reg.active ? `v${reg.active}, the version serving` : "the bare base model (nothing is serving yet)";
+  const canEval = cand != null && !measured && !ev.running && !busy[cid];
+  const canAsk = cand != null && measured && !busy[cid];
   const evalNote = ev.running
-    ? `<p class="fine">Evaluating v${newest} on this laptop's GPU (in-project completion + the line-completion guard, v${newest} and the version before it)…</p><pre class="tail">${esc((ev.lines || []).join("\n"))}</pre>`
+    ? `<p class="fine">Evaluating v${cand} on this laptop's GPU (in-project completion + the line-completion guard, against ${against})…</p><pre class="tail">${esc((ev.lines || []).join("\n"))}</pre>`
     : ev.exit_code && !measured ? `<p class="fine warn">Evaluation failed (exit ${ev.exit_code}): ${esc((ev.lines || []).slice(-1)[0] || "")}</p>`
-    : measured && !decided ? `<p class="fine">v${newest} has been measured; the registry can decide.</p>` : "";
+    : measured ? `<p class="fine">v${cand} has been measured; the registry can decide.</p>` : "";
   let body;
-  if (r) {
+  if (r && (cand == null || r.candidate_version === cand)) {
     const d = r.decision, s = r.sent, p = r.provenance;
     const promoted = d.action === "promote";
     const fresh = stamped[cid] !== d.timestamp;
     stamped[cid] = d.timestamp;
     const g = (x) => x && x.length && typeof x[0].edit_similarity === "number"
       ? `${fmt(x[0].edit_similarity, 4)}${x[0].n_examples ? ` (${x[0].n_examples} examples)` : ""}` : "not scored";
-    const back = r.cluster_restore
-      ? (r.cluster_restore.restored
-        ? `<p class="fine">The cluster serves v${r.cluster_restore.restored.version} again (${esc(r.cluster_restore.restored.sha256.slice(0, 12))}), so the laptops' next round builds on it${r.cluster_restore.dropped_uploads.length ? `; dropped ${esc(r.cluster_restore.dropped_uploads.join(", "))}, trained on the rejected one` : ""}.</p>`
-        : `<p class="fine warn">${esc(r.cluster_restore.error)}</p>`)
-      : "";
-    body = `<div class="stamp ${promoted ? "" : "rollback"} ${fresh ? "fresh" : ""}">${promoted ? "Promoted" : "Rolled back"}
-        <small>v${d.active_version_after} ${promoted ? "now serving" : "serving again"}</small></div>
+    const cl = r.cluster || {};
+    const kept = d.active_version_after ? `v${d.active_version_after} keeps serving` : "nothing is serving yet";
+    const back = cl.error
+      ? `<p class="fine warn">${esc(cl.error)}</p>`
+      : promoted
+        ? `<p class="fine">The cluster now serves this merge (${esc(String(cl.active_sha256 || "").slice(0, 12))}); the laptops pull it on their next refresh${(cl.dropped_uploads || []).length ? `; dropped ${esc(cl.dropped_uploads.join(", "))}, trained on the adapter it replaces` : ""}.</p>`
+        : `<p class="fine">The cluster dropped the candidate and keeps serving ${cl.active_sha256 ? esc(cl.active_sha256.slice(0, 12)) : "nothing"}; the laptops keep the adapter they have.</p>`;
+    body = `<div class="stamp ${promoted ? "" : "rejected"} ${fresh ? "fresh" : ""}">${promoted ? "Promoted" : "Rejected"}
+        <small>${promoted ? `v${d.active_version_after} now serving` : `v${r.candidate_version} not served; ${kept}`}</small></div>
       <p class="why">${esc(d.reason)}</p>${back}
-      <p class="numbers">Edit similarity ${fmt(s.in_project.edit_similarity, 4)} against ${fmt(s.baseline_in_project.edit_similarity, 4)}, noise band ${fmt(s.baseline_noise_band, 4)}. Line-completion guard edit similarity ${g(s.guard)} against ${g(s.baseline_guard)}.</p>
+      <p class="numbers">Edit similarity ${fmt(s.in_project.edit_similarity, 4)} against ${fmt((s.baseline_in_project || {}).edit_similarity, 4)}, noise band ${fmt(s.baseline_noise_band, 4)}. Line-completion guard edit similarity ${g(s.guard)} against ${g(s.baseline_guard)}.</p>
       <details class="source"><summary>Where these numbers come from</summary>
         <p>${esc(p.in_project)}</p><p>${esc(p.guard)}</p><p>Noise band: ${esc(p.noise_band)}</p>
         ${p.stale ? `<p>${esc(p.note)}</p>` : ""}</details>`;
   } else {
-    body = `<p class="lead">${enough ? `Ready to judge v${newest}` : "Needs two versions to compare"}</p>
-      <p class="fine">The registry keeps the new version only if completion quality beats the last one and the line-completion guard does not drop, measured on this version itself.</p>`;
+    body = `<p class="lead">${cand != null ? `Ready to judge v${cand}` : "No candidate to judge"}</p>
+      <p class="fine">A published version is a candidate. The registry promotes it only if completion quality beats ${against} and the line-completion guard does not drop, measured on the candidate itself; a rejected candidate is never served.</p>`;
   }
   return `<div class="stop"><h3>Decision</h3>${body}${evalNote}
-    <div class="act"><button class="quiet" data-act="evaluate" data-c="${cid}" ${canEval ? "" : "disabled"}>${measured ? `v${newest} is measured` : ev.running ? "Evaluating…" : enough ? `Evaluate v${newest}` : "Evaluate"}</button>
-      <button class="quiet" data-act="promote" data-c="${cid}" ${canAsk ? "" : "disabled"}>${decided ? `v${newest} has been judged` : enough ? `Ask the registry about v${newest}` : "Ask the registry to decide"}</button></div></div>`;
+    <div class="act"><button class="quiet" data-act="evaluate" data-c="${cid}" ${canEval ? "" : "disabled"}>${measured ? `v${cand} is measured` : ev.running ? "Evaluating…" : cand != null ? `Evaluate v${cand}` : "Evaluate"}</button>
+      <button class="quiet" data-act="promote" data-c="${cid}" ${canAsk ? "" : "disabled"}>${cand != null ? `Ask the registry about v${cand}` : "Ask the registry to decide"}</button></div></div>`;
 }
 
 function render(state) {
@@ -202,7 +207,7 @@ async function act(action, cid) {
   } else if (action === "aggregate") note(`${cid}: merged ${plural(r.body.manifest.num_clients, "adapter", "adapters")} into round ${r.body.manifest.round_id}`);
   else if (action === "publish") note(`${cid}: published ${r.body.version.name} v${r.body.version.version}`);
   else if (action === "evaluate") note(`${cid}: evaluating on this laptop's GPU; it takes several minutes`);
-  else note(`${cid}: ${r.body.decision.action === "promote" ? "promoted" : "rolled back"}. ${r.body.decision.reason}`);
+  else note(`${cid}: v${r.body.candidate_version} ${r.body.decision.action === "promote" ? "promoted" : "rejected"}. ${r.body.decision.reason}`);
   refresh();
 }
 

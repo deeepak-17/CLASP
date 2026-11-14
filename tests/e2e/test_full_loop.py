@@ -11,11 +11,12 @@ weights — only on the wiring between services being correct.
 
 Seams exercised (naming per Phase-2-Panel-1/CLASP_Integration_Sprint.md figure 2):
 
-    A  Edge -> Cluster    POST /uploads (x3 synthetic clients)
+    A  Edge -> Cluster    POST /uploads (x3 synthetic clients); the aggregate
+                           is the cluster's candidate, not served
     B  Cluster -> Registry POST /adapters/{name}/versions
                            (a real ClusterAdapterBroadcast, serialized to a
-                           real safetensors blob)
-    C1 Registry -> Edge    GET /adapters/{name}/active + .../versions/{v}/file
+                           real safetensors blob) — an inactive candidate
+    C1 Registry -> Edge    GET /adapters/{name}/versions/{v} + .../file
                            — pull the cluster delta back out and check how
                            much of a loadable PEFT config the registry's
                            stored metadata can actually reassemble (Defect 4:
@@ -23,10 +24,15 @@ Seams exercised (naming per Phase-2-Panel-1/CLASP_Integration_Sprint.md figure 2
                            config") — see the note at that assertion block for
                            what this does and does NOT prove.
     C2 Edge -> Registry    POST /adapters/{name}/promote — an EvalResult in, a
-                           PROMOTE or ROLLBACK decision out. Both outcomes are
-                           exercised over this real HTTP seam, and ROLLBACK is
-                           checked against the actual restored bytes, not
-                           only the reported active version.
+                           PROMOTE or REJECT decision out, then the cluster's
+                           candidate/promote or candidate/reject. Both
+                           outcomes are exercised, and REJECT is checked
+                           against the bytes still served, not only the
+                           reported active version: a rejected candidate is
+                           never served.
+
+The round is upload -> aggregate -> publish (inactive) -> evaluate -> promote
+-> cluster promote -> pull.
 
 No aggregation or promotion math is reimplemented here: every step calls
 straight into `cluster.server` / `cluster.aggregation` and `registry.app` /
@@ -146,6 +152,15 @@ def _eval_body(name: str, version: int, *, edit_similarity: float, guard_similar
     }
 
 
+def _cluster_decides(cluster_client, step: str) -> dict:
+    """``candidate/promote`` or ``candidate/reject`` on the default cluster."""
+    cid = cluster_server.DEFAULT_CLUSTER_ID
+    sha = cluster_client.get(f"/clusters/{cid}/adapters/candidate").json()["sha256"]
+    resp = cluster_client.post(f"/clusters/{cid}/adapters/candidate/{step}", json={"sha256": sha})
+    assert resp.status_code == 200, resp.text
+    return {"sha256": sha, **resp.json()}
+
+
 def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry_client):
     # ---- Seam A: three synthetic clients upload to Cluster -----------------
     clients = [
@@ -173,6 +188,8 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     assert agg_resp.status_code == 200, agg_resp.text
     broadcast = agg_resp.json()
     assert broadcast["num_clients"] == 3
+    # the aggregate is a candidate: nothing is served to an edge yet
+    assert cluster_client.get(f"/adapters/{broadcast['cluster_id']}/active").status_code == 404
     name = broadcast["cluster_id"]
     # The cluster_id flows straight into the registry's adapter name below,
     # and the registry gates that name with _NAME_RE while cluster.server
@@ -203,7 +220,7 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
         "seed": 0,
         "cluster_id": name,
         "source_clients": [f"client-{i}" for i in range(3)],
-        "set_active": True,
+        "set_active": False,  # a published version is a candidate
     }
     save_resp = registry_client.post(
         f"/adapters/{name}/versions",
@@ -213,8 +230,12 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     assert save_resp.status_code == 201, save_resp.text
     assert save_resp.json()["ref"]["version"] == 1
 
-    # ---- Seam C1: Registry -> Edge, pull the cluster delta back out --------
-    active_meta = registry_client.get(f"/adapters/{name}/active").json()
+    # nothing is active until a promote; the evaluator reads the candidate by number
+    assert registry_client.get(f"/adapters/{name}/versions").json()["active"] is None
+    assert registry_client.get(f"/adapters/{name}/active").status_code == 404
+
+    # ---- Seam C1: Registry -> Edge, pull the candidate back out ------------
+    active_meta = registry_client.get(f"/adapters/{name}/versions/1").json()
     assert active_meta["ref"]["version"] == 1
     assert active_meta["source_clients"] == meta["source_clients"]
     # The lossy int(float) cast above is now visible in the round-trip rather
@@ -280,12 +301,26 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     )
     assert promote_resp.status_code == 200, promote_resp.text
     assert promote_resp.json()["action"] == "promote"
+    assert promote_resp.json()["active_version_after"] == 1
+    # ...and the cluster promotes its candidate, so an edge can pull it
+    promoted = _cluster_decides(cluster_client, "promote")
+    assert promoted["active_sha256"] == promoted["sha256"]
+    served = cluster_client.get(f"/adapters/{name}/active")
+    assert served.status_code == 200 and served.json()["sha256"] == promoted["sha256"]
+    # pull: the registry's active version is the promoted one
+    assert registry_client.get(f"/adapters/{name}/active").json()["ref"]["version"] == 1
 
-    # ---- a second, DISTINGUISHABLE round that regresses -> ROLLBACK --------
-    # v2 must differ from v1's actual bytes, or "the active pointer was
-    # restored" only ever proves the reported version number moved, not that
-    # a consumer downloading the active file after rollback gets v1's real
-    # tensors back — which is the entire point of a restore.
+    # ---- a second, DISTINGUISHABLE round that regresses -> REJECT -----------
+    # v2 must differ from v1's actual bytes, or "the active version still
+    # serves" only ever proves the reported version number did not move, not
+    # that a consumer downloading the active file gets v1's real tensors —
+    # which is the entire point of rejecting a candidate.
+    round_now = cluster_client.get("/clusters").json()["clusters"][name]["round_id"]
+    for i, adapter in enumerate(clients):
+        resp = cluster_client.post("/uploads", json=_upload_payload(
+            adapter, f"client-{i}", round_id=round_now, num_examples=num_examples[i] + 5))
+        assert resp.status_code == 201, resp.text
+    assert cluster_client.post("/aggregate", json={"aggregation": "svd"}).status_code == 200
     tensor_dict_v2 = {k: v + 1.0 for k, v in tensor_dict.items()}
     payload_bytes_v2 = safetensors_numpy.save(tensor_dict_v2)
     meta_v2 = {**meta, "round": broadcast["round_id"] + 1}
@@ -296,26 +331,36 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     )
     assert save2.status_code == 201, save2.text
     assert save2.json()["ref"]["version"] == 2
+    # published, but not live: v1 still serves
+    assert registry_client.get(f"/adapters/{name}/active").json()["ref"]["version"] == 1
 
-    rollback_resp = registry_client.post(
+    reject_resp = registry_client.post(
         f"/adapters/{name}/promote",
         json=_eval_body(name, version=2, edit_similarity=0.40, guard_similarity=0.40),
     )
-    assert rollback_resp.status_code == 200, rollback_resp.text
-    decision = rollback_resp.json()
-    assert decision["action"] == "rollback"
+    assert reject_resp.status_code == 200, reject_resp.text
+    decision = reject_resp.json()
+    assert decision["action"] == "reject"
+    assert decision["reason"].startswith("rejected: ")
     assert decision["active_version_after"] == 1
+    rejected = _cluster_decides(cluster_client, "reject")
+    assert rejected["active_sha256"] == promoted["sha256"]  # the cluster keeps serving v1
+    assert cluster_client.get(f"/adapters/{name}/active").json()["sha256"] == promoted["sha256"]
 
-    # the active pointer says v1 again...
+    # the active pointer still says v1...
     assert registry_client.get(f"/adapters/{name}/active").json()["ref"]["version"] == 1
-    # ...and a consumer downloading it actually gets v1's real bytes back,
+    # ...and a consumer downloading it actually gets v1's real bytes,
     # not v2's — the claim a version number alone can't prove.
-    restored = safetensors_numpy.load(
+    kept = safetensors_numpy.load(
         registry_client.get(f"/adapters/{name}/versions/1/file").content
     )
     for k, v in tensor_dict.items():
-        np.testing.assert_array_equal(restored[k], v)
+        np.testing.assert_array_equal(kept[k], v)
 
     # the audit trail carries both decisions, in order, non-destructively
     trail = registry_client.get(f"/adapters/{name}/promotions").json()["decisions"]
-    assert [d["action"] for d in trail] == ["promote", "rollback"]
+    assert [d["action"] for d in trail] == ["promote", "reject"]
+    # and a rejected candidate cannot be restored into service
+    restore = registry_client.post(f"/adapters/{name}/restore",
+                                   json={"to_version": 2, "reason": "e2e"})
+    assert restore.status_code == 409, restore.text

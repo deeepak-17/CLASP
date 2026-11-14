@@ -4,7 +4,7 @@ Promote used to send constants (edit_similarity 0.5/0.45, HumanEval 0.30/0.31).
 This module replaces them with numbers evaluation actually measured, and says
 where each came from, so the panel can show the guide the provenance next to
 the decision. Nothing here makes up a value: a number that was not measured is
-absent, and D5 treats an absent guard as a failed guard (ROLLBACK).
+absent, and D5 treats an absent guard as a failed guard (REJECT).
 
 Where the numbers come from, first match wins:
 
@@ -156,13 +156,15 @@ def _from_live_eval(cluster_id: str, version: int, sha256: Optional[str]) -> Opt
     cand, base = details.get("candidate") or {}, details.get("baseline") or {}
     rel = _rel(path)
     sha_c, sha_b = str(doc.get("candidate_sha256", ""))[:12], str(doc.get("baseline_sha256", ""))[:12]
+    against = (f"v{doc['baseline_version']} ({sha_b})" if doc.get("baseline_version") is not None
+               else "the bare base model (nothing was active)")
     return {
         "in_project": entry["in_project"], "baseline_in_project": entry["baseline_in_project"],
         "guard": entry.get("guard", []), "baseline_guard": entry.get("baseline_guard", []),
         "noise_band": float(entry.get("noise_band", 0.0)),
         "provenance": {
-            "in_project": (f"{rel} — v{version} ({sha_c}) against v{doc.get('baseline_version')} "
-                           f"({sha_b}), each as base + {details.get('alpha')}·cluster, on "
+            "in_project": (f"{rel} — v{version} ({sha_c}) against {against}, "
+                           f"adapters as base + {details.get('alpha')}·cluster, on "
                            f"{details.get('client')}'s held-out files, "
                            f"{entry['in_project'].get('n_examples')} examples, greedy"),
             "guard": _live_guard_text(entry, cand, base),

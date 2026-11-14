@@ -9,7 +9,7 @@
   --web: #0b7285;
   --scientific: #6741b0;
   --promote: #23784a;
-  --rollback: #b4530f;
+  --rejected: #b4530f;
   --alert: #b42318;
   --lane: var(--ink);
   --font: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
@@ -109,7 +109,7 @@ main { padding: 24px 40px 40px; display: grid; gap: 22px; }
 .stop h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink-2); }
 .stop .lead { margin: 0; font-size: 18.75px; line-height: 1.35; }
 .stop .fine { margin: 0; font-size: 15px; color: var(--ink-2); }
-.stop .fine.warn { color: var(--rollback); }
+.stop .fine.warn { color: var(--rejected); }
 .stop .act { margin-top: auto; }
 
 /* parcels: one per edge laptop */
@@ -146,7 +146,7 @@ main { padding: 24px 40px 40px; display: grid; gap: 22px; }
   color: var(--promote);
 }
 .stamp small { display: block; font-size: 15px; font-weight: 700; }
-.stamp.rollback { color: var(--rollback); }
+.stamp.rejected { color: var(--rejected); }
 .stamp.fresh { animation: stamp-down 420ms cubic-bezier(.2, 1.4, .4, 1) both; }
 @keyframes stamp-down {
   from { transform: rotate(-12deg) scale(1.9); opacity: 0; }

@@ -2,10 +2,15 @@
 
 The cluster and the registry run as uvicorn servers on free local ports, so
 every hop is a socket call: demo_ui -> cluster, demo_ui -> registry, and the
-cluster's own calls to the registry (publish, restore). Edges upload with
+cluster's own call to the registry (publish). Edges upload with
 ``edge.upload`` and pull with ``edge.upload.pull_cluster_adapter``, exactly as
 the edge laptops do. Adapters are tiny (2 layers, rank 4, 8-dim); nothing
 here needs a GPU.
+
+The round is upload -> aggregate (the cluster's candidate) -> publish (an
+inactive registry version) -> evaluate -> promote, and the registry's decision
+goes back to the cluster as ``candidate/promote`` or ``candidate/reject``:
+edges pull a merge only once it is promoted.
 """
 from __future__ import annotations
 
@@ -107,33 +112,94 @@ def _evidence(candidate_es: float, baseline_es: float):
     return fake
 
 
-def _two_published_rounds(ui, cluster_url, tmp_path):
+def _spy_sends(monkeypatch) -> list:
+    """Record every (method, url, json) the panel sends."""
+    sent = []
+    real_send = panel._send
+
+    async def spy(client, method, url, **kw):
+        sent.append((method, url, kw.get("json")))
+        return await real_send(client, method, url, **kw)
+
+    monkeypatch.setattr(panel, "_send", spy)
+    return sent
+
+
+def _cluster_web(cluster_url) -> dict:
+    import requests
+
+    return requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]["web"]
+
+
+def _first_round_promoted(ui, cluster_url, tmp_path, monkeypatch):
+    """Round 0 published, promoted (against the bare base model) and pulled."""
     assert ui.post("/api/live/register").status_code == 200
     v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    first = ui.post("/api/live/promote/web")
+    assert first.status_code == 200, first.text
+    assert first.json()["decision"]["action"] == "promote"
     pulled = upload.pull_cluster_adapter(tmp_path / "from_cluster", cluster_id="web",
                                          cluster_url=cluster_url, log=lambda *_: None)
     assert pulled["sha256"] == v1["sha256"]
+    return v1, pulled
+
+
+def _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch):
+    """v1 promoted and pulled; v2 aggregated on it and published as the candidate."""
+    v1, pulled = _first_round_promoted(ui, cluster_url, tmp_path, monkeypatch)
     v2 = _round(ui, cluster_url, tmp_path / "r1", seed=11, pulled=pulled)
     assert v2["version"] == 2 and v2["sha256"] != v1["sha256"]
     return v1, v2
 
 
-def test_a_rollback_on_promote_puts_the_previous_merge_back_on_the_cluster(stack, tmp_path,
-                                                                           monkeypatch):
+def test_the_first_merge_is_not_served_until_it_is_promoted(stack, tmp_path, monkeypatch):
     import requests
 
-    ui, cluster_url, _ = stack
-    v1, v2 = _two_published_rounds(ui, cluster_url, tmp_path)
+    ui, cluster_url, registry_url = stack
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    # published, but a candidate: the registry and the cluster serve nothing yet
+    assert requests.get(f"{registry_url}/adapters/cluster-web/versions",
+                        timeout=10).json()["active"] is None
+    assert _cluster_web(cluster_url)["active_sha256"] is None
+    assert requests.get(f"{cluster_url}/clusters/web/adapters/active", timeout=10).status_code == 404
+    sent = _spy_sends(monkeypatch)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    body = ui.post("/api/live/promote/web").json()
+    assert body["decision"]["action"] == "promote" and body["candidate_version"] == 1
+    assert ("POST", f"{cluster_url}/clusters/web/adapters/candidate/promote",
+            {"sha256": v1["sha256"]}) in sent
+    assert _cluster_web(cluster_url)["active_sha256"] == v1["sha256"]
+
+
+def test_a_reject_leaves_the_cluster_serving_the_promoted_merge(stack, tmp_path, monkeypatch):
+    import requests
+
+    ui, cluster_url, registry_url = stack
+    v1, v2 = _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch)
+    sent = _spy_sends(monkeypatch)
     monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.40, 0.45))
     r = ui.post("/api/live/promote/web")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["decision"]["action"] == "rollback"
-    assert body["cluster_restore"]["restored"] == {
-        "adapter_name": "cluster-web", "version": 1, "round_id": 0, "sha256": v1["sha256"]}
-    listing = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]["web"]
-    assert listing["active_sha256"] == v1["sha256"]
-    # an edge now pulls what the registry kept, not the rejected round
+    assert body["decision"]["action"] == "reject"
+    assert body["decision"]["active_version_after"] == 1
+    assert body["cluster"]["step"] == "reject" and body["cluster"]["active_sha256"] == v1["sha256"]
+    urls = [url for _, url, _ in sent]
+    assert ("POST", f"{cluster_url}/clusters/web/adapters/candidate/reject",
+            {"sha256": v2["sha256"]}) in sent
+    assert not any(u.endswith("/adapters/active/restore") or u.endswith("/restore") for u in urls)
+    assert not any(u.endswith("/candidate/promote") for u in urls)
+    listing = _cluster_web(cluster_url)
+    assert listing["active_sha256"] == v1["sha256"] and listing["candidate_sha256"] is None
+    assert requests.get(f"{registry_url}/adapters/cluster-web/versions",
+                        timeout=10).json()["active"] == 1
+    # the panel no longer offers the rejected version as a candidate
+    reg = ui.get("/api/live/state").json()["clusters"]["web"]["registry"]
+    assert reg["candidate"] is None and reg["active"] == 1
+    assert [v["rejected"] for v in reg["versions"]] == [False, True]
+    # an edge keeps pulling what was promoted, never the rejected candidate
     again = upload.pull_cluster_adapter(tmp_path / "from_cluster2", cluster_id="web",
                                         cluster_url=cluster_url, log=lambda *_: None)
     assert again["sha256"] == v1["sha256"]
@@ -142,34 +208,54 @@ def test_a_rollback_on_promote_puts_the_previous_merge_back_on_the_cluster(stack
 def test_promote_posts_a_line_completion_guard_for_candidate_and_baseline(stack, tmp_path,
                                                                            monkeypatch):
     ui, cluster_url, _ = stack
-    _two_published_rounds(ui, cluster_url, tmp_path)
+    _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch)
     monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
-    posted = []
-    real_send = panel._send
-
-    async def spy(client, method, url, **kw):
-        if url.endswith("/promote"):
-            posted.append(kw["json"])
-        return await real_send(client, method, url, **kw)
-
-    monkeypatch.setattr(panel, "_send", spy)
+    sent = _spy_sends(monkeypatch)
     assert ui.post("/api/live/promote/web").status_code == 200
-    (body,) = posted
+    (body,) = [j for _, url, j in sent if url.endswith("/adapters/cluster-web/promote")]
+    assert body["eval"]["adapter"]["version"] == 2
     assert [g["benchmark"] for g in body["eval"]["guard"]] == ["LineCompletion"]
     assert [g["benchmark"] for g in body["baseline_guard"]] == ["LineCompletion"]
     assert body["eval"]["guard"][0]["n_examples"] == 300
 
 
 def test_a_promote_leaves_the_cluster_serving_the_new_merge(stack, tmp_path, monkeypatch):
-    import requests
-
     ui, cluster_url, _ = stack
-    _, v2 = _two_published_rounds(ui, cluster_url, tmp_path)
+    _, v2 = _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch)
+    sent = _spy_sends(monkeypatch)
     monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
     body = ui.post("/api/live/promote/web").json()
-    assert body["decision"]["action"] == "promote" and "cluster_restore" not in body
-    listing = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]["web"]
-    assert listing["active_sha256"] == v2["sha256"]
+    assert body["decision"]["action"] == "promote" and body["decision"]["active_version_after"] == 2
+    assert body["cluster"] == {"step": "promote", "active_sha256": v2["sha256"],
+                               "round_id": body["cluster"]["round_id"],
+                               "dropped_uploads": []}
+    # the cluster is told the registry's sha256 for the promoted version
+    assert ("POST", f"{cluster_url}/clusters/web/adapters/candidate/promote",
+            {"sha256": v2["sha256"]}) in sent
+    assert not any(url.endswith("/restore") for _, url, _ in sent)
+    assert _cluster_web(cluster_url)["active_sha256"] == v2["sha256"]
+
+
+def test_live_state_shows_the_candidate_until_it_is_decided(stack, tmp_path, monkeypatch):
+    ui, cluster_url, _ = stack
+    v1, pulled = _first_round_promoted(ui, cluster_url, tmp_path, monkeypatch)
+    state = ui.get("/api/live/state").json()["clusters"]["web"]
+    assert state["candidate_sha256"] is None and state["registry"]["candidate"] is None
+    v2 = _round(ui, cluster_url, tmp_path / "r1", seed=11, pulled=pulled)
+    state = ui.get("/api/live/state").json()["clusters"]["web"]
+    assert state["candidate_sha256"] == v2["sha256"]
+    assert state["cluster"]["active_sha256"] == v1["sha256"]
+    assert state["registry"]["active"] == 1 and state["registry"]["candidate"] == 2
+    ui.post("/api/live/promote/web")
+    state = ui.get("/api/live/state").json()["clusters"]["web"]
+    assert state["candidate_sha256"] is None and state["registry"]["candidate"] is None
+
+
+def test_promote_without_a_candidate_is_refused(stack, tmp_path, monkeypatch):
+    ui, cluster_url, _ = stack
+    _first_round_promoted(ui, cluster_url, tmp_path, monkeypatch)
+    refused = ui.post("/api/live/promote/web")
+    assert refused.status_code == 409 and "no candidate" in refused.text
 
 
 @pytest.mark.parametrize("method,path", [
@@ -203,8 +289,9 @@ for flag in ("--cluster", "--registry-url", "--registry-name", "--out-dir"):
     ap.add_argument(flag)
 a = ap.parse_args()
 listing = requests.get(f"{{a.registry_url}}/adapters/{{a.registry_name}}/versions", timeout=10).json()
-cand, base = ec.pick_versions(listing)
-print(f"scoring v{{cand['ref']['version']}} against v{{base['ref']['version']}}", flush=True)
+cand, base = ec.pick_versions(listing, listing.get("active"))
+against = f"v{{base['ref']['version']}}" if base else "the bare base model"
+print(f"scoring v{{cand['ref']['version']}} against {{against}}", flush=True)
 score = lambda es, g: {{"in_project": {{"edit_similarity": es, "exact_match": 0.2,
                                          "perplexity": 3.0, "n_examples": 60}},
                        "guard": {{"benchmark": "LineCompletion", "edit_similarity": g,
@@ -238,11 +325,27 @@ def test_promote_waits_for_the_candidate_to_be_evaluated(stack, tmp_path, monkey
     fake = tmp_path / "fake_evaluator.py"
     fake.write_text(FAKE_EVALUATOR.format(script=str(script)), encoding="utf-8")
     monkeypatch.setattr(panel, "EVALUATE_CMD", [sys.executable, str(fake)])
-    _, v2 = _two_published_rounds(ui, cluster_url, tmp_path)
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
 
     refused = ui.post("/api/live/promote/web")
     assert refused.status_code == 503 and "Evaluate" in refused.text
 
+    # the first candidate is judged against the bare base model (nothing active)
+    assert ui.post("/api/live/evaluate/web").status_code == 202
+    job = _wait_eval(ui)
+    assert job["exit_code"] == 0, job["lines"]
+    assert any("scoring v1 against the bare base model" in line for line in job["lines"])
+    assert ui.get("/api/live/state").json()["clusters"]["web"]["evaluated_version"] == 1
+    body = ui.post("/api/live/promote/web").json()
+    assert body["decision"]["action"] == "promote" and body["candidate_version"] == 1
+
+    pulled = upload.pull_cluster_adapter(tmp_path / "from_cluster", cluster_id="web",
+                                         cluster_url=cluster_url, log=lambda *_: None)
+    assert pulled["sha256"] == v1["sha256"]
+    _round(ui, cluster_url, tmp_path / "r1", seed=11, pulled=pulled)
+    refused = ui.post("/api/live/promote/web")
+    assert refused.status_code == 503 and "Evaluate" in refused.text
     assert ui.post("/api/live/evaluate/web").status_code == 202
     job = _wait_eval(ui)
     assert job["exit_code"] == 0 and any("scoring v2 against v1" in line for line in job["lines"])

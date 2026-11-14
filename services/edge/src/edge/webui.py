@@ -24,11 +24,13 @@ the page can do nothing the command line cannot.
 * Each fine-tune started here writes its own ``live-<timestamp>`` set, so a new
   run adds an adapter instead of overwriting the last one.
 * The status panel polls the cluster's ``GET /clusters`` and tracks the adapter
-  this page last sent: sent, the rest of the cluster arriving, merged, and back
-  on this laptop.
-* The way back: whenever laptop A serves a merged adapter this laptop does not
-  have — compared by sha256, so a rollback or a restarted cluster is followed
-  too — the page pulls it (:func:`edge.upload.pull_cluster_adapter`, the same
+  this page last sent: sent, the rest of the cluster arriving, merged — the
+  merge is a candidate, "Awaiting evaluation" until laptop A promotes it
+  ("Merged and promoted") or rejects it ("Rejected, previous adapter kept") —
+  and back on this laptop.
+* The way back: whenever laptop A serves (has promoted) a merged adapter this
+  laptop does not have — compared by sha256, so an operator restore or a
+  restarted cluster is followed too — the page pulls it (:func:`edge.upload.pull_cluster_adapter`, the same
   cluster service and session as the upload) into
   ``<root>/from_cluster/<cluster>-round<N>-<sha12>``, and the next fine-tune
   trains on top of exactly that adapter (D3, ``--cluster-adapter``).
@@ -70,6 +72,13 @@ PAGE = Path(__file__).with_name("webui_page.html")
 #: Block length for a DP fine-tune: Opacus needs gradient checkpointing off, and
 #: at 1024 tokens the run peaked at 4.447 GB on a 4 GB RTX 2050 (6.19 s/step).
 DP_SEQ_LEN = 512
+#: Step 4 of the page's tracker, by the state of the cluster's latest merge.
+MERGE_LABELS = {
+    None: "Merged",
+    "awaiting": "Awaiting evaluation",
+    "promoted": "Merged and promoted",
+    "rejected": "Rejected, previous adapter kept",
+}
 
 
 def find_pulled(root: Path) -> List[Dict]:
@@ -172,6 +181,8 @@ class EdgePage:
         self.job = Job()
         #: The last adapter this page sent: id, cluster and round it went into.
         self.last_sent: Optional[Dict] = None
+        #: Per cluster, the merge the tracker is following (see ``follow_merge``).
+        self._merges: Dict[str, Dict] = {}
 
     # -- reads --------------------------------------------------------------
     def adapters(self) -> List[Dict]:
@@ -197,6 +208,7 @@ class EdgePage:
         out["clusters"] = clusters
         mine = [cid for cid, c in clusters.items() if self.client_id in c.get("members", [])]
         out["my_cluster"] = mine[0] if mine else None
+        out["merge"] = self.follow_merge(mine[0], clusters[mine[0]]) if mine else None
         active = clusters[mine[0]].get("active_sha256") if mine else None
         current = self.latest_pulled(out["my_cluster"], active) if active else None
         shown = current or self.latest_pulled(out["my_cluster"])
@@ -204,6 +216,38 @@ class EdgePage:
         out["pulled"] = ({**self._pulled_public(shown), "current": current is not None}
                          if shown else None)
         return out
+
+    def follow_merge(self, cluster_id: str, cluster: Dict) -> Dict:
+        """Step 4 of the tracker: what became of the cluster's latest merge.
+
+        An aggregate is a candidate until laptop A evaluates it and the
+        registry decides. While the cluster reports a ``candidate_sha256`` the
+        merge is awaiting evaluation; once the candidate is gone it was
+        promoted if ``active_sha256`` changed, and rejected (the previous
+        adapter kept) if it did not. The outcome stays until the next candidate.
+        """
+        active, candidate = cluster.get("active_sha256"), cluster.get("candidate_sha256")
+        seen = self._merges.get(cluster_id)
+        if candidate is not None:
+            if seen is None or seen.get("candidate") != candidate:
+                # remember what was served when this candidate appeared
+                seen = {"candidate": candidate, "active_before": active}
+            seen = {**seen, "state": "awaiting"}
+        elif seen is not None and seen.get("state") == "awaiting":
+            promoted = active != seen["active_before"]
+            seen = {**seen, "state": "promoted" if promoted else "rejected"}
+        elif seen is not None and seen.get("state") in ("promoted", "rejected") \
+                and active != seen.get("active_after"):
+            seen = None  # served adapter moved on (operator restore, restart): start over
+        if seen is None:
+            seen = {"state": "promoted" if active else None, "candidate": None,
+                    "active_before": None}
+        seen["active_after"] = active
+        self._merges[cluster_id] = seen
+        state = seen["state"]
+        return {"state": state, "label": MERGE_LABELS[state],
+                "candidate_sha256": candidate, "active_sha256": active,
+                "decided_sha256": seen.get("candidate") if state != "awaiting" else None}
 
     def latest_pulled(self, cluster_id: Optional[str],
                       sha256: Optional[str] = None) -> Optional[Dict]:

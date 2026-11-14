@@ -271,7 +271,7 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
     ``GET /clusters/{id}/adapters/active`` on the same cluster service (and the
     same mTLS session) the upload went to, so an edge needs no route to the
     registry. Written to ``<out_root>/<cluster>-round<N>-<sha12>/`` (the digest
-    in the name: a restarted cluster or a rollback can serve a different adapter
+    in the name: a restarted cluster or an operator restore can serve a different adapter
     under a round number this laptop already has) with
     ``adapter_config.json`` built from the broadcast's own ``peft_config``
     (``wire.broadcast_to_peft``), plus ``pull_manifest.json`` recording which
@@ -288,7 +288,8 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
         raise UploadError(f"pull from {url} failed: {exc}",
                           hint="is laptop A's stack up and reachable on port 8002?") from exc
     if r.status_code != 200:
-        hints = {404: "laptop A has not merged this cluster yet; wait for the round to close",
+        hints = {404: ("no merge of this cluster has been promoted yet; wait for laptop A "
+                       "to merge, evaluate and promote"),
                  403: "this client is assigned to another cluster and may not read this one"}
         raise UploadError(f"cluster refused the pull ({r.status_code}): {_http_error(r)}",
                           status=r.status_code, hint=hints.get(r.status_code, ""))

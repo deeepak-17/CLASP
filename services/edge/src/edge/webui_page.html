@@ -111,7 +111,7 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
 
   <section>
     <h2>Where it is now</h2>
-    <p class="sub" id="trackhint">The adapter you send goes to laptop A, gets merged with the cluster's, and the merged adapter comes back here for the next round.</p>
+    <p class="sub" id="trackhint">The adapter you send goes to laptop A and is merged with the cluster's. The merge is evaluated first: only a promoted merge comes back here for the next round; a rejected one is never served.</p>
     <ol class="track" id="track"></ol>
     <div class="others" id="others"></div>
   </section>
@@ -182,7 +182,9 @@ async function refreshStatus() {
 }
 
 // Laptop A serves a merged adapter this laptop does not have (compared by its
-// sha256, so a rollback or a restarted cluster counts too): fetch it once.
+// sha256, so an operator restore or a restarted cluster counts too): fetch it
+// once. Only a changed active_sha256 triggers it: a candidate awaiting
+// evaluation, or a rejected one, is never pulled.
 // The button in step 5 retries by hand if it fails.
 const pullTried = new Set();
 function autoPull(s) {
@@ -221,7 +223,8 @@ const when = (iso) => {
 };
 
 // The journey of the adapter this laptop sends: chosen, sent into a round,
-// the rest of the cluster arriving, merged by laptop A, and back here.
+// the rest of the cluster arriving, merged by laptop A and evaluated (promoted
+// or rejected), and back here.
 function renderTrack(s) {
   const track = document.getElementById("track");
   const others = document.getElementById("others");
@@ -232,7 +235,12 @@ function renderTrack(s) {
   const inRound = !!(c && c.uploaded_clients.includes(me));
   const merged = !!(c && c.aggregated_round_id != null && c.aggregated_clients.includes(me)
                     && (sent ? c.aggregated_round_id >= sent.round_id : !inRound));
-  const isSent = inRound || merged;
+  // the server follows the latest merge: awaiting evaluation, promoted or rejected
+  const m = s.merge || { state: null, label: "Merged" };
+  // a round this laptop sent into was aggregated, and the merge is not served (yet)
+  const decidedRound = !!(c && sent && !inRound && sent.round_id < c.round_id && !merged
+                          && (m.state === "awaiting" || m.state === "rejected"));
+  const isSent = inRound || merged || decidedRound;
   const members = c ? c.members || [] : [];
   const arrived = members.filter(m => c.uploaded_clients.includes(m));
   const waiting = members.filter(m => !c.uploaded_clients.includes(m) && m !== me);
@@ -241,14 +249,20 @@ function renderTrack(s) {
     [!!chosen, "Trained", chosen ? `${when(chosen.trained_utc)}, ε ${chosen.epsilon != null ? chosen.epsilon.toFixed(2) : "none"}` : "Train an adapter below"],
     [isSent, "Sent",
       merged ? `Went into round ${c.aggregated_round_id}`
+      : decidedRound ? `Went into round ${sent.round_id}`
       : inRound ? `In round ${c.round_id}${sent ? ` (${esc(when(sent.utc * 1000))})` : ""}`
       : c ? `Round ${c.round_id} is open. Press Send above`
       : (s.reachable ? "Waiting for laptop A to register this laptop" : "Cluster not reachable")],
-    [merged || allIn, "Cluster complete",
+    [merged || allIn || decidedRound, "Cluster complete",
       merged ? `${c.aggregated_clients.length} laptop${c.aggregated_clients.length === 1 ? "" : "s"} contributed`
+      : decidedRound ? `Laptop A merged round ${sent.round_id}`
       : c ? `${arrived.length} of ${members.length} laptops have sent${waiting.length && isSent ? `; waiting for ${waiting.map(esc).join(", ")}` : ""}`
       : "Every laptop in the cluster sends its adapter"],
-    [merged, "Merged", merged ? `Round ${c.aggregated_round_id}'s cluster adapter includes yours` : "Laptop A merges once every adapter is in"],
+    [merged || m.state === "rejected", m.label,
+      m.state === "awaiting" ? `Laptop A is evaluating the merge (${esc(m.candidate_sha256.slice(0, 12))}); it is served only if it is promoted`
+      : m.state === "rejected" ? `The merge ${esc((m.decided_sha256 || "").slice(0, 12))} did not pass evaluation and is never served; ${m.active_sha256 ? `laptop A keeps serving ${esc(m.active_sha256.slice(0, 12))}` : "nothing is served yet"}`
+      : merged ? `Round ${c.aggregated_round_id}'s cluster adapter includes yours`
+      : "Laptop A merges once every adapter is in, then evaluates the merge"],
   ];
   // Step 5 is about the cluster's latest merge, whether or not this laptop was in it.
   const latest = c && c.active_sha256 ? c.aggregated_round_id : null;
@@ -260,7 +274,7 @@ function renderTrack(s) {
     home ? `Round ${pulled.round_id}'s merged adapter is here (${laptops(pulled.source_clients.length)}, ε ${pulled.epsilon != null ? Number(pulled.epsilon).toFixed(2) : "unknown"}). The next training starts from it.`
     : pulling ? "Fetching the merged adapter from laptop A…"
     : latest != null ? `Round ${latest}'s merged adapter is ready on laptop A`
-    : "Comes back here after laptop A merges",
+    : "Comes back here once laptop A promotes a merge",
     canPull]);
   const now = steps.findIndex(([done]) => !done);
   track.innerHTML = steps.map(([done, title, text, button], i) => `<li class="${done ? "done" : (i === now ? "now" : "")}"><b>${title}</b><span>${text}</span>${button ? `<button class="quiet" id="pull">Get the merged adapter</button>` : ""}</li>`).join("");

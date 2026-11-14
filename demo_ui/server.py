@@ -8,7 +8,10 @@ laptop A shows during the multi-laptop demo (docs/multi-laptop-demo.md). It
      HTTP APIs — register members, aggregate, publish, promote — computing
      nothing itself (``/api/live/*``);
   3. sends Promote the numbers evaluation measured (``evidence.py``), never
-     constants, and carries a ROLLBACK back to the cluster the edges pull from;
+     constants, and carries the registry's decision on the candidate back to
+     the cluster the edges pull from (``candidate/promote`` or
+     ``candidate/reject``): a published version is a candidate, a promotion
+     makes it live, a rejected candidate is never served;
   4. proxies ``/api/cluster/*`` and ``/api/registry/*`` straight through, for
      inspection.
 
@@ -215,16 +218,30 @@ async def _registry_summary(client: httpx.AsyncClient, cluster_id: str) -> dict:
     name = live_registry_name(cluster_id)
     r = await _send(client, "GET", f"{REGISTRY_BASE}/adapters/{name}/versions")
     if r.status_code != 200:
-        return {"name": name, "active": None, "versions": []}
+        return {"name": name, "active": None, "candidate": None, "versions": []}
     body = r.json()
+    active = body.get("active")
+    p = await _send(client, "GET", f"{REGISTRY_BASE}/adapters/{name}/promotions")
+    decisions = p.json().get("decisions", []) if p.status_code == 200 else []
+    # A version D5 already judged is not a candidate any more (the registry
+    # answers 409 "already decided"); a rejected one is never served.
+    decided = {d["adapter"]["version"] for d in decisions
+               if d.get("action") in ("promote", "reject")}
+    rejected = {d["adapter"]["version"] for d in decisions if d.get("action") == "reject"}
+    above = [v["ref"]["version"] for v in body.get("versions", [])
+             if v["ref"]["version"] > (active or 0) and v["ref"]["version"] not in decided]
     return {
-        "name": name, "active": body.get("active"),
+        "name": name, "active": active,
+        # The newest undecided version above the active one: what Evaluate and
+        # Promote judge.
+        "candidate": max(above) if above else None,
         "versions": [{
             "version": v["ref"]["version"], "round": v.get("round"),
             "aggregation": v.get("aggregation"), "source_clients": v.get("source_clients", []),
             "epsilon": (v.get("privacy") or {}).get("epsilon"),
             "sha256": v.get("sha256", "")[:12], "digest": v.get("sha256"),
             "created_at": v.get("created_at"),
+            "rejected": v["ref"]["version"] in rejected,
         } for v in body.get("versions", [])],
     }
 
@@ -241,10 +258,13 @@ async def live_state() -> dict:
         out = {}
         for cid in LIVE_CLUSTERS:
             reg = await _registry_summary(client, cid)
+            cluster = listing.get(cid)
             out[cid] = {
                 "planned_members": LIVE_CLUSTERS[cid],
                 "registered": cid in listing,
-                "cluster": listing.get(cid),
+                "cluster": cluster,
+                # the aggregate awaiting evaluation and promote / reject
+                "candidate_sha256": (cluster or {}).get("candidate_sha256"),
                 "registry": reg,
                 "last": _live.get(cid, {}),
                 "evaluation": _eval_snapshot(cid, tail=4),
@@ -253,29 +273,19 @@ async def live_state() -> dict:
     return {"clusters": out}
 
 
-async def _parent_version(client: httpx.AsyncClient, name: str, reg: dict) -> int | None:
-    """The registry version the active one was built on (its header's base_sha256)."""
-    r = await _send(client, "GET", f"{REGISTRY_BASE}/adapters/{name}/versions/{reg['active']}/file")
-    if r.status_code != 200:
-        return None
-    blob = r.content
-    md = json.loads(blob[8:8 + int.from_bytes(blob[:8], "little")]).get("__metadata__") or {}
-    parent = md.get("base_sha256")
-    return next((v["version"] for v in reg["versions"] if v["digest"] == parent), None)
-
-
-def _active_digest(reg: dict) -> str | None:
-    return next((v["digest"] for v in reg["versions"] if v["version"] == reg["active"]), None)
+def _digest(reg: dict, version: int | None) -> str | None:
+    return next((v["digest"] for v in reg["versions"] if v["version"] == version), None)
 
 
 def _evaluated(cluster_id: str, reg: dict) -> int | None:
-    """The active version, if it has its own evaluation (version and sha256)."""
+    """The pending candidate's version, if it has its own evaluation (version
+    and sha256)."""
     from demo_ui.evidence import evaluated_version
 
-    if reg["active"] is None:
+    cand = reg.get("candidate")
+    if cand is None:
         return None
-    ok = evaluated_version(cluster_id, reg["active"], _active_digest(reg))
-    return reg["active"] if ok else None
+    return cand if evaluated_version(cluster_id, cand, _digest(reg, cand)) else None
 
 
 def _eval_snapshot(cluster_id: str, tail: int | None = None) -> dict:
@@ -288,9 +298,10 @@ def _eval_snapshot(cluster_id: str, tail: int | None = None) -> dict:
 
 @app.post("/api/live/evaluate/{cluster_id}", status_code=202)
 def live_evaluate(cluster_id: str) -> dict:
-    """Step 4b: score the version the registry serves, and the one before it,
-    on this laptop's GPU (scripts/evaluate_candidate.py), so Promote judges the
-    candidate on its own measurements. Runs in the background; poll GET."""
+    """Step 4b: score the pending candidate and the version the registry
+    serves (the bare base model when nothing is active yet) on this laptop's
+    GPU (scripts/evaluate_candidate.py), so Promote judges the candidate on its
+    own measurements. Runs in the background; poll GET."""
     from demo_ui import evidence
 
     cid = _live_cluster(cluster_id)
@@ -333,8 +344,9 @@ def live_evaluate_state(cluster_id: str) -> dict:
 @app.post("/api/live/aggregate/{cluster_id}")
 async def live_aggregate(cluster_id: str) -> dict:
     """Step 3: SVD-aggregate whatever the edge laptops uploaded into this
-    cluster's round (POST /clusters/{id}/aggregate). Returns the aggregation
-    manifest, not the tensors."""
+    cluster's round (POST /clusters/{id}/aggregate). The result is the
+    cluster's candidate; edges keep pulling the active adapter until it is
+    promoted. Returns the aggregation manifest, not the tensors."""
     cid = _live_cluster(cluster_id)
     async with _client(1800.0) as client:
         r = await _send(client, "POST", f"{CLUSTER_BASE}/clusters/{cid}/aggregate",
@@ -349,13 +361,13 @@ async def live_aggregate(cluster_id: str) -> dict:
 
 @app.post("/api/live/publish/{cluster_id}")
 async def live_publish(cluster_id: str) -> dict:
-    """Step 4: the cluster publishes its active aggregate to the registry as a
-    new version of cluster-<id> (seam B, the cluster's own /publish)."""
+    """Step 4: the cluster publishes its candidate aggregate to the registry as
+    a new, inactive version of cluster-<id> (seam B, the cluster's own
+    /publish). Nothing is served from it until Promote."""
     cid = _live_cluster(cluster_id)
     async with _client(900.0) as client:
         r = await _send(client, "POST", f"{CLUSTER_BASE}/adapters/{cid}/publish",
-                        json={"registry_url": REGISTRY_BASE, "adapter_name": live_registry_name(cid),
-                              "set_active": True})
+                        json={"registry_url": REGISTRY_BASE, "adapter_name": live_registry_name(cid)})
     if r.status_code != 201:
         raise HTTPException(r.status_code, f"publish {cid}: {_detail(r)}")
     v = r.json()["version"]
@@ -369,29 +381,30 @@ async def live_publish(cluster_id: str) -> dict:
 
 @app.post("/api/live/promote/{cluster_id}")
 async def live_promote(cluster_id: str) -> dict:
-    """Step 5: D5 on the version just published, with evaluation's measured
+    """Step 5: D5 on the pending candidate, with evaluation's measured
     in-project metric, line-completion guard and noise band (``evidence.py``)
-    instead of constants. The registry decides PROMOTE or ROLLBACK."""
+    instead of constants. The registry decides PROMOTE or REJECT; the cluster
+    then promotes or rejects its candidate (matched by the registry's sha256
+    for that version), so the edges pull a merge only once it is promoted."""
     from demo_ui.evidence import EvidenceMissing, evidence_for
 
     cid = _live_cluster(cluster_id)
     name = live_registry_name(cid)
     async with _client(60.0) as client:
         reg = await _registry_summary(client, cid)
-        if reg["active"] is None:
-            raise HTTPException(409, f"{name} has no active version — publish first")
-        if len(reg["versions"]) < 2:
-            raise HTTPException(
-                409, f"{name} has only v{reg['active']}: D5 compares a candidate against the "
-                     f"version before it, so publish a second round first")
+        cand = reg["candidate"]
+        if cand is None:
+            raise HTTPException(409, f"{name} has no candidate above the active version — "
+                                     f"aggregate and publish first")
+        digest = _digest(reg, cand)
         try:
             # the candidate's own measurements, matched by version and sha256
-            ev = evidence_for(cid, version=reg["active"], sha256=_active_digest(reg))
+            ev = evidence_for(cid, version=cand, sha256=digest)
         except EvidenceMissing as e:
             raise HTTPException(503, str(e)) from e
         body = {
             "eval": {
-                "adapter": {"name": name, "version": reg["active"], "kind": "cluster",
+                "adapter": {"name": name, "version": cand, "kind": "cluster",
                             "cluster_id": cid},
                 "in_project": ev["in_project"],
                 "guard": ev["guard"],
@@ -405,33 +418,16 @@ async def live_promote(cluster_id: str) -> dict:
         if r.status_code != 200:
             raise HTTPException(r.status_code, f"promote {name}: {_detail(r)}")
         decision = r.json()
-        restore = None
-        if decision.get("action") == "rollback":
-            # Back to the version the rejected one was built on: the registry's
-            # numeric "previous" can be an earlier rejected version.
-            target = decision["active_version_after"]
-            parent = await _parent_version(client, name, reg)
-            if parent is not None and parent != target:
-                rr = await _send(client, "POST", f"{REGISTRY_BASE}/adapters/{name}/restore",
-                                 json={"to_version": parent,
-                                       "reason": f"v{reg['active']} rejected; back to its parent"})
-                if rr.status_code == 200:
-                    target = parent
-                    decision = {**decision, "active_version_after": parent}
-            # The registry repointed `active`; the edges pull from the cluster,
-            # so it must serve the restored version too, or the next round
-            # would build on the merge D5 just rejected.
-            rr = await _send(client, "POST", f"{CLUSTER_BASE}/clusters/{cid}/adapters/active/restore",
-                             json={"registry_url": REGISTRY_BASE, "adapter_name": name,
-                                   "version": target})
-            restore = rr.json() if rr.status_code == 200 else {
-                "error": f"cluster restore -> {rr.status_code}: {_detail(rr)}"}
+        step = "promote" if decision.get("action") == "promote" else "reject"
+        cr = await _send(client, "POST",
+                         f"{CLUSTER_BASE}/clusters/{cid}/adapters/candidate/{step}",
+                         json={"sha256": digest})
+        cluster_result = cr.json() if cr.status_code == 200 else {
+            "error": f"cluster candidate/{step} -> {cr.status_code}: {_detail(cr)}"}
     sent = {k: body["eval"][k] for k in ("in_project", "baseline_in_project", "guard",
                                          "baseline_noise_band")}
     sent["baseline_guard"] = body["baseline_guard"]
-    result = {"decision": decision, "candidate_version": reg["active"], "sent": sent,
-              "provenance": ev["provenance"]}
-    if restore is not None:
-        result["cluster_restore"] = restore
+    result = {"decision": decision, "candidate_version": cand, "sent": sent,
+              "provenance": ev["provenance"], "cluster": {"step": step, **cluster_result}}
     _live.setdefault(cid, {})["promote"] = result
     return result
