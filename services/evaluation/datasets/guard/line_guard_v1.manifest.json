@@ -1,0 +1,31 @@
+{
+  "benchmark": "LineCompletion",
+  "version": 1,
+  "size": 300,
+  "seed": 0,
+  "stride": 7,
+  "fingerprint": "03d831b7ff9ca81c3a0bd4c01ba0eaa51c65a71e9d96a7123da88dd8c81edc26",
+  "sources": {
+    "client-click": {
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/pallets/click.git",
+      "source_ref": "874ca2bc1c30d93a4ac6e36a15ed685eafe89097",
+      "copyright": "Copyright 2014 Pallets",
+      "n_examples": 114
+    },
+    "client-jinja": {
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/pallets/jinja.git",
+      "source_ref": "dd4a8b5466d8790540c181590b14db4d4d889d57",
+      "copyright": "Copyright 2014 Pallets",
+      "n_examples": 114
+    },
+    "client-colorama": {
+      "license": "BSD-3-Clause",
+      "source_url": "https://github.com/tartley/colorama.git",
+      "source_ref": "3de9f013df4b470069d03d250224062e8cf15c49",
+      "copyright": "Copyright Jonathan Hartley 2013",
+      "n_examples": 72
+    }
+  }
+}
