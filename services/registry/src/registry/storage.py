@@ -41,6 +41,8 @@ from contracts import (
     utcnow_iso,
 )
 
+from .durable import fsync_path as _fsync
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: Header size bound. A real 24-layer adapter's header is ~30 KB; parsing a
 #: hostile 100 MB header would cost hundreds of MB of RAM.
@@ -48,7 +50,6 @@ _ST_MAX_HEADER = 8 * 1024 * 1024
 _ST_DTYPE_BYTES = {"BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1, "I16": 2,
                    "U16": 2, "F16": 2, "BF16": 2, "I32": 4, "U32": 4, "F32": 4, "I64": 8,
                    "U64": 8, "F64": 8}
-_IS_WINDOWS = os.name == "nt"
 
 
 class StorageError(Exception):
@@ -69,24 +70,6 @@ class InvalidAdapterName(StorageError):
 
 class VersionExists(StorageError):
     """Refused to overwrite an existing immutable version (D9)."""
-
-
-def _fsync(path: Path) -> None:
-    """Force a file's contents, or a directory's entries, onto the disk.
-
-    Atomic renames stop a crash from leaving a half-written version; this stops
-    a power cut from losing a write the registry already acknowledged. Windows
-    cannot open a directory handle (NTFS journals its own metadata), so
-    directories are skipped there; files need a writable handle to flush.
-    """
-    is_dir = path.is_dir()
-    if is_dir and _IS_WINDOWS:
-        return
-    fd = os.open(path, os.O_RDWR if _IS_WINDOWS else os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 def _validate_name(name: str) -> str:
