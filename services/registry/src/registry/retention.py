@@ -13,13 +13,25 @@ can see why each survivor survived):
 Everything else is deleted, oldest first. GC is opt-in and defaults to a dry
 run. The newest version is always protected, so version numbers stay
 monotonic: a deleted number is never handed out again.
+
+``sweep_orphans`` removes files no database row accounts for: a ``vN``
+directory without its ``versions`` row (a write whose transaction never
+committed, or a delete that dropped the row and then crashed) and staging or
+trash directories left by an interrupted save or delete. It runs when the
+app creates its store and at the start of every GC call, dry runs included.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import shutil
+import tempfile
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
 from contracts import PromotionAction, PromotionDecision, utcnow_iso
 
@@ -28,6 +40,14 @@ from .storage import RegistryStore
 #: Default for ``keep_last`` when neither the request nor the env sets it.
 DEFAULT_KEEP_LAST = 5
 KEEP_LAST_ENV = "CLASP_REGISTRY_KEEP_LAST"
+
+#: A staging or trash directory younger than this may belong to a save or
+#: delete in progress, so the sweep leaves it alone.
+SCRATCH_MIN_AGE_SECONDS = 60
+_SCRATCH_PREFIXES = (".tmp-v", ".trash-")
+_VERSION_DIR = re.compile(r"v([1-9][0-9]*)")
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -90,6 +110,42 @@ def collect_referenced(store: RegistryStore) -> set[tuple[str, int]]:
     """Every stored (adapter, version) that some composite is built from."""
     return {(name, v) for name in store.list_adapters()
             for v in store.repo.referenced_versions(name)}
+
+
+def _is_orphan(entry: Path, registered: set[int], now: float) -> bool:
+    m = _VERSION_DIR.fullmatch(entry.name)
+    if m:  # a published directory without a row is never valid, whatever its age
+        return int(m.group(1)) not in registered
+    return (entry.name.startswith(_SCRATCH_PREFIXES)
+            and now - entry.stat().st_mtime > SCRATCH_MIN_AGE_SECONDS)
+
+
+def sweep_orphans(store: RegistryStore) -> list[str]:
+    """Remove every file tree no database row accounts for; return the removed paths.
+
+    Never touches a registered version or a staging/trash directory younger
+    than ``SCRATCH_MIN_AGE_SECONDS``. A ``vN`` directory is first renamed to a
+    trash name (atomic), so its number is free at once even if the removal
+    is interrupted; the trash is then swept on a later run.
+    """
+    now = time.time()
+    removed: list[str] = []
+    for adapter_dir in sorted(store.adapters_dir.iterdir()):
+        if not adapter_dir.is_dir() or adapter_dir.name.startswith("."):
+            continue
+        registered = set(store.repo.list_versions(adapter_dir.name))
+        for entry in sorted(adapter_dir.iterdir()):
+            if not entry.is_dir() or not _is_orphan(entry, registered, now):
+                continue
+            target = entry
+            if _VERSION_DIR.fullmatch(entry.name):
+                target = Path(tempfile.mkdtemp(prefix=f".trash-{entry.name}-", dir=adapter_dir))
+                os.replace(entry, target / entry.name)
+            shutil.rmtree(target, ignore_errors=True)
+            if not entry.exists():  # a scratch dir that resisted removal is retried next run
+                _log.warning("swept orphaned %s", entry)
+                removed.append(str(entry))
+    return removed
 
 
 def gc_adapter(

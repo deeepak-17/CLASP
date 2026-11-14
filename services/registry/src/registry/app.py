@@ -49,13 +49,15 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, Response,
 from fastapi.responses import JSONResponse
 
 from . import __version__
-from .cascade import apply_cascade, plan_cascade
+from .cascade import apply_cascade, plan_cascade, write_cascade_files
 from .composition import (
     CompositionError,
     PlannedComposite,
     parse_compose_request,
     plan_composite,
+    register_composite,
     store_composite,
+    write_composite_files,
 )
 from .lineage import build_lineage
 from .promotion import (
@@ -67,7 +69,13 @@ from .promotion import (
     rejected_versions,
     restore_decision,
 )
-from .retention import RetentionPlan, collect_referenced, default_keep_last, gc_adapter
+from .retention import (
+    RetentionPlan,
+    collect_referenced,
+    default_keep_last,
+    gc_adapter,
+    sweep_orphans,
+)
 from .storage import (
     AdapterNotFound,
     InvalidAdapterName,
@@ -97,10 +105,19 @@ _WRITE_LOCK = threading.RLock()
 def get_store() -> RegistryStore:
     """Lazily construct the store so CLASP_REGISTRY_DATA (and CLASP_REGISTRY_DB)
     are read at request time. The first construction against an empty database
-    imports a file-based volume (``registry.migrate``)."""
+    imports a file-based volume (``registry.migrate``); every construction then
+    sweeps files no row accounts for (``retention.sweep_orphans``)."""
     global _store
     if _store is None:
-        _store = RegistryStore()
+        with _WRITE_LOCK:
+            if _store is None:
+                store = RegistryStore()
+                try:
+                    sweep_orphans(store)
+                except BaseException:
+                    store.close()
+                    raise
+                _store = store
     return _store
 
 
@@ -358,7 +375,7 @@ def _promote(name: str, body: dict) -> dict:
         )
 
     version = eval_result.adapter.version
-    store.get_metadata(name, version)  # 404 if the version does not exist
+    candidate = store.get_metadata(name, version)  # 404 if the version does not exist
     active_before = store.get_active(name)
     if active_before is not None and version <= active_before:
         raise HTTPException(409, f"v{version} is not a candidate: active is v{active_before}")
@@ -369,21 +386,30 @@ def _promote(name: str, body: dict) -> dict:
     decision = decide(eval_result, baseline_guard=baseline_guard,
                       active_version_before=active_before)
 
+    promoted = decision.action == PromotionAction.PROMOTE
     wants_composite = "composite" in body
-    planned = None
-    if wants_composite and decision.action == PromotionAction.PROMOTE:
-        planned = _composite_on_promote(body["composite"], name, version)
+    composite = None
+    if wants_composite and promoted:
+        # every 4xx is raised above; files are written before the transaction
+        # and are never served until it registers them (else: orphan sweep)
+        composite = write_composite_files(
+            store, *_composite_on_promote(body["composite"], name, version))
 
-    if decision.action == PromotionAction.PROMOTE:
-        store.set_active(name, decision.active_version_after)
-    store.record_promotion(name, decision)
+    with store.repo.transaction():
+        if composite is not None:
+            register_composite(store.repo, composite)
+        if promoted:
+            store.set_active(name, decision.active_version_after)
+        decision_id = store.record_promotion(name, decision)
+        if candidate.ref.cluster_id:
+            # the cluster must switch to this candidate (promote) or drop it (reject)
+            store.repo.add_cluster_sync(decision_id, candidate.ref.cluster_id, candidate.sha256,
+                                        "promote" if promoted else "reject")
+
     result = _promotion_decision_to_dict(decision)
     result["composites"] = []  # only an operator restore moves the pointer back
     if wants_composite:
-        composite_name, plan = planned if planned else (None, None)
-        result["composite"] = (
-            _metadata_to_dict(store_composite(store, composite_name, plan)[0]) if plan else None
-        )
+        result["composite"] = _metadata_to_dict(composite) if composite is not None else None
     return result
 
 
@@ -432,12 +458,16 @@ def _restore(name: str, body: dict) -> dict:
         raise HTTPException(409, f"v{to_version} was rejected and cannot be restored")
     candidate = store.get_metadata(name, active).ref
     decision = restore_decision(candidate, to_version=to_version, reason=reason.strip())
-    cascade = _plan_cascade(name, active, to_version)
-    store.set_active(name, to_version)
-    store.record_promotion(name, decision)
+    # rebuilt composites' files first; the pointer, decision and every
+    # composite move then commit together (unregistered files: orphan sweep)
+    cascade = write_cascade_files(store, _plan_cascade(name, active, to_version))
+    with store.repo.transaction():
+        store.set_active(name, to_version)
+        store.record_promotion(name, decision)
+        moved = apply_cascade(store, cascade, action=decision.action,
+                              reason=f"{name} {decision.reason}")
     result = _promotion_decision_to_dict(decision)
-    result["composites"] = apply_cascade(store, cascade, action=decision.action,
-                                         reason=f"{name} {decision.reason}")
+    result["composites"] = moved
     return result
 
 
@@ -477,7 +507,10 @@ def gc_one(name: str, body: dict = Body(default={})) -> dict:
 
 def _gc_one(name: str, body: dict) -> dict:
     keep_last, dry_run = _parse_gc_body(body)
-    plan = gc_adapter(get_store(), name, keep_last=keep_last, dry_run=dry_run)
+    store = get_store()
+    store.list_versions(name)  # 404 / 422 before the sweep writes anything
+    sweep_orphans(store)
+    plan = gc_adapter(store, name, keep_last=keep_last, dry_run=dry_run)
     return _gc_report(name, plan, dry_run)
 
 
@@ -491,6 +524,7 @@ def gc_all(body: dict = Body(default={})) -> dict:
 def _gc_all(body: dict) -> dict:
     keep_last, dry_run = _parse_gc_body(body)
     store = get_store()
+    sweep_orphans(store)
     referenced = collect_referenced(store)
     reports = []
     for name in store.list_adapters():

@@ -186,6 +186,9 @@ class RegistryStore:
         return self.repo.get_metadata(_validate_name(name), version)
 
     def load_payload(self, name: str, version: int) -> bytes:
+        """The version's weights. The row is checked first: a directory with no
+        row (an unregistered write, awaiting the orphan sweep) is never served."""
+        self.get_metadata(name, version)  # AdapterNotFound without a row
         blob = self._version_dir(name, version) / "adapter.safetensors"
         if not blob.exists():
             raise AdapterNotFound(f"{name} v{version}")
@@ -222,9 +225,11 @@ class RegistryStore:
             f.write(line + "\n")
         _fsync(log)
 
-    def record_promotion(self, name: str, decision: PromotionDecision) -> None:
-        """Record a PromotionDecision in this adapter's audit trail (never rewritten)."""
-        self.repo.record_decision(_validate_name(name), decision)
+    def record_promotion(self, name: str, decision: PromotionDecision) -> int:
+        """Record a PromotionDecision in this adapter's audit trail (never rewritten).
+
+        Returns the decision's id (a cluster-sync row refers to it)."""
+        return self.repo.record_decision(_validate_name(name), decision)
 
     def list_promotions(self, name: str) -> list[PromotionDecision]:
         return self.repo.list_decisions(_validate_name(name))
@@ -251,6 +256,33 @@ class RegistryStore:
         name: str,
         payload: bytes,
         *,
+        set_active: bool = False,
+        **fields,
+    ) -> AdapterMetadata:
+        """Write a new immutable version and register it. Assigns the next version number.
+
+        ``fields`` are ``write_version_files``'s keyword arguments. The version
+        is an inactive candidate unless ``set_active`` is true (operator use);
+        a promote is what normally makes it live.
+        """
+        meta = self.write_version_files(name, payload, **fields)
+        # The version exists once its metadata row commits. If that fails, the
+        # published directory goes too, so no unregistered version is left.
+        try:
+            with self.repo.transaction():
+                self.repo.add_version(meta)
+                if set_active:
+                    self.repo.set_active(name, meta.ref.version)
+        except BaseException:
+            shutil.rmtree(self._version_dir(name, meta.ref.version), ignore_errors=True)
+            raise
+        return meta
+
+    def write_version_files(
+        self,
+        name: str,
+        payload: bytes,
+        *,
         kind: AdapterKind,
         hparams: LoRAHyperParams,
         privacy: PrivacySpec | None = None,
@@ -259,13 +291,13 @@ class RegistryStore:
         seed: int = 0,
         cluster_id: str | None = None,
         source_clients: tuple[str, ...] = (),
-        set_active: bool = False,
         composed_from: CompositeProvenance | None = None,
     ) -> AdapterMetadata:
-        """Write a new immutable version. Assigns the next version number.
+        """Publish the next version's files (fsynced) and return its metadata; no row.
 
-        The version is an inactive candidate unless ``set_active`` is true
-        (operator use); a promote is what normally makes it live.
+        Until a caller registers the metadata (``repo.add_version``) the
+        directory is not a version: nothing lists or serves it, and
+        ``retention.sweep_orphans`` removes it.
         """
         _validate_name(name)
         if not is_safetensors(payload):
@@ -319,16 +351,6 @@ class RegistryStore:
             raise VersionExists(f"{name} v{version} already exists") from e
         _fsync(adapter_dir)        # the rename that named vN
         _fsync(self.adapters_dir)  # the adapter dir itself, on its first save
-        # The version exists once its metadata row commits. If that fails, the
-        # published directory goes too, so no unregistered version is left.
-        try:
-            with self.repo.transaction():
-                self.repo.add_version(meta)
-                if set_active:
-                    self.repo.set_active(name, version)
-        except BaseException:
-            shutil.rmtree(vdir, ignore_errors=True)
-            raise
         return meta
 
 

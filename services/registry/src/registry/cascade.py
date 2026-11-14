@@ -13,8 +13,10 @@ When part ``P`` moves from ``v_from`` to ``v_to``, every composite whose
     rebuild   otherwise, build one now (a new immutable version)
 
 Composites pinned to other versions of ``P`` are left alone. ``plan_cascade``
-writes nothing and fails before any write if a rebuild cannot be built, so the
-part and its composites always move together.
+writes nothing and fails before any write if a rebuild cannot be built;
+``write_cascade_files`` writes the rebuilds' files; ``apply_cascade`` makes
+only database writes, inside the restore's transaction, so the part and its
+composites always move together.
 """
 from __future__ import annotations
 
@@ -28,7 +30,13 @@ from contracts import (
     PromotionDecision,
 )
 
-from .composition import ComposeRequest, PlannedComposite, plan_composite, store_composite
+from .composition import (
+    ComposeRequest,
+    PlannedComposite,
+    plan_composite,
+    register_composite,
+    write_composite_files,
+)
 from .storage import RegistryStore
 
 
@@ -39,6 +47,7 @@ class CascadeStep:
     provenance: CompositeProvenance
     reuse_version: int | None = None  # set -> repoint; None -> store ``plan``
     plan: PlannedComposite | None = None
+    written: AdapterMetadata | None = None  # ``plan``'s files, once written
 
 
 def _swap(prov: CompositeProvenance, part: str, from_v: int,
@@ -93,17 +102,28 @@ def plan_cascade(store: RegistryStore, part: str, from_version: int,
     return steps
 
 
+def write_cascade_files(store: RegistryStore, steps: list[CascadeStep]) -> list[CascadeStep]:
+    """Write every rebuild's files (no rows) before the caller's transaction opens."""
+    return [step if step.reuse_version is not None
+            else replace(step, written=write_composite_files(store, step.composite, step.plan))
+            for step in steps]
+
+
 def apply_cascade(store: RegistryStore, steps: list[CascadeStep], *,
                   action: PromotionAction, reason: str) -> list[dict]:
-    """Repoint (or build) each composite and record the move in its audit trail."""
+    """Repoint (or register a rebuilt) composite and record each move in its audit trail.
+
+    ``steps`` come from ``write_cascade_files``. Database writes only, so it
+    joins the caller's transaction.
+    """
     moved = []
     for step in steps:
         if step.reuse_version is not None:
             store.set_active(step.composite, step.reuse_version)
             version, rebuilt = step.reuse_version, False
         else:
-            meta, rebuilt = store_composite(store, step.composite, step.plan)
-            version = meta.ref.version
+            register_composite(store.repo, step.written)
+            version, rebuilt = step.written.ref.version, True
         candidate = store.get_metadata(step.composite, step.from_version).ref
         store.record_promotion(step.composite, PromotionDecision(
             adapter=candidate, action=action, active_version_after=version,
