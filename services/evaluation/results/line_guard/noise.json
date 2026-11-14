@@ -1,0 +1,13 @@
+{
+  "status": "pending measurement: not run yet, every number below is null on purpose (needs the user's GPU)",
+  "command": "python scripts/evaluate_candidate.py --cluster web",
+  "requires": "registry and cluster running, at least two published versions of cluster-web, CUDA GPU, 1.3B model",
+  "fills": ["guard_noise", "wall_seconds", "candidate_sha256", "baseline_sha256"],
+  "where_to_read": ".runtime/live-eval/web-v<N>.json: guard_noise and candidate_sha256/baseline_sha256 at top level, details.wall_seconds",
+  "guard_noise": null,
+  "wall_seconds": null,
+  "candidate_sha256": null,
+  "baseline_sha256": null,
+  "tolerance": 0.02,
+  "gate": "if guard_noise > 0.02 the team must decide before relying on the guard; do not change the tolerance or the set size without that decision"
+}

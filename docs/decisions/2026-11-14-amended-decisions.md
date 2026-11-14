@@ -61,6 +61,20 @@ code win.
   each client"; no mechanism change. Client-level DP was rejected for this
   project.
 
+## D5 — promotion guard
+
+- **As written:** the guard is HumanEval pass@1: promote only if the drop is
+  at most 2 points.
+- **As built:** the guard is next-line completion on a frozen 300-example
+  general set (click, jinja, colorama; none of them trains any cluster),
+  scored as edit similarity with a tolerance of 0.02. Measured noise of the
+  guard: pending measurement, see
+  `services/evaluation/results/line_guard/noise.json`. HumanEval and PY150
+  (`scripts/eval_py150.py`) are reported only and never gate a promotion.
+- **Reason:** HumanEval tests docstring-to-function synthesis, not CLASP's
+  in-project completion, and on the 20-problem subset the project uses one
+  problem is 5 points, so a 2-point tolerance is below its resolution.
+
 ## Base model
 
 - **As written:** DeepSeek-Coder-6.7B.

@@ -69,9 +69,11 @@ overwritten in place.
    and seed.
 4. **Evaluation → Registry** (`EvalResult`): the evaluator returns primary
    in-project metrics (edit similarity, exact match, perplexity on the client's
-   held-out files) plus HumanEval/MBPP guard numbers.
+   held-out files) plus the line-completion guard numbers (HumanEval/MBPP and
+   PY150 are reported only).
 5. **Promotion (D5, two-sided)**: the registry promotes a version iff in-project
-   improves beyond the measured noise band **and** HumanEval pass@1 drop ≤ 2 pts;
+   improves beyond the measured noise band **and** the line-completion guard's
+   edit similarity drops by at most 0.02 (D5);
    otherwise it repoints `active` to the previous version (rollback). Never gated
    on Pass@k alone.
 
