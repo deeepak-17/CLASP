@@ -95,7 +95,9 @@ _WRITE_LOCK = threading.RLock()
 
 
 def get_store() -> RegistryStore:
-    """Lazily construct the store so CLASP_REGISTRY_DATA is read at request time."""
+    """Lazily construct the store so CLASP_REGISTRY_DATA (and CLASP_REGISTRY_DB)
+    are read at request time. The first construction against an empty database
+    imports a file-based volume (``registry.migrate``)."""
     global _store
     if _store is None:
         _store = RegistryStore()

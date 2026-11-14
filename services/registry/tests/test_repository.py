@@ -209,12 +209,21 @@ def test_composite_parts_rows(repo, engine):
     assert [(r.role, r.weight) for r in rows] == [("client", 0.3), ("cluster", 0.7)]
 
 
-def test_composite_with_missing_part_raises_and_leaves_nothing(repo):
+def test_composite_with_a_missing_part_is_saved_with_rows_only_for_existing_parts(repo, engine):
+    # The file-based registry accepted provenance naming parts it never held;
+    # such composites still save (and old volumes still import). The
+    # provenance stays in the metadata; only parts that exist get a row.
     repo.add_version(_meta("a", 1))
-    with pytest.raises(AdapterNotFound):
-        repo.add_version(_composite("m", 1))
-    assert repo.list_versions("m") == []
-    assert repo.list_adapters() == ["a"]
+    stored = _composite("m", 1)  # cluster c v1 does not exist
+    repo.add_version(stored)
+    assert repo.get_metadata("m", 1) == stored
+    with engine.connect() as conn:
+        rows = conn.execute(db.composite_parts.select()).all()
+    assert [r.role for r in rows] == ["client"]
+    assert repo.referenced_versions("a") == {1}
+    assert repo.referenced_versions("c") == set()
+    assert [r.name for r in repo.composites_built_from("a", 1)] == ["m"]
+    assert repo.composites_built_from("c", 1) == []
 
 
 def test_cluster_sync_lifecycle(repo):

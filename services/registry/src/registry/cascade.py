@@ -50,14 +50,15 @@ def _swap(prov: CompositeProvenance, part: str, from_v: int,
     return None
 
 
-def _active_composite(store: RegistryStore, name: str) -> AdapterMetadata | None:
-    active = store.get_active(name)
-    if active is None:
-        return None
-    meta = store.get_metadata(name, active)
-    if meta.ref.kind is not AdapterKind.COMPOSITE or meta.composed_from is None:
-        return None
-    return meta
+def _live_composites(store: RegistryStore, part: str, version: int) -> list[AdapterMetadata]:
+    """The composites built from ``part@version`` that are active right now."""
+    live = []
+    for ref in store.repo.composites_built_from(part, version):
+        if store.get_active(ref.name) == ref.version:
+            meta = store.get_metadata(ref.name, ref.version)
+            if meta.ref.kind is AdapterKind.COMPOSITE and meta.composed_from is not None:
+                live.append(meta)
+    return live
 
 
 def _find(store: RegistryStore, name: str, prov: CompositeProvenance) -> int | None:
@@ -82,13 +83,10 @@ def plan_cascade(store: RegistryStore, part: str, from_version: int,
     Writes nothing. Raises CompositionError if a needed rebuild cannot be built.
     """
     steps = []
-    for name in store.list_adapters():
-        meta = _active_composite(store, name)
-        if meta is None:
-            continue
+    for meta in _live_composites(store, part, from_version):
+        name = meta.ref.name
+        # a part row exists only where the provenance names part@from_version
         target = _swap(meta.composed_from, part, from_version, to_version)
-        if target is None:
-            continue
         reuse = _find(store, name, target)
         plan = None if reuse is not None else plan_composite(store, _request(target), name)
         steps.append(CascadeStep(name, meta.ref.version, target, reuse, plan))

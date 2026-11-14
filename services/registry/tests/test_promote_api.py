@@ -106,7 +106,15 @@ def test_promote_corrupt_pointer_is_a_clean_500(client):
     import os
     from pathlib import Path
 
+    import registry.app as appmod
+
+    from .conftest import _drop_app_store, forget_database
+
     _upload(client, "corrupt")
+    # pointers live in the database; a file-based volume's `active` file is
+    # read by the import when the registry next starts on an empty database
+    _drop_app_store(appmod)
+    forget_database(os.environ["CLASP_REGISTRY_DATA"])
     active_path = Path(os.environ["CLASP_REGISTRY_DATA"]) / "adapters" / "corrupt" / "active"
     active_path.write_text("not-an-int")
 

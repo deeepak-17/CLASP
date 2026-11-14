@@ -138,6 +138,10 @@ class SqlMetadataRepository:
                 raise KindMismatch(f"{name} is {row.kind}, not {kind}")
             if row is not None and self._version_id(conn, name, version) is not None:
                 raise VersionExists(f"{name} v{version}")
+            # A part row only for a part the registry holds: the file-based
+            # registry accepted provenance naming absent parts, and those
+            # composites (and old volumes) must still save. The full
+            # provenance stays in metadata_json either way.
             parts: list[tuple[str, int, float]] = []
             if meta.composed_from is not None:
                 cf = meta.composed_from
@@ -146,9 +150,8 @@ class SqlMetadataRepository:
                     ("client", cf.client_name, cf.client_version, cf.beta),
                 ):
                     part_id = self._version_id(conn, pname, pver)
-                    if part_id is None:
-                        raise AdapterNotFound(f"composite part {pname} v{pver} ({role})")
-                    parts.append((role, part_id, weight))
+                    if part_id is not None:
+                        parts.append((role, part_id, weight))
             adapter_id = (
                 row.id
                 if row is not None

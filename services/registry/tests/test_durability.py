@@ -47,29 +47,41 @@ def test_save_syncs_the_directories_that_name_the_new_version(store, safetensors
     assert store.adapters_dir in synced    # the first save created the adapter dir
 
 
-def test_set_active_syncs_the_pointer_before_and_its_directory_after(
-        store, safetensors_blob, synced):
+def test_set_active_writes_no_file_the_database_holds_it(store, safetensors_blob, synced):
+    # The pointer is a row committed with synchronous=FULL, not a file.
     _save(store, safetensors_blob)
     _save(store, safetensors_blob)
     synced.clear()
 
     store.set_active("flask", 1)
 
-    adapter_dir = store.adapters_dir / "flask"
-    assert [p.name for p in synced] == ["active.tmp", "flask"]
-    assert synced[-1] == adapter_dir
-    assert store.get_active("flask") == 1
+    assert synced == []
+    assert not (store.adapters_dir / "flask" / "active").exists()
+    assert store.repo.get_active("flask") == 1
 
 
-def test_audit_log_lines_are_synced(store, safetensors_blob, synced):
+def test_promotion_decisions_write_no_file_the_database_holds_them(
+        store, safetensors_blob, synced):
     meta = _save(store, safetensors_blob)
     synced.clear()
 
-    store.record_promotion("flask", PromotionDecision(
-        adapter=meta.ref, action=PromotionAction.PROMOTE,
-        active_version_after=1, reason="test"))
+    decision = PromotionDecision(adapter=meta.ref, action=PromotionAction.PROMOTE,
+                                 active_version_after=1, reason="test")
+    store.record_promotion("flask", decision)
 
-    assert synced == [store.adapters_dir / "flask" / "promotions.jsonl"]
+    assert synced == []
+    assert not (store.adapters_dir / "flask" / "promotions.jsonl").exists()
+    assert store.repo.list_decisions("flask") == [decision]
+
+
+def test_file_audit_log_lines_are_synced(store, safetensors_blob, synced):
+    # gc.jsonl stays a file log, synced on every append.
+    _save(store, safetensors_blob)
+    synced.clear()
+
+    store.append_log("flask", "gc.jsonl", "{}")
+
+    assert synced == [store.adapters_dir / "flask" / "gc.jsonl"]
 
 
 def test_fsync_really_syncs_a_file_and_a_directory(tmp_path):

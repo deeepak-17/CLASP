@@ -47,14 +47,28 @@ def test_provenance_only_allowed_on_composites(store, safetensors_blob):
 
 
 def test_v1_0_metadata_on_disk_still_reads(store, safetensors_blob):
-    """A metadata.json written before v1.1 has no composed_from key."""
+    """A metadata.json written before v1.1 has no composed_from key.
+
+    metadata.json is only read by the import of a file-based volume now, so
+    the old file is put back and the volume reopened without its database.
+    """
+    from registry.storage import RegistryStore
+
+    from .conftest import forget_database
+
     store.save("legacy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    store.close()
+    forget_database(store.root)
     meta_path = store._adapter_dir("legacy") / "v1" / "metadata.json"
     d = json.loads(meta_path.read_text())
     d.pop("composed_from", None)
     d["contracts_version"] = "1.0.0"
     meta_path.write_text(json.dumps(d))
-    back = store.get_metadata("legacy", 1)
+    reopened = RegistryStore(store.root)
+    try:
+        back = reopened.get_metadata("legacy", 1)
+    finally:
+        reopened.close()
     assert back.composed_from is None
     assert back.contracts_version == "1.0.0"
 

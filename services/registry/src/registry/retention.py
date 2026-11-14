@@ -7,7 +7,7 @@ can see why each survivor survived):
     recent     among the newest ``keep_last`` versions
     promoted   a D5 decision promoted it (it served traffic)
     restored   a rollback/restore made it active (it served traffic)
-    composite  a composite's provenance names it — deleting it would orphan
+    composite  a stored composite is built from it— deleting it would orphan
                the composite's lineage and make it unreproducible (D9)
 
 Everything else is deleted, oldest first. GC is opt-in and defaults to a dry
@@ -21,7 +21,7 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from contracts import AdapterKind, PromotionAction, PromotionDecision, utcnow_iso
+from contracts import PromotionAction, PromotionDecision, utcnow_iso
 
 from .storage import RegistryStore
 
@@ -87,16 +87,9 @@ def plan_retention(
 
 
 def collect_referenced(store: RegistryStore) -> set[tuple[str, int]]:
-    """Every (adapter, version) named by any stored composite's provenance."""
-    refs: set[tuple[str, int]] = set()
-    for name in store.list_adapters():
-        for v in store.list_versions(name):
-            meta = store.get_metadata(name, v)
-            prov = meta.composed_from
-            if meta.ref.kind is AdapterKind.COMPOSITE and prov is not None:
-                refs.add((prov.cluster_name, prov.cluster_version))
-                refs.add((prov.client_name, prov.client_version))
-    return refs
+    """Every stored (adapter, version) that some composite is built from."""
+    return {(name, v) for name in store.list_adapters()
+            for v in store.repo.referenced_versions(name)}
 
 
 def gc_adapter(
@@ -108,13 +101,13 @@ def gc_adapter(
     referenced: set[tuple[str, int]] | None = None,
 ) -> RetentionPlan:
     """Plan (and unless ``dry_run``, apply) retention for one adapter."""
-    if referenced is None:
-        referenced = collect_referenced(store)
+    versions = store.list_versions(name)  # AdapterNotFound for an unknown name
     plan = plan_retention(
-        store.list_versions(name),
+        versions,
         active=store.get_active(name),
         decisions=store.list_promotions(name),
-        referenced={v for n, v in referenced if n == name},
+        referenced=(store.repo.referenced_versions(name) if referenced is None
+                    else {v for n, v in referenced if n == name}),
         keep_last=keep_last,
     )
     if dry_run or not plan.delete:

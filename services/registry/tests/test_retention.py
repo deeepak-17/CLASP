@@ -104,6 +104,9 @@ def test_gc_protects_versions_named_by_any_composite(store, safetensors_blob):
 
     for _ in range(4):
         store.save("flask", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    # both parts are stored: only parts the registry holds count as referenced
+    store.save("cluster-web", safetensors_blob, kind=AdapterKind.CLUSTER,
+               hparams=LoRAHyperParams())
     store.save("composite-flask", safetensors_blob, kind=AdapterKind.COMPOSITE,
                hparams=LoRAHyperParams(),
                composed_from=CompositeProvenance("cluster-web", 1, "flask", 1, 0.5, 1.0))

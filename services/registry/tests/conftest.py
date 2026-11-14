@@ -32,6 +32,18 @@ def make_safetensors(tensors: dict[str, list[float]] | None = None) -> bytes:
     return struct.pack("<Q", len(header_bytes)) + header_bytes + body
 
 
+def forget_database(root) -> None:
+    """Delete ``registry.db`` under ``root`` (its store must be closed first).
+
+    The volume then looks like one the file-based registry wrote, and the next
+    store opened on it imports it again.
+    """
+    from pathlib import Path
+
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{Path(root) / 'registry.db'}{suffix}").unlink(missing_ok=True)
+
+
 @pytest.fixture
 def safetensors_blob() -> bytes:
     return make_safetensors()
@@ -40,20 +52,31 @@ def safetensors_blob() -> bytes:
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "registry"))
+    monkeypatch.delenv("CLASP_REGISTRY_DB", raising=False)  # registry.db under the root
     from registry.storage import RegistryStore
 
-    return RegistryStore()
+    s = RegistryStore()
+    yield s
+    s.close()  # Windows: release registry.db before tmp_path is removed
+
+
+def _drop_app_store(appmod) -> None:
+    if appmod._store is not None:
+        appmod._store.close()
+    appmod._store = None
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "registry_api"))
+    monkeypatch.delenv("CLASP_REGISTRY_DB", raising=False)
     from fastapi.testclient import TestClient
 
     import registry.app as appmod
 
-    appmod._store = None  # force re-read of CLASP_REGISTRY_DATA
-    return TestClient(appmod.app)
+    _drop_app_store(appmod)  # force re-read of CLASP_REGISTRY_DATA
+    yield TestClient(appmod.app)
+    _drop_app_store(appmod)
 
 
 def free_port() -> int:
