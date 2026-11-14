@@ -262,7 +262,9 @@ def test_upload_carries_a_contract_privacy_block():
     payload = wire.upload_payload(tiny(), {"r": RANK, "lora_alpha": RANK},
                                   client_id="c", cluster_id="web", round_id=0,
                                   num_examples=10, privacy=spent)
-    assert payload["privacy"] == spent
+    # v1.2 PrivacySpec also emits the cumulative-budget keys (null when unset).
+    assert payload["privacy"] == {**spent, "epsilon_cumulative": None,
+                                  "rounds_accounted": None}
 
 
 def test_upload_without_dp_says_so_in_the_contracts_own_encoding():

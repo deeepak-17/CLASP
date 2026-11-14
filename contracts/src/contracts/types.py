@@ -6,7 +6,8 @@ at the API boundary in ``services/registry`` where request/response validation
 is needed; these dataclasses remain the canonical field definitions.
 
 Frozen at **v1.0.0**; **v1.1.0** is an additive, backward-compatible minor bump
-(composite adapters for D6, lossless JSON for every seam). Changes require a
+(composite adapters for D6, lossless JSON for every seam); **v1.2.0** is a further
+additive minor bump (line-completion guard, cumulative epsilon, ``reject``). Changes require a
 semver bump + all-hands sign-off. The three cross-module schemas below are the
 wire seams:
 
@@ -31,7 +32,7 @@ from enum import Enum
 from typing import Any
 
 #: Semantic version of this contract package. Bump on any breaking change.
-CONTRACTS_VERSION = "1.1.0"
+CONTRACTS_VERSION = "1.2.0"
 
 #: Base model a composite was merged against, recorded on its provenance (D6).
 DEFAULT_BASE_MODEL = "deepseek-ai/deepseek-coder-1.3b-base"
@@ -60,6 +61,7 @@ class AggregationMethod(str, Enum):
 class PromotionAction(str, Enum):
     PROMOTE = "promote"    # repoint `active` tag to this version
     ROLLBACK = "rollback"  # repoint `active` tag to the previous version
+    REJECT = "reject"      # v1.2: candidate judged and not made live; active pointer did not move
 
 
 # --------------------------------------------------------------------------- #
@@ -100,6 +102,21 @@ class PrivacySpec:
     delta: float = 1e-5
     noise_multiplier: float | None = None
     max_grad_norm: float | None = None
+    epsilon_cumulative: float | None = None  # v1.2: budget spent across all rounds so far
+    rounds_accounted: int | None = None      # v1.2: number of rounds in that cumulative figure
+
+    def __post_init__(self) -> None:
+        if (
+            self.epsilon is not None
+            and self.epsilon_cumulative is not None
+            and self.epsilon_cumulative < self.epsilon
+        ):
+            raise ValueError(
+                f"epsilon_cumulative ({self.epsilon_cumulative}) must be >= "
+                f"epsilon ({self.epsilon})"
+            )
+        if self.rounds_accounted is not None and self.rounds_accounted < 1:
+            raise ValueError(f"rounds_accounted must be >= 1, got {self.rounds_accounted}")
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -277,10 +294,20 @@ class GuardMetrics:
     off the wire with ``"1"`` keys still answers ``pass_at_k[1]``), and every
     entry is validated — k >= 1, 0 <= pass@k <= 1.
     """
-    benchmark: str                 # "HumanEval" | "MBPP"
-    pass_at_k: dict[int, float]    # e.g. {1: 0.31, 10: 0.52}
+    benchmark: str                 # "HumanEval" | "MBPP" | "LineCompletion" (v1.2)
+    pass_at_k: dict[int, float] = field(default_factory=dict)  # e.g. {1: 0.31, 10: 0.52}
+    # v1.2: line-completion guard metrics (pass_at_k may be empty for that benchmark)
+    edit_similarity: float | None = None
+    exact_match: float | None = None
+    n_examples: int | None = None
 
     def __post_init__(self) -> None:
+        for name in ("edit_similarity", "exact_match"):
+            val = getattr(self, name)
+            if val is not None and not 0.0 <= val <= 1.0:
+                raise ValueError(f"{name} must be a fraction in [0, 1], got {val}")
+        if self.n_examples is not None and self.n_examples < 1:
+            raise ValueError(f"n_examples must be >= 1, got {self.n_examples}")
         normalized: dict[int, float] = {}
         for raw_k, raw_v in self.pass_at_k.items():
             try:
@@ -302,11 +329,20 @@ class GuardMetrics:
         return {
             "benchmark": self.benchmark,
             "pass_at_k": {str(k): v for k, v in self.pass_at_k.items()},
+            "edit_similarity": self.edit_similarity,
+            "exact_match": self.exact_match,
+            "n_examples": self.n_examples,
         }
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> GuardMetrics:
-        return cls(benchmark=d["benchmark"], pass_at_k=dict(d["pass_at_k"]))
+        return cls(
+            benchmark=d["benchmark"],
+            pass_at_k=dict(d.get("pass_at_k") or {}),
+            edit_similarity=d.get("edit_similarity"),
+            exact_match=d.get("exact_match"),
+            n_examples=d.get("n_examples"),
+        )
 
 
 @dataclass(frozen=True)

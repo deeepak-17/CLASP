@@ -10,8 +10,8 @@ import contracts as c
 
 def test_version_is_1_1():
     # v1.1.0 is an additive minor bump over the v1.0 freeze (see test_v1_1.py).
-    assert c.__version__ == "1.1.0"
-    assert c.CONTRACTS_VERSION == "1.1.0"
+    assert c.__version__ == "1.2.0"
+    assert c.CONTRACTS_VERSION == "1.2.0"
 
 
 def test_three_wire_seams_present():
