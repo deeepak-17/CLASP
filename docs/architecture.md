@@ -113,7 +113,8 @@ adapters/<name>/
 - **Run manifests** — `RunManifest` (run_id, seed, config hash, adapter versions,
   GPU-hrs estimate/actual) written per experiment for reproducibility (D9).
 
-See `docs/registry_api.md` for the endpoint contract.
+The endpoint contract is the route list in the module docstring of
+`services/registry/src/registry/app.py` (14 routes).
 
 ## 5. Process & reproducibility (D9)
 
