@@ -1,0 +1,38 @@
+{
+  "ref": {
+    "name": "flask",
+    "version": 1,
+    "kind": "client",
+    "cluster_id": "web"
+  },
+  "hparams": {
+    "rank": 8,
+    "lora_alpha": 32,
+    "dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "alpha": 1.0,
+    "beta": 1.0
+  },
+  "privacy": {
+    "epsilon": null,
+    "delta": 1e-05,
+    "noise_multiplier": null,
+    "max_grad_norm": null,
+    "epsilon_cumulative": null,
+    "rounds_accounted": null
+  },
+  "aggregation": null,
+  "round": null,
+  "seed": 1,
+  "sha256": "f11b6e6bed13f8a0dddbcb39a37acb44ba93789e88826ac43785937aec3dade4",
+  "num_bytes": 82,
+  "source_clients": [],
+  "created_at": "2026-11-14T19:59:47.346660+00:00",
+  "contracts_version": "1.2.0",
+  "composed_from": null
+}

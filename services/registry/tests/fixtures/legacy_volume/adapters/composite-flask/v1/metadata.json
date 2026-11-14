@@ -1,0 +1,48 @@
+{
+  "ref": {
+    "name": "composite-flask",
+    "version": 1,
+    "kind": "composite",
+    "cluster_id": "web"
+  },
+  "hparams": {
+    "rank": 16,
+    "lora_alpha": 16,
+    "dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "alpha": 1.0,
+    "beta": 1.0
+  },
+  "privacy": {
+    "epsilon": null,
+    "delta": 1e-05,
+    "noise_multiplier": null,
+    "max_grad_norm": null,
+    "epsilon_cumulative": null,
+    "rounds_accounted": null
+  },
+  "aggregation": null,
+  "round": null,
+  "seed": 0,
+  "sha256": "0f1a62d5f46cf1791401c1c781ccddf37eaaaa190fa0f554a376c920c9eab8cd",
+  "num_bytes": 82,
+  "source_clients": [
+    "flask"
+  ],
+  "created_at": "2026-11-14T19:59:47.481205+00:00",
+  "contracts_version": "1.2.0",
+  "composed_from": {
+    "cluster_name": "cluster-web",
+    "cluster_version": 1,
+    "client_name": "flask",
+    "client_version": 2,
+    "alpha": 0.5,
+    "beta": 1.0,
+    "base_model": "deepseek-ai/deepseek-coder-1.3b-base"
+  }
+}

@@ -1,0 +1,343 @@
+{
+  "active": {
+    "cluster-web": 1,
+    "composite-flask": 1,
+    "flask": 2
+  },
+  "adapters": [
+    "cluster-web",
+    "composite-flask",
+    "flask"
+  ],
+  "lineage": {
+    "cluster-web": {
+      "active": 1,
+      "name": "cluster-web",
+      "versions": [
+        {
+          "aggregation": "svd_exact",
+          "composed_from": null,
+          "created_at": "2026-11-14T19:59:47.301378+00:00",
+          "decisions": [],
+          "epsilon": 4.0,
+          "is_active": true,
+          "kind": "cluster",
+          "num_bytes": 82,
+          "parents": [
+            "client:flask",
+            "client:requests"
+          ],
+          "round": 1,
+          "sha256": "8a292bff5892c0ecf85c5ec79fe4c9c4da1f4dafaa8f758f83f0bc56264ef1af",
+          "version": 1
+        }
+      ]
+    },
+    "composite-flask": {
+      "active": 1,
+      "name": "composite-flask",
+      "versions": [
+        {
+          "aggregation": null,
+          "composed_from": {
+            "alpha": 0.5,
+            "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+            "beta": 1.0,
+            "client_name": "flask",
+            "client_version": 2,
+            "cluster_name": "cluster-web",
+            "cluster_version": 1
+          },
+          "created_at": "2026-11-14T19:59:47.481205+00:00",
+          "decisions": [],
+          "epsilon": null,
+          "is_active": true,
+          "kind": "composite",
+          "num_bytes": 82,
+          "parents": [
+            "cluster-web@v1",
+            "flask@v2"
+          ],
+          "round": null,
+          "sha256": "0f1a62d5f46cf1791401c1c781ccddf37eaaaa190fa0f554a376c920c9eab8cd",
+          "version": 1
+        }
+      ]
+    },
+    "flask": {
+      "active": 2,
+      "name": "flask",
+      "versions": [
+        {
+          "aggregation": null,
+          "composed_from": null,
+          "created_at": "2026-11-14T19:59:47.346660+00:00",
+          "decisions": [
+            {
+              "action": "promote",
+              "active_version_after": 1,
+              "adapter": {
+                "cluster_id": "web",
+                "kind": "client",
+                "name": "flask",
+                "version": 1
+              },
+              "reason": "fixture promote v1",
+              "timestamp": "2026-11-14T19:59:47.434592+00:00"
+            }
+          ],
+          "epsilon": null,
+          "is_active": false,
+          "kind": "client",
+          "num_bytes": 82,
+          "parents": [],
+          "round": null,
+          "sha256": "f11b6e6bed13f8a0dddbcb39a37acb44ba93789e88826ac43785937aec3dade4",
+          "version": 1
+        },
+        {
+          "aggregation": null,
+          "composed_from": null,
+          "created_at": "2026-11-14T19:59:47.389848+00:00",
+          "decisions": [
+            {
+              "action": "promote",
+              "active_version_after": 2,
+              "adapter": {
+                "cluster_id": "web",
+                "kind": "client",
+                "name": "flask",
+                "version": 2
+              },
+              "reason": "fixture promote v2",
+              "timestamp": "2026-11-14T19:59:47.460452+00:00"
+            }
+          ],
+          "epsilon": null,
+          "is_active": true,
+          "kind": "client",
+          "num_bytes": 82,
+          "parents": [],
+          "round": null,
+          "sha256": "be108a737d8eaff1cc04672f72b93f9ddca090a5def9038ae50a4fc6e7e3f61e",
+          "version": 2
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "cluster-web": {
+      "1": {
+        "aggregation": "svd_exact",
+        "composed_from": null,
+        "contracts_version": "1.2.0",
+        "created_at": "2026-11-14T19:59:47.301378+00:00",
+        "hparams": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "dropout": 0.05,
+          "lora_alpha": 32,
+          "rank": 8,
+          "target_modules": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj"
+          ]
+        },
+        "num_bytes": 82,
+        "privacy": {
+          "delta": 1e-05,
+          "epsilon": 4.0,
+          "epsilon_cumulative": null,
+          "max_grad_norm": null,
+          "noise_multiplier": null,
+          "rounds_accounted": null
+        },
+        "ref": {
+          "cluster_id": "web",
+          "kind": "cluster",
+          "name": "cluster-web",
+          "version": 1
+        },
+        "round": 1,
+        "seed": 0,
+        "sha256": "8a292bff5892c0ecf85c5ec79fe4c9c4da1f4dafaa8f758f83f0bc56264ef1af",
+        "source_clients": [
+          "flask",
+          "requests"
+        ]
+      }
+    },
+    "composite-flask": {
+      "1": {
+        "aggregation": null,
+        "composed_from": {
+          "alpha": 0.5,
+          "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+          "beta": 1.0,
+          "client_name": "flask",
+          "client_version": 2,
+          "cluster_name": "cluster-web",
+          "cluster_version": 1
+        },
+        "contracts_version": "1.2.0",
+        "created_at": "2026-11-14T19:59:47.481205+00:00",
+        "hparams": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "dropout": 0.05,
+          "lora_alpha": 16,
+          "rank": 16,
+          "target_modules": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj"
+          ]
+        },
+        "num_bytes": 82,
+        "privacy": {
+          "delta": 1e-05,
+          "epsilon": null,
+          "epsilon_cumulative": null,
+          "max_grad_norm": null,
+          "noise_multiplier": null,
+          "rounds_accounted": null
+        },
+        "ref": {
+          "cluster_id": "web",
+          "kind": "composite",
+          "name": "composite-flask",
+          "version": 1
+        },
+        "round": null,
+        "seed": 0,
+        "sha256": "0f1a62d5f46cf1791401c1c781ccddf37eaaaa190fa0f554a376c920c9eab8cd",
+        "source_clients": [
+          "flask"
+        ]
+      }
+    },
+    "flask": {
+      "1": {
+        "aggregation": null,
+        "composed_from": null,
+        "contracts_version": "1.2.0",
+        "created_at": "2026-11-14T19:59:47.346660+00:00",
+        "hparams": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "dropout": 0.05,
+          "lora_alpha": 32,
+          "rank": 8,
+          "target_modules": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj"
+          ]
+        },
+        "num_bytes": 82,
+        "privacy": {
+          "delta": 1e-05,
+          "epsilon": null,
+          "epsilon_cumulative": null,
+          "max_grad_norm": null,
+          "noise_multiplier": null,
+          "rounds_accounted": null
+        },
+        "ref": {
+          "cluster_id": "web",
+          "kind": "client",
+          "name": "flask",
+          "version": 1
+        },
+        "round": null,
+        "seed": 1,
+        "sha256": "f11b6e6bed13f8a0dddbcb39a37acb44ba93789e88826ac43785937aec3dade4",
+        "source_clients": []
+      },
+      "2": {
+        "aggregation": null,
+        "composed_from": null,
+        "contracts_version": "1.2.0",
+        "created_at": "2026-11-14T19:59:47.389848+00:00",
+        "hparams": {
+          "alpha": 1.0,
+          "beta": 1.0,
+          "dropout": 0.05,
+          "lora_alpha": 32,
+          "rank": 8,
+          "target_modules": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj"
+          ]
+        },
+        "num_bytes": 82,
+        "privacy": {
+          "delta": 1e-05,
+          "epsilon": null,
+          "epsilon_cumulative": null,
+          "max_grad_norm": null,
+          "noise_multiplier": null,
+          "rounds_accounted": null
+        },
+        "ref": {
+          "cluster_id": "web",
+          "kind": "client",
+          "name": "flask",
+          "version": 2
+        },
+        "round": null,
+        "seed": 2,
+        "sha256": "be108a737d8eaff1cc04672f72b93f9ddca090a5def9038ae50a4fc6e7e3f61e",
+        "source_clients": []
+      }
+    }
+  },
+  "promotions": {
+    "cluster-web": [],
+    "composite-flask": [],
+    "flask": [
+      {
+        "action": "promote",
+        "active_version_after": 1,
+        "adapter": {
+          "cluster_id": "web",
+          "kind": "client",
+          "name": "flask",
+          "version": 1
+        },
+        "reason": "fixture promote v1",
+        "timestamp": "2026-11-14T19:59:47.434592+00:00"
+      },
+      {
+        "action": "promote",
+        "active_version_after": 2,
+        "adapter": {
+          "cluster_id": "web",
+          "kind": "client",
+          "name": "flask",
+          "version": 2
+        },
+        "reason": "fixture promote v2",
+        "timestamp": "2026-11-14T19:59:47.460452+00:00"
+      }
+    ]
+  },
+  "versions": {
+    "cluster-web": [
+      1
+    ],
+    "composite-flask": [
+      1
+    ],
+    "flask": [
+      1,
+      2
+    ]
+  }
+}

@@ -19,6 +19,8 @@ htmlcov/
 
 # --- Models / adapters / large artifacts ---
 *.safetensors
+# the registry's legacy-volume test fixture: a few bytes of synthetic tensors
+!services/registry/tests/fixtures/legacy_volume/**/*.safetensors
 # save_pretrained drops a full tokenizer copy into every adapter output dir.
 # Byte-identical across clients and ranks, and derivable from the adapter's own
 # base_model_name_or_path — regenerate at reproduce time, don't commit per dir.
