@@ -150,7 +150,7 @@ def _restore_drill(reg: Registry, run_id: str, hp: dict, *, layers: int, hidden:
     _expect("fetch nfr composite v1", status, 200, good)
 
     start = time.perf_counter()
-    status, body = reg.post_json(f"/adapters/{client}/restore", {"reason": "D11 restore drill"})
+    status, body = reg.post_json(f"/adapters/{client}/restore", {"reason": "D11 restore drill", "to_version": 1})
     _expect("restore", status, 200, body)
     status, active = reg.get(f"/adapters/{composite}/active")
     status, blob = reg.get(f"/adapters/{composite}/versions/{active['ref']['version']}/file",

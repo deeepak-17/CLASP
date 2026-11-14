@@ -14,19 +14,33 @@ from .conftest import make_safetensors
 RESTORE_NFR_SECONDS = 10.0
 
 
-def _upload(client, name, blob=None, kind="client"):
+def _upload(client, name, blob=None, kind="client", active=True):
     r = client.post(
         f"/adapters/{name}/versions",
         files={"file": (f"{name}.safetensors", blob or make_safetensors(), "application/octet-stream")},
-        data={"meta": json.dumps({"kind": kind, "set_active": True})},
+        data={"meta": json.dumps({"kind": kind, "set_active": active})},
     )
     assert r.status_code == 201, r.text
     return r.json()
 
 
+def _promote(client, name, version, *, good=True):
+    from .test_promote_api import _promote_body
+
+    r = client.post(f"/adapters/{name}/promote", json=_promote_body(name, version, good=good))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _live_history(client, name, n=2):
+    """n versions, each uploaded then promoted, so every one was live."""
+    for v in range(1, n + 1):
+        _upload(client, name, active=False)
+        _promote(client, name, v)
+
+
 def test_restore_defaults_to_previous_version(client):
-    _upload(client, "flask")
-    _upload(client, "flask")
+    _live_history(client, "flask")
     r = client.post("/adapters/flask/restore", json={"reason": "bad adapter drill"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -49,11 +63,10 @@ def test_restore_to_explicit_version_and_forward(client):
 
 
 def test_restore_is_recorded_in_the_audit_trail(client):
-    _upload(client, "flask")
-    _upload(client, "flask")
+    _live_history(client, "flask")
     client.post("/adapters/flask/restore", json={"reason": "drill"})
     decisions = client.get("/adapters/flask/promotions").json()["decisions"]
-    assert len(decisions) == 1 and decisions[0]["active_version_after"] == 1
+    assert len(decisions) == 3 and decisions[-1]["active_version_after"] == 1
 
 
 @pytest.mark.parametrize("body,status", [
@@ -69,9 +82,70 @@ def test_restore_validation(client, body, status):
     assert client.post("/adapters/flask/restore", json=body).status_code == status
 
 
-def test_restore_with_no_previous_version_is_409(client):
+def test_restore_with_no_earlier_live_version_is_409(client):
+    _live_history(client, "flask", n=1)
+    r = client.post("/adapters/flask/restore", json={"reason": "x"})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "no earlier live version of flask"
+
+
+def test_default_restore_skips_a_rejected_candidate(client):
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 1)
+    _upload(client, "flask", active=False)
+    assert _promote(client, "flask", 2, good=False)["action"] == "reject"
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 3)
+    r = client.post("/adapters/flask/restore", json={"reason": "drill"})
+    assert r.status_code == 200, r.text
+    assert r.json()["active_version_after"] == 1
+    assert client.get("/adapters/flask/active").json()["ref"]["version"] == 1
+
+
+def test_explicit_restore_to_a_rejected_version_is_409(client):
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 1)
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 2, good=False)
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 3)
+    r = client.post("/adapters/flask/restore", json={"reason": "x", "to_version": 2})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "v2 was rejected and cannot be restored"
+    assert client.get("/adapters/flask/active").json()["ref"]["version"] == 3
+
+
+def test_explicit_restore_to_an_undecided_version_is_allowed(client):
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 1)
+    _upload(client, "flask", active=False)  # v2: never decided
+    r = client.post("/adapters/flask/restore", json={"reason": "operator choice", "to_version": 2})
+    assert r.status_code == 200
+    assert client.get("/adapters/flask/active").json()["ref"]["version"] == 2
+
+
+def test_an_earlier_operator_restore_target_counts_as_live(client):
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 1)
+    _upload(client, "flask", active=False)  # v2 undecided, made live by the operator
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 3)
+    assert client.post("/adapters/flask/restore",
+                       json={"reason": "go", "to_version": 2}).status_code == 200
+    # active v2; v1 was promoted, so the default goes there
+    assert client.post("/adapters/flask/restore", json={"reason": "d"}).json()["active_version_after"] == 1
+    # now active v1 -> forward to 3, then default must land on v2 (an operator target), not skip it
+    client.post("/adapters/flask/restore", json={"reason": "fwd", "to_version": 3})
+    assert client.post("/adapters/flask/restore", json={"reason": "d"}).json()["active_version_after"] == 2
+
+
+def test_versions_live_without_a_decision_record_are_not_default_targets(client):
+    _upload(client, "flask")  # set_active upload, no decision: an older-volume version
     _upload(client, "flask")
-    assert client.post("/adapters/flask/restore", json={"reason": "x"}).status_code == 409
+    r = client.post("/adapters/flask/restore", json={"reason": "x"})
+    assert r.status_code == 409
+    assert client.post("/adapters/flask/restore",
+                       json={"reason": "x", "to_version": 1}).status_code == 200
 
 
 def test_restore_unknown_adapter_404(client):
@@ -94,8 +168,10 @@ def test_restore_nfr_under_10_seconds_on_a_real_sized_adapter(client):
     """D11: restore-to-previous, measured as the edge sees it — repoint the
     pointer, then fetch the active metadata and the full payload back."""
     good, bad = _realistic_adapter(1), _realistic_adapter(2)
-    _upload(client, "flask", good)
-    _upload(client, "flask", bad)
+    _upload(client, "flask", good, active=False)
+    _promote(client, "flask", 1)
+    _upload(client, "flask", bad, active=False)
+    _promote(client, "flask", 2)
 
     start = time.perf_counter()
     client.post("/adapters/flask/restore", json={"reason": "nfr"}).raise_for_status()

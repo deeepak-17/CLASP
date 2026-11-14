@@ -123,3 +123,20 @@ def restore_decision(
         active_version_after=to_version,
         reason=f"{RESTORE_REASON_PREFIX} v{candidate.version} -> v{to_version}{gate}: {reason}",
     )
+
+
+def live_versions(decisions: list[PromotionDecision]) -> set[int]:
+    """Versions that were active at some point, as far as the audit trail knows.
+
+    A version is live if it was promoted, or it is where the pointer went after
+    any recorded decision (operator restores included). Versions activated
+    without a decision record (older volumes, ``set_active`` uploads) are absent.
+    """
+    live = {d.adapter.version for d in decisions if d.action == PromotionAction.PROMOTE}
+    live |= {d.active_version_after for d in decisions if d.active_version_after > 0}
+    return live
+
+
+def rejected_versions(decisions: list[PromotionDecision]) -> set[int]:
+    """Versions that failed D5 and were recorded as REJECT."""
+    return {d.adapter.version for d in decisions if d.action == PromotionAction.REJECT}

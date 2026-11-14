@@ -52,7 +52,7 @@ def test_reject_leaves_the_served_composite_alone(client):
 
 def test_restore_moves_the_served_composite_back(client):
     _promote_v2_with_composite(client)
-    r = client.post("/adapters/flask/restore", json={"reason": "bad adapter drill"})
+    r = client.post("/adapters/flask/restore", json={"reason": "bad adapter drill", "to_version": 1})
     assert r.status_code == 200, r.text
     assert _served_client_version(client) == 1
     assert r.json()["composites"][0]["to_version"] == 1
@@ -63,7 +63,7 @@ def test_restore_rebuilds_a_composite_that_never_existed(client):
     _seed(client)
     _save(client, "flask", make_adapter(3), kind="client", cluster_id="web")
     assert _compose(client).json()["composed_from"]["client_version"] == 2
-    r = client.post("/adapters/flask/restore", json={"reason": "drill"})
+    r = client.post("/adapters/flask/restore", json={"reason": "drill", "to_version": 1})
     assert r.status_code == 200, r.text
     moved = r.json()["composites"]
     assert moved[0]["rebuilt"] is True and moved[0]["to_version"] == 2
@@ -84,7 +84,7 @@ def test_cluster_restore_moves_the_composite_too(client):
     _save(client, "cluster-web", make_adapter(4), kind="cluster", aggregation="svd_exact",
           cluster_id="web", round=2, source_clients=["flask"])
     assert _compose(client).json()["composed_from"]["cluster_version"] == 2
-    r = client.post("/adapters/cluster-web/restore", json={"reason": "bad aggregate"})
+    r = client.post("/adapters/cluster-web/restore", json={"reason": "bad aggregate", "to_version": 1})
     assert r.status_code == 200, r.text
     assert _active(client, COMPOSITE)["composed_from"]["cluster_version"] == 1
 
@@ -93,14 +93,14 @@ def test_composite_pinned_to_another_version_is_left_alone(client):
     _seed(client)
     _save(client, "flask", make_adapter(3), kind="client")  # v2 active
     _compose(client, client={"name": "flask", "version": 1})
-    r = client.post("/adapters/flask/restore", json={"reason": "drill"})
+    r = client.post("/adapters/flask/restore", json={"reason": "drill", "to_version": 1})
     assert r.status_code == 200 and r.json()["composites"] == []
     assert _active(client, COMPOSITE)["ref"]["version"] == 1
 
 
 def test_cascade_is_in_the_composite_audit_trail_and_survives_gc(client):
     _promote_v2_with_composite(client)
-    client.post("/adapters/flask/restore", json={"reason": "drill"})
+    client.post("/adapters/flask/restore", json={"reason": "drill", "to_version": 1})
     decisions = client.get(f"/adapters/{COMPOSITE}/promotions").json()["decisions"]
     assert decisions[-1]["action"] == "rollback"
     assert decisions[-1]["active_version_after"] == 1
@@ -118,7 +118,7 @@ def test_unbuildable_replacement_refuses_and_changes_nothing(client):
     _save(client, "flask", make_adapter(3), kind="client")
     assert _compose(client).status_code == 201
 
-    r = client.post("/adapters/flask/restore", json={"reason": "drill"})
+    r = client.post("/adapters/flask/restore", json={"reason": "drill", "to_version": 1})
     assert r.status_code == 409
     assert "cannot be built" in r.json()["detail"] and "different modules" in r.json()["detail"]
     assert _active(client, "flask")["ref"]["version"] == 2

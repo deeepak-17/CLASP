@@ -200,16 +200,6 @@ class RegistryStore:
                 f"{name} holds kind {existing.value!r}; refusing to add a {kind.value!r} version"
             )
 
-    def previous_version(self, name: str, version: int) -> int | None:
-        """The version immediately before ``version`` in this adapter's history.
-
-        Used by the D5 rule as the rollback target. None if ``version`` is the
-        first version (nothing to fall back to).
-        """
-        vs = self.list_versions(name)
-        earlier = [v for v in vs if v < version]
-        return max(earlier) if earlier else None
-
     # -- promotion audit trail (D5/D9) --------------------------------------- #
     def append_log(self, name: str, log_name: str, line: str) -> None:
         """Append one JSON line to an adapter's append-only log."""

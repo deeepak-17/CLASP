@@ -63,6 +63,8 @@ from .promotion import (
     RESTORE_REASON_PREFIX,
     decide,
     guard_present,
+    live_versions,
+    rejected_versions,
     restore_decision,
 )
 from .retention import RetentionPlan, collect_referenced, default_keep_last, gc_adapter
@@ -387,10 +389,15 @@ def _promote(name: str, body: dict) -> dict:
 def restore(name: str, body: dict = Body(...)) -> dict:
     """Repoint ``active`` by hand — the rollback drill and the D11 restore path.
 
-    Body: ``{"reason": str, "to_version"?: int}``; ``to_version`` defaults to
-    the version before the current active one. Recorded in the audit trail.
-    Composites built from the current active version follow it, as for a D5
-    ROLLBACK; the moves are listed in ``composites``.
+    Body: ``{"reason": str, "to_version"?: int}``. ``to_version`` defaults to
+    the highest version below the active one that *was live* (promoted, or the
+    target of a recorded decision, operator restores included); with none, 409.
+    Versions activated without a decision record (older volumes) are not
+    default targets, but an operator can still name one. An explicit
+    ``to_version`` that was rejected is refused (409); an undecided one is the
+    operator's choice and allowed. Recorded in the audit trail. Composites
+    built from the current active version follow the pointer; the moves are
+    listed in ``composites``.
     """
     with _WRITE_LOCK:
         return _restore(name, body)
@@ -408,14 +415,19 @@ def _restore(name: str, body: dict) -> dict:
     if active is None:
         store.list_versions(name)  # 404 for an unknown adapter
         raise HTTPException(409, f"{name} has no active version to restore from")
+    decisions = store.list_promotions(name)
     if to_version is None:
-        to_version = store.previous_version(name, active)
-        if to_version is None:
-            raise HTTPException(409, f"{name} v{active} is the first version — nothing to restore")
+        live = live_versions(decisions)
+        earlier = [v for v in store.list_versions(name) if v < active and v in live]
+        if not earlier:
+            raise HTTPException(409, f"no earlier live version of {name}")
+        to_version = max(earlier)
     if to_version == active:
         raise HTTPException(409, f"{name} v{to_version} is already active")
 
     store.get_metadata(name, to_version)  # 404 if that version does not exist
+    if to_version in rejected_versions(decisions):
+        raise HTTPException(409, f"v{to_version} was rejected and cannot be restored")
     candidate = store.get_metadata(name, active).ref
     decision = restore_decision(candidate, to_version=to_version, reason=reason.strip())
     cascade = _plan_cascade(name, active, to_version)
