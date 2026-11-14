@@ -13,6 +13,8 @@ dependencies = [
     "safetensors>=0.4",
     # experiment configs (registry.runs)
     "pyyaml>=6",
+    # metadata DB (registry.db), SQLAlchemy Core, no ORM
+    "sqlalchemy>=2.0,<3",
 ]
 
 [project.optional-dependencies]
