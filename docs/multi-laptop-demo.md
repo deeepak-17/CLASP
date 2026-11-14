@@ -97,18 +97,28 @@ One round, end to end (2026-10-14 build):
    the round's updates onto it — FedProx's server step,
    `C_{N+1} = C_N + (1/α)·Σ w_k R_k` — refusing anything trained on another adapter
    (409 stale_adapter). The panel says which rule ran and how ε composes.
-4. **Publish** to the registry (`cluster-<id>`, a new immutable version).
-5. **Back on the edges**: each page pulls the merged adapter laptop A serves (compared by
-   sha256) and the next training starts from it.
-6. **Evaluate** on laptop A: `scripts/evaluate_candidate.py` scores the published version
-   and the one before it on laptop A's GPU, each as base + α·cluster: in-project
-   completion on the noise-band client's held-out files and the 20-problem HumanEval
-   guard on P5's executor. Several minutes; results are cached by sha256. It runs in
-   demo_ui's own environment, so start laptop A with `run_services.py` from the `.venv`
-   (torch + CUDA); the docker demo-ui image has no GPU stack.
-7. **Promote**: the registry's D5 rule on those measurements of that exact version. On a
-   ROLLBACK the cluster serves the restored version again, the edges pull it, and the
-   next round builds on it.
+   The merge is the cluster's **candidate**: the edges keep pulling the adapter the
+   cluster already serves, and the next merge waits until this one is decided. The edge
+   page's step 4 reads "Awaiting evaluation".
+4. **Publish** the candidate to the registry (`cluster-<id>`, a new immutable version,
+   inactive: nothing is served from it yet).
+5. **Evaluate** on laptop A: `scripts/evaluate_candidate.py` scores the candidate (the
+   newest version above the active one) and the active version, each as base + α·cluster
+   — or, when nothing is active yet, the bare base model with no adapter: in-project
+   completion on the noise-band client's held-out files and the line-completion guard
+   (300 frozen examples). Several minutes; results are cached by sha256 (the bare base
+   under `base`). It runs in demo_ui's own environment, so start laptop A with
+   `run_services.py` from the `.venv` (torch + CUDA); the docker demo-ui image has no GPU
+   stack.
+6. **Promote**: the registry's D5 rule on those measurements of that exact version. The
+   panel then tells the cluster: on PROMOTE `candidate/promote` (the registry's sha256 for
+   that version), on REJECT `candidate/reject`. The panel shows "Promoted" or
+   "Rejected".
+7. **Back on the edges**: after a promote, each page pulls the merged adapter laptop A now
+   serves (it pulls only when `active_sha256` changes) and the next training starts from
+   it; step 4 reads "Merged and promoted". After a reject nothing is pulled: the edges
+   keep the adapter they have, step 4 reads "Rejected, previous adapter kept", and the
+   next round trains on it.
 
 The results are on the dashboard at `http://<A>:8005`.
 
@@ -120,8 +130,11 @@ judged: the panel asks for Evaluate first. `CLASP_EVAL_EVIDENCE` still lets an o
 supply an evaluation file explicitly (format in `demo_ui/evidence.py`). The noise band
 is P5's `noise_report.json` (0.0, deterministic decoding).
 
-D5 needs a previous version to compare with, so Evaluate and Promote are enabled once a
-cluster has two versions.
+Evaluate and Promote are enabled while a cluster has a candidate. The first candidate is
+compared against the bare base model; later ones against the version the registry
+serves. A rejected candidate is never served, and an operator restore (registry
+`/restore`, cluster `/clusters/{id}/adapters/active/restore`) only returns to a version
+that was live.
 
 ## Verified (2026-10-09, one Windows laptop with an RTX 2050, LAN address 10.214.204.34)
 

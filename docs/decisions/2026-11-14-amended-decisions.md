@@ -74,6 +74,20 @@ code win.
 - **Reason:** HumanEval tests docstring-to-function synthesis, not CLASP's
   in-project completion, and on the 20-problem subset the project uses one
   problem is 5 points, so a 2-point tolerance is below its resolution.
+- **Promotion flow, as written:** a new version became active on upload and a
+  failed D5 check rolled `active` back to the previous version.
+- **Promotion flow, as built:** a published version is a candidate; promotion
+  makes it live; a rejected candidate is never served. Uploads are inactive;
+  the registry judges the candidate (newer than the active version) against
+  the active version, or against the bare base model when nothing is active.
+  PROMOTE makes it active; REJECT records the decision and leaves `active`
+  where it was. The cluster holds its aggregate as a candidate and serves it
+  to the edges only after `candidate/promote`; `candidate/reject` drops it.
+  An operator restore (`/restore`) can return to an earlier version that was
+  live, never to a rejected one.
+- **Reason:** with auto-activation every edge could pull a merge in the
+  window between upload and the D5 decision, so a candidate that later failed
+  was briefly served and trained on.
 
 ## Base model
 

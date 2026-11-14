@@ -52,9 +52,9 @@ overwritten in place.
   └────────┘                  └─────────┘                   └──────────┘               └────────────┘
        ▲                             │
        └─────────────────────────────┘
-         merged cluster adapter (Cluster → Edge); the edge merges it
+         promoted cluster adapter (Cluster → Edge); the edge merges it
          with its own client layer. Evaluation → Registry: results go to
-         `/promote`, which repoints `active` (promote / rollback, D5).
+         `/promote`, which makes the candidate active or rejects it (D5).
 ```
 
 1. **Edge → Cluster** (`AdapterUpload`): each client trains a LoRA on its repo
@@ -71,11 +71,19 @@ overwritten in place.
    in-project metrics (edit similarity, exact match, perplexity on the client's
    held-out files) plus the line-completion guard numbers (HumanEval/MBPP and
    PY150 are reported only).
-5. **Promotion (D5, two-sided)**: the registry promotes a version iff in-project
-   improves beyond the measured noise band **and** the line-completion guard's
-   edit similarity drops by at most 0.02 (D5);
-   otherwise it repoints `active` to the previous version (rollback). Never gated
-   on Pass@k alone.
+5. **Promotion (D5, two-sided)**: a published version is a candidate;
+   promotion makes it live; a rejected candidate is never served. The cluster's
+   aggregate is its candidate and is published to the registry inactive; the
+   edges keep pulling the active adapter. The registry promotes the candidate
+   iff in-project improves beyond the measured noise band over the active
+   version (the bare base model when nothing is active yet) **and** the
+   line-completion guard's edit similarity drops by at most 0.02 (D5).
+   PROMOTE moves `active` to the candidate; otherwise the decision is REJECT
+   and `active` stays where it was. The cluster is then told the same
+   (`candidate/promote` or `candidate/reject`, by the registry's sha256), and
+   only a promoted aggregate is served to the edges. Never gated on Pass@k
+   alone. Moving `active` back to an earlier live version is a separate,
+   recorded operator restore (`/restore`), never automatic.
 
 ### 3a. Status of the four seams (Integration Sprint, Panel Review 2)
 
