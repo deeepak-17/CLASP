@@ -271,7 +271,8 @@ def _already_done(row: dict, cluster: dict | None) -> bool:
 
 
 async def _apply_cluster_step(client: httpx.AsyncClient, row: dict) -> tuple[bool, dict]:
-    """Send one row's step to its cluster: (landed, result or ``{"error": ...}``)."""
+    """Send one row's step to its cluster: (landed, result or ``{"error": ...}``).
+    An error with ``conflict`` is a 409 that does not show the step as in effect."""
     what = f"cluster candidate/{row['action']}"
     try:
         cr = await _send(client, "POST",
@@ -281,13 +282,28 @@ async def _apply_cluster_step(client: httpx.AsyncClient, row: dict) -> tuple[boo
             return True, cr.json()
         if cr.status_code == 409:
             listing = await _send(client, "GET", f"{CLUSTER_BASE}/clusters")
-            cluster = (listing.json().get("clusters") or {}).get(row["cluster_id"])                 if listing.status_code == 200 else None
+            cluster = (listing.json().get("clusters") or {}).get(row["cluster_id"]) \
+                if listing.status_code == 200 else None
             if _already_done(row, cluster):
                 return True, {"already_applied": True,
                               "active_sha256": (cluster or {}).get("active_sha256")}
+            return False, {"error": _step_error(what, resp=cr), "conflict": True}
         return False, {"error": _step_error(what, resp=cr)}
     except (HTTPException, httpx.HTTPError, ValueError) as e:
         return False, {"error": _step_error(what, exc=e)}
+
+
+async def _report_sync(client: httpx.AsyncClient, row: dict, landed: bool,
+                       error: str | None) -> str | None:
+    """``POST /sync/{id}/done``; the error text when the registry could not be told."""
+    try:
+        rep = await _send(client, "POST", f"{REGISTRY_BASE}/sync/{row['id']}/done",
+                          json={"ok": landed, "error": error})
+        if rep.status_code != 200:
+            return _step_error("registry POST /sync/done", resp=rep)
+    except (HTTPException, httpx.HTTPError) as e:
+        return _step_error("registry POST /sync/done", exc=e)
+    return None
 
 
 async def _reconcile_cluster_sync(client: httpx.AsyncClient) -> dict:
@@ -295,41 +311,71 @@ async def _reconcile_cluster_sync(client: httpx.AsyncClient) -> dict:
     report each outcome (``POST /sync/{id}/done``). Never raises: a step that
     does not land stays pending in the registry, and is returned here.
 
+    Rows apply per cluster in id order; once one stays pending the cluster's
+    later rows wait for the next pass. A ``promote`` the cluster answers 409 to
+    (it is neither serving that sha nor holding it as its candidate) is
+    superseded, and marked done, when a later row of the cluster is already done
+    or lands in this pass.
+
     Returns ``{"pending": [rows still open, with attempts and last_error],
-    "results": {sync id: {adapter, version, landed, result}}, "error": why the list itself was unavailable}``.
+    "results": {sync id: {adapter, version, landed, result}}, "error": why the
+    list itself was unavailable}``.
     """
     global _reconciling
     while _reconciling:
         await asyncio.sleep(0.05)
     _reconciling = True
     try:
-        results: dict[int, dict] = {}  # sync id -> adapter, version, landed, result
+        results: dict[int, dict] = {}
+
+        def record(row: dict, landed: bool, result: dict) -> None:
+            results[row["id"]] = {"adapter": row["adapter"], "version": row["version"],
+                                  "landed": landed, "result": result}
+
         try:
             r = await _send(client, "GET", f"{REGISTRY_BASE}/sync/pending")
             if r.status_code != 200:
                 return {"pending": [], "results": results,
                         "error": _step_error("registry GET /sync/pending", resp=r)}
-            rows = r.json()["pending"]
+            rows = sorted(r.json()["pending"], key=lambda x: x["id"])
         except (HTTPException, httpx.HTTPError, ValueError, KeyError) as e:
             return {"pending": [], "results": results,
                     "error": _step_error("registry GET /sync/pending", exc=e)}
-        still = []
-        for row in rows:
-            landed, result = await _apply_cluster_step(client, row)
-            error = None if landed else result["error"]
-            try:
-                rep = await _send(client, "POST", f"{REGISTRY_BASE}/sync/{row['id']}/done",
-                                  json={"ok": landed, "error": error})
-                if rep.status_code != 200:
-                    landed, result = False, {"error": _step_error("registry POST /sync/done", resp=rep)}
-                    error = result["error"]
-            except (HTTPException, httpx.HTTPError) as e:
-                landed, result = False, {"error": _step_error("registry POST /sync/done", exc=e)}
-                error = result["error"]
-            results[row["id"]] = {"adapter": row["adapter"], "version": row["version"],
-                                   "landed": landed, "result": result}
+        still: list[dict] = []
+        blocked: set[str] = set()                 # clusters with a row left pending
+        held: dict[str, list[tuple[dict, dict]]] = {}  # 409 promotes awaiting a later row
+
+        async def finish(row: dict, landed: bool, result: dict, error: str | None) -> None:
+            lost = await _report_sync(client, row, landed, error)
+            if lost:
+                landed, result, error = False, {"error": lost}, lost
+            record(row, landed, result)
             if not landed:
                 still.append({**row, "attempts": row["attempts"] + 1, "last_error": error})
+                blocked.add(row["cluster_id"])
+
+        for row in rows:
+            cid = row["cluster_id"]
+            if cid in blocked:
+                still.append(row)  # waits for the earlier row
+                continue
+            landed, result = await _apply_cluster_step(client, row)
+            if not landed and result.get("conflict") and row["action"] == "promote":
+                if row.get("superseded_by") is not None:
+                    await finish(row, True, {"superseded_by": row["superseded_by"]},
+                                 f"superseded by sync {row['superseded_by']}")
+                else:
+                    held.setdefault(cid, []).append((row, result))
+                continue
+            await finish(row, landed, result, None if landed else result["error"])
+            if landed:
+                for old, _ in held.pop(cid, []):
+                    await finish(old, True, {"superseded_by": row["id"]},
+                                 f"superseded by sync {row['id']}")
+        for pend in held.values():  # nothing later landed: they stay pending
+            for old, result in pend:
+                await finish(old, False, result, result["error"])
+        still.sort(key=lambda x: x["id"])
         return {"pending": still, "results": results, "error": None}
     finally:
         _reconciling = False
@@ -474,18 +520,26 @@ async def live_publish(cluster_id: str) -> dict:
     return {"version": summary}
 
 
-def _cluster_outcome(sync: dict, name: str, version: int) -> dict:
-    """What happened to this decision's cluster step: the cluster's answer, or
-    ``error`` (with ``pending``) while it has not landed."""
+def _cluster_outcome(sync: dict, sync_id: int | None) -> dict:
+    """What happened to the cluster step recorded with this decision
+    (``sync_id``): the cluster's answer, ``applied`` when an earlier
+    reconciliation already finished it, or ``error`` (with ``pending``) while it
+    has not landed."""
+    if sync_id is None:
+        return {"error": "the registry recorded no cluster step for this decision"}
     if sync["error"]:
         return {"pending": True, "error": f"{sync['error']} (cluster not yet updated; will retry)"}
-    for entry in sync["results"].values():
-        if (entry["adapter"], entry["version"]) == (name, version):
-            if entry["landed"]:
-                return entry["result"]
-            return {"pending": True,
-                    "error": f"{entry['result']['error']} (cluster not yet updated; will retry)"}
-    return {"error": "the registry recorded no cluster step for this decision"}
+    entry = sync["results"].get(sync_id)
+    if entry is not None:
+        if entry["landed"]:
+            return entry["result"]
+        return {"pending": True,
+                "error": f"{entry['result']['error']} (cluster not yet updated; will retry)"}
+    for row in sync["pending"]:
+        if row["id"] == sync_id:  # waiting behind an earlier step of the cluster
+            why = row.get("last_error") or "waiting for an earlier cluster step"
+            return {"pending": True, "error": f"{why} (cluster not yet updated; will retry)"}
+    return {"applied": True}  # rows leave pending only when done: a state poll got there first
 
 
 @app.post("/api/live/promote/{cluster_id}")
@@ -531,7 +585,14 @@ async def live_promote(cluster_id: str) -> dict:
         # the registry recorded the cluster's step with its decision; apply it
         # now, and if it does not land the next state call retries it
         sync = await _reconcile_cluster_sync(client)
-    cluster_result = _cluster_outcome(sync, name, cand)
+    cluster_result = _cluster_outcome(sync, decision.get("cluster_sync_id"))
+    if cluster_result.get("applied"):
+        async with _client(10.0) as client:  # show what the cluster serves now
+            try:
+                lst = await _send(client, "GET", f"{CLUSTER_BASE}/clusters")
+                cluster_result["active_sha256"] = lst.json()["clusters"][cid]["active_sha256"]
+            except (HTTPException, httpx.HTTPError, ValueError, KeyError):
+                pass
     sent = {k: body["eval"][k] for k in ("in_project", "baseline_in_project", "guard",
                                          "baseline_noise_band")}
     sent["baseline_guard"] = body["baseline_guard"]

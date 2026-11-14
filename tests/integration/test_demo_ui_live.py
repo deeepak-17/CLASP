@@ -490,3 +490,127 @@ def test_a_reject_whose_candidate_is_gone_counts_as_done(stack, tmp_path, monkey
     sent.clear()
     ui.get("/api/live/state")
     assert _cluster_steps(sent) == []
+
+
+# --------------------------------------------------------------------------- #
+# A state poll that finishes the step first; steps apply in order per cluster
+# --------------------------------------------------------------------------- #
+def test_a_poll_that_finished_the_step_first_is_not_reported_as_an_error(stack, tmp_path,
+                                                                         monkeypatch):
+    ui, cluster_url, registry_url = stack
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    real = panel._reconcile_cluster_sync
+    polls = []
+
+    async def poll_first(client):
+        if not polls:  # a page poll's reconciliation runs between the registry POST and ours
+            polls.append(await real(client))
+        return await real(client)
+
+    monkeypatch.setattr(panel, "_reconcile_cluster_sync", poll_first)
+    body = ui.post("/api/live/promote/web")
+    assert body.status_code == 200, body.text
+    body = body.json()
+    assert body["decision"]["cluster_sync_id"] is not None
+    assert "error" not in body["cluster"] and body["cluster"]["step"] == "promote"
+    assert body["cluster"]["applied"] is True and body["cluster"]["active_sha256"] == v1["sha256"]
+    assert "error" not in panel._live["web"]["promote"]["cluster"]
+    assert _registry_pending(registry_url) == []
+
+
+def _blob() -> bytes:
+    import struct
+
+    header = json.dumps({"t": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}}).encode()
+    return struct.pack("<Q", len(header)) + header + struct.pack("<f", 1.0)
+
+
+def _decide_cluster_version(registry_url, version: int, good: bool) -> int:
+    """Upload version ``version`` of cluster-web (a candidate) and decide it; the sync row id."""
+    import requests
+
+    r = requests.post(f"{registry_url}/adapters/cluster-web/versions",
+                      files={"file": ("a.safetensors", _blob(), "application/octet-stream")},
+                      data={"meta": json.dumps({"kind": "cluster", "cluster_id": "web",
+                                                "set_active": False})}, timeout=10)
+    assert r.status_code == 201 and r.json()["ref"]["version"] == version, r.text
+    guard = [{"benchmark": "LineCompletion", "edit_similarity": 0.6 if good else 0.4,
+              "exact_match": 0.3, "n_examples": 300, "pass_at_k": {}}]
+    def measured(es):
+        return {"edit_similarity": es, "exact_match": 0.5, "perplexity": 3.0, "n_examples": 20}
+
+    r = requests.post(f"{registry_url}/adapters/cluster-web/promote", timeout=10, json={
+        "eval": {"adapter": {"name": "cluster-web", "version": version, "kind": "cluster",
+                             "cluster_id": "web"},
+                 "in_project": measured(0.8 if good else 0.705), "guard": guard,
+                 "baseline_in_project": measured(0.7), "baseline_noise_band": 0.02},
+        "baseline_guard": [{**guard[0], "edit_similarity": 0.6}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["action"] == ("promote" if good else "reject")
+    return r.json()["cluster_sync_id"]
+
+
+def _script_cluster(monkeypatch, answers: list) -> list:
+    """Answer the panel's candidate/<step> calls from ``answers`` (one status per call, in
+    order) and record (step, sha) of each; every other request goes through."""
+    calls, real_send = [], panel._send
+
+    async def scripted(client, method, url, **kw):
+        if "/adapters/candidate/" in url:
+            calls.append((url.rsplit("/", 1)[1], kw["json"]["sha256"]))
+            status = answers.pop(0)
+            return httpx.Response(status, json={"active_sha256": "x"} if status == 200 else
+                                  {"detail": {"error": "scripted"}},
+                                  request=httpx.Request(method, url))
+        return await real_send(client, method, url, **kw)
+
+    import httpx
+
+    monkeypatch.setattr(panel, "_send", scripted)
+    return calls
+
+
+def test_a_failed_reject_holds_back_the_later_promote_of_the_cluster(stack, monkeypatch):
+    ui, _, registry_url = stack
+    reject_id = _decide_cluster_version(registry_url, 1, good=False)
+    promote_id = _decide_cluster_version(registry_url, 2, good=True)
+    assert reject_id < promote_id
+    calls = _script_cluster(monkeypatch, [500, 200, 200])
+
+    state = ui.get("/api/live/state").json()  # the reject fails: the promote is not even sent
+    assert [step for step, _ in calls] == ["reject"]
+    assert [p["id"] for p in state["cluster_sync"]] == [reject_id, promote_id]
+    assert [p["attempts"] for p in _registry_pending(registry_url)] == [1, 0]
+
+    state = ui.get("/api/live/state").json()  # next pass: the reject lands, then the promote
+    assert [step for step, _ in calls] == ["reject", "reject", "promote"]
+    assert state["cluster_sync"] == [] and _registry_pending(registry_url) == []
+
+
+def test_a_superseded_promote_stops_being_pending(stack, monkeypatch):
+    ui, _, registry_url = stack
+    old_id = _decide_cluster_version(registry_url, 1, good=True)
+    new_id = _decide_cluster_version(registry_url, 2, good=True)
+    # the cluster refuses the old promote (409: not its candidate, not serving it) and takes the new
+    calls = _script_cluster(monkeypatch, [409, 200])
+    state = ui.get("/api/live/state").json()
+    assert [step for step, _ in calls] == ["promote", "promote"]
+    assert state["cluster_sync"] == [] and _registry_pending(registry_url) == []
+    assert old_id < new_id
+
+
+def test_a_promote_behind_an_already_done_later_row_is_superseded(stack, monkeypatch):
+    import requests
+
+    ui, _, registry_url = stack
+    old_id = _decide_cluster_version(registry_url, 1, good=True)
+    new_id = _decide_cluster_version(registry_url, 2, good=True)
+    assert requests.post(f"{registry_url}/sync/{new_id}/done",
+                         json={"ok": True}, timeout=10).status_code == 200
+    (row,) = _registry_pending(registry_url)
+    assert row["id"] == old_id and row["superseded_by"] == new_id
+    calls = _script_cluster(monkeypatch, [409])
+    assert ui.get("/api/live/state").json()["cluster_sync"] == []
+    assert [step for step, _ in calls] == ["promote"] and _registry_pending(registry_url) == []

@@ -309,7 +309,8 @@ class SqlMetadataRepository:
             ).inserted_primary_key[0]
 
     def pending_cluster_sync(self) -> list[dict[str, Any]]:
-        """Pending rows, oldest first, each with the ``adapter`` and ``version`` decided."""
+        """Pending rows, oldest first, each with the ``adapter`` and ``version`` decided
+        and ``superseded_by``: the id of a later *done* row for the same cluster, if any."""
         with self._connection() as conn:
             rows = conn.execute(
                 select(
@@ -323,7 +324,16 @@ class SqlMetadataRepository:
                 .where(cluster_sync.c.status == "pending")
                 .order_by(cluster_sync.c.id)
             ).mappings()
-            return [dict(r) for r in rows]
+            out = [dict(r) for r in rows]
+            for row in out:
+                row["superseded_by"] = conn.execute(
+                    select(func.max(cluster_sync.c.id)).where(
+                        cluster_sync.c.cluster_id == row["cluster_id"],
+                        cluster_sync.c.status == "done",
+                        cluster_sync.c.id > row["id"],
+                    )
+                ).scalar()
+            return out
 
     def mark_cluster_sync(self, sync_id: int, *, done: bool, error: str | None = None) -> bool:
         """Mark a row done, or count a failed attempt (only while it is pending).

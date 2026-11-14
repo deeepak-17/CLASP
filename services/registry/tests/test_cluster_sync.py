@@ -82,3 +82,26 @@ def test_done_body_is_validated(client):
     assert client.post("/sync/1/done", json={"error": "x"}).status_code == 422
     assert client.post("/sync/1/done", json={"ok": "yes"}).status_code == 422
     assert client.post("/sync/1/done", json={"ok": False, "error": 5}).status_code == 422
+
+
+def test_promote_answers_with_the_id_of_its_sync_row(client):
+    _candidate(client)
+    decision = _decide(client)
+    (row,) = _pending(client)
+    assert decision["cluster_sync_id"] == row["id"]
+
+
+def test_promote_without_a_cluster_id_answers_null(client):
+    _save(client, "flask", make_adapter(1), kind="client", set_active=False)
+    assert _decide(client, "flask", kind="client")["cluster_sync_id"] is None
+
+
+def test_a_pending_row_names_the_later_done_row_that_supersedes_it(client):
+    _candidate(client)
+    first = _decide(client)["cluster_sync_id"]
+    _save(client, "cluster-web", make_adapter(2), kind="cluster", cluster_id="web", set_active=False)
+    second = _decide(client, version=2)["cluster_sync_id"]
+    assert [r["superseded_by"] for r in _pending(client)] == [None, None]
+    client.post(f"/sync/{second}/done", json={"ok": True})
+    (row,) = _pending(client)
+    assert row["id"] == first and row["superseded_by"] == second

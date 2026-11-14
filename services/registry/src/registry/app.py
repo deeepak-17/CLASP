@@ -20,6 +20,13 @@ Endpoints:
     GET  /sync/pending                             cluster steps of decisions not yet applied
     POST /sync/{id}/done                           report one: {"ok": bool, "error"?: str}
 
+``POST /adapters/{name}/promote`` answers with the decision plus ``cluster_sync_id``,
+the id of the ``cluster_sync`` row written in its transaction (null when the
+version has no ``cluster_id``). Each ``/sync/pending`` row carries ``id``,
+``adapter``, ``version``, ``cluster_id``, ``sha256``, ``action``, ``attempts``,
+``last_error`` (why the last attempt failed) and ``superseded_by`` (the id of a
+later row of the same cluster that is already done, else null).
+
 A decision on a cluster adapter also has to reach the cluster service (switch
 to the candidate, or drop it), which cannot share the registry's database
 transaction. The promotion transaction therefore writes a ``cluster_sync`` row;
@@ -432,6 +439,7 @@ def _promote(name: str, body: dict) -> dict:
             store, *_composite_on_promote(body["composite"], name, version))
 
     written = _newly_written(store, [composite] if composite is not None else [])
+    sync_id = None
     with _discard_on_failure(store, written), store.repo.transaction():
         if composite is not None:
             register_composite(store.repo, composite)
@@ -440,11 +448,12 @@ def _promote(name: str, body: dict) -> dict:
         decision_id = store.record_promotion(name, decision)
         if candidate.ref.cluster_id:
             # the cluster must switch to this candidate (promote) or drop it (reject)
-            store.repo.add_cluster_sync(decision_id, candidate.ref.cluster_id, candidate.sha256,
+            sync_id = store.repo.add_cluster_sync(decision_id, candidate.ref.cluster_id, candidate.sha256,
                                         "promote" if promoted else "reject")
 
     result = _promotion_decision_to_dict(decision)
     result["composites"] = []  # only an operator restore moves the pointer back
+    result["cluster_sync_id"] = sync_id  # the cluster step recorded with this decision, if any
     if wants_composite:
         result["composite"] = _metadata_to_dict(composite) if composite is not None else None
     return result
@@ -590,7 +599,8 @@ def list_promotions(name: str) -> dict:
 @app.get("/sync/pending")
 def sync_pending() -> dict:
     """Cluster promote/reject steps recorded with a decision and not yet applied."""
-    keys = ("id", "adapter", "version", "cluster_id", "sha256", "action", "attempts", "last_error")
+    keys = ("id", "adapter", "version", "cluster_id", "sha256", "action", "attempts", "last_error",
+            "superseded_by")
     return {"pending": [{k: row[k] for k in keys}
                         for row in get_store().repo.pending_cluster_sync()]}
 
