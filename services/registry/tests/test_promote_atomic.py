@@ -89,16 +89,41 @@ def test_failure_inside_the_transaction_leaves_no_trace(client, store, monkeypat
     monkeypatch.undo()
 
     assert _state(store) == before  # pointer, decision, composite row, sync row: none
-    orphan = store.adapters_dir / COMPOSITE / "v2"
-    assert orphan.is_dir()  # the files were written before the transaction ...
-    assert client.get(f"/adapters/{COMPOSITE}/versions/2/file").status_code == 404  # ... never served
-    assert sweep_orphans(store) == [str(orphan)]
-    assert not orphan.exists()
+    # the files were written before the transaction; the failure path removed them
+    assert not (store.adapters_dir / COMPOSITE / "v2").exists()
+    assert client.get(f"/adapters/{COMPOSITE}/versions/2/file").status_code == 404
+    assert sweep_orphans(store) == []
 
     # and the same promotion now goes through, under the same version number
     r = client.post("/adapters/flask/promote", json=_composite_body())
     assert r.status_code == 200, r.text
     assert r.json()["composite"]["ref"]["version"] == 2
+
+
+def test_a_failed_promote_with_a_composite_can_be_retried_at_once(client, store, monkeypatch):
+    """No sweep between the failure and the retry: the failure path itself
+    removed the composite directory, so the retry is not a 409."""
+    _seed(client)
+    assert _compose(client).status_code == 201
+    _save(client, "flask", make_adapter(3), kind="client", cluster_id="web", set_active=False)
+
+    monkeypatch.setattr(store.repo, "add_cluster_sync", _boom)
+    assert client.post("/adapters/flask/promote", json=_composite_body()).status_code == 500
+    monkeypatch.undo()
+
+    r = client.post("/adapters/flask/promote", json=_composite_body())
+    assert r.status_code == 200, r.text
+    assert store.list_versions(COMPOSITE) == [1, 2]  # the composite exists exactly once
+    assert sorted(p.name for p in (store.adapters_dir / COMPOSITE).iterdir()) == ["v1", "v2"]
+    assert store.get_active(COMPOSITE) == 2
+    assert len(store.repo.pending_cluster_sync()) == 1
+
+
+def test_the_failure_path_never_removes_a_registered_version(store, safetensors_blob):
+    store.save("flask", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    assert store.discard_unregistered("flask", 1) is False
+    assert store.discard_unregistered("flask", 9) is False  # nothing there
+    assert store.load_payload("flask", 1) == safetensors_blob
 
 
 @pytest.mark.parametrize("good,action", [(True, "promote"), (False, "reject")])
@@ -229,8 +254,20 @@ def test_the_sweep_runs_when_the_store_is_created_and_at_every_gc(client, safete
 
     for route in ("/adapters/flask/gc", "/gc"):
         (root / "v5").mkdir()
-        assert client.post(route, json={"dry_run": True}).status_code == 200
+        assert client.post(route, json={"dry_run": False}).status_code == 200
         assert not (root / "v5").exists(), route
+
+
+@pytest.mark.parametrize("route", ["/adapters/flask/gc", "/gc"])
+def test_a_dry_run_gc_leaves_orphans_and_a_real_gc_removes_them(client, safetensors_blob, route):
+    _save(client, "flask", safetensors_blob, kind="client")
+    orphan = Path(os.environ["CLASP_REGISTRY_DATA"]) / "adapters" / "flask" / "v5"
+    orphan.mkdir()
+    assert client.post(route, json={}).status_code == 200  # dry run is the default
+    assert client.post(route, json={"dry_run": True}).status_code == 200
+    assert orphan.is_dir()
+    assert client.post(route, json={"dry_run": False}).status_code == 200
+    assert not orphan.exists()
 
 
 def test_gc_validation_errors_sweep_nothing(client, safetensors_blob):
@@ -265,8 +302,10 @@ def test_restore_moves_pointer_decision_and_cascade_together(client, store, monk
     monkeypatch.undo()
 
     assert _state(store) == before  # flask pointer + decision rolled back with the cascade
-    swept = sweep_orphans(store)
-    assert swept == ([str(store.adapters_dir / COMPOSITE / "v2")] if rebuild else [])
+    # a rebuild wrote composite v2's files; the failure path removed them
+    if rebuild:
+        assert not (store.adapters_dir / COMPOSITE / "v2").exists()
+    assert sweep_orphans(store) == []
 
     r = client.post("/adapters/flask/restore", json={"reason": "drill", "to_version": 1})
     assert r.status_code == 200, r.text

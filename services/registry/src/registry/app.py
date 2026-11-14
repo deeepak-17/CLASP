@@ -30,8 +30,11 @@ corrupt on-disk record -> a clean 500 with the reason, never a traceback.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 
 from contracts import (
@@ -100,6 +103,7 @@ DEFAULT_MAX_UPLOAD = 1024 * 1024 * 1024
 
 _store: RegistryStore | None = None
 _WRITE_LOCK = threading.RLock()
+_log = logging.getLogger(__name__)
 
 
 def get_store() -> RegistryStore:
@@ -363,6 +367,29 @@ def promote(name: str, body: dict = Body(...)) -> dict:
         return _promote(name, body)
 
 
+def _newly_written(store: RegistryStore, metas: list) -> list:
+    """The composites among ``metas`` whose files this call wrote (no row yet).
+
+    Under the write lock a row-less directory at that number can only be ours;
+    ``write_composite_files`` returns an existing (registered) one on reuse."""
+    return [m for m in metas if m.ref.version not in store.list_versions(m.ref.name)]
+
+
+@contextmanager
+def _discard_on_failure(store: RegistryStore, written: list) -> Iterator[None]:
+    """If the block fails, remove the version directories it was to register, so
+    an immediate retry gets the same numbers. The sweep stays the crash net."""
+    try:
+        yield
+    except BaseException:
+        for meta in written:
+            try:
+                store.discard_unregistered(meta.ref.name, meta.ref.version)
+            except Exception:  # never mask the original failure; the sweep retries
+                _log.exception("could not discard %s v%s", meta.ref.name, meta.ref.version)
+        raise
+
+
 def _promote(name: str, body: dict) -> dict:
     store = get_store()
     eval_result, baseline_guard = _parse_promote_body(body)
@@ -395,7 +422,8 @@ def _promote(name: str, body: dict) -> dict:
         composite = write_composite_files(
             store, *_composite_on_promote(body["composite"], name, version))
 
-    with store.repo.transaction():
+    written = _newly_written(store, [composite] if composite is not None else [])
+    with _discard_on_failure(store, written), store.repo.transaction():
         if composite is not None:
             register_composite(store.repo, composite)
         if promoted:
@@ -461,7 +489,8 @@ def _restore(name: str, body: dict) -> dict:
     # rebuilt composites' files first; the pointer, decision and every
     # composite move then commit together (unregistered files: orphan sweep)
     cascade = write_cascade_files(store, _plan_cascade(name, active, to_version))
-    with store.repo.transaction():
+    written = _newly_written(store, [s.written for s in cascade if s.written is not None])
+    with _discard_on_failure(store, written), store.repo.transaction():
         store.set_active(name, to_version)
         store.record_promotion(name, decision)
         moved = apply_cascade(store, cascade, action=decision.action,
@@ -509,7 +538,8 @@ def _gc_one(name: str, body: dict) -> dict:
     keep_last, dry_run = _parse_gc_body(body)
     store = get_store()
     store.list_versions(name)  # 404 / 422 before the sweep writes anything
-    sweep_orphans(store)
+    if not dry_run:  # a dry run changes nothing
+        sweep_orphans(store)
     plan = gc_adapter(store, name, keep_last=keep_last, dry_run=dry_run)
     return _gc_report(name, plan, dry_run)
 
@@ -524,7 +554,8 @@ def gc_all(body: dict = Body(default={})) -> dict:
 def _gc_all(body: dict) -> dict:
     keep_last, dry_run = _parse_gc_body(body)
     store = get_store()
-    sweep_orphans(store)
+    if not dry_run:  # a dry run changes nothing
+        sweep_orphans(store)
     referenced = collect_referenced(store)
     reports = []
     for name in store.list_adapters():

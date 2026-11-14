@@ -251,6 +251,20 @@ class RegistryStore:
         os.replace(vdir, trash / "v")
         shutil.rmtree(trash, ignore_errors=True)
 
+    def discard_unregistered(self, name: str, version: int) -> bool:
+        """Remove ``vN``'s directory if no row registers it; True if it was removed.
+
+        For a caller undoing its own ``write_version_files`` after the
+        registering transaction failed. A registered version is never touched.
+        """
+        if version in self.repo.list_versions(_validate_name(name)):
+            return False
+        vdir = self._version_dir(name, version)
+        if not vdir.exists():
+            return False
+        shutil.rmtree(vdir, ignore_errors=True)
+        return not vdir.exists()
+
     def save(
         self,
         name: str,
