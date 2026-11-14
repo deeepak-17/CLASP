@@ -99,7 +99,8 @@ State is in-memory and keyed by `cluster_id` (D1: `web`, `scientific`); durable 
 | Redistribution + retry | `cluster/redistribution.py` | `build_broadcast` / `adapter_from_broadcast` round-trip; `redistribute` retries per client with exponential backoff and returns a `DeliveryReport` |
 | Multi-cluster rounds + isolation | `cluster/federation.py` | `MultiClusterFederation`: per-cluster FedProx round, SVD aggregation, redistribution; `isolation_violations()` |
 | Clustering | `cluster/clustering.py` | flatten delta_W update -> cosine matrix (also computed from the LoRA factors without forming delta_W) -> k-means (k=2) -> `ClusterAssigner`: warm start, dynamic re-clustering after round 2, static fallback, dynamic-vs-warm-start comparison |
-| Seams for other modules | `cluster/tls.py`, `cluster/integration.py`, `server.configure_identity` / `configure_snapshot_sink` | **Hooks only, not wired at startup.** See the limits below |
+| mTLS launcher | `cluster/serve.py`, `cluster/healthcheck.py` | `python -m cluster.serve` (the container's command): plain HTTP, or mTLS + TLS 1.3 when `CLASP_TLS_CERT/KEY/CA` are set, with uploads bound to the client certificate's CN |
+| Seams for other modules | `cluster/integration.py`, `server.configure_snapshot_sink` | **Hook only, not wired at startup.** See the limits below |
 
 Re-clustering uses each client's *update* (`delta_W(returned) - delta_W(adapter it started from)`).
 Order inside a round: every cluster aggregates the clients that trained from its adapter,
@@ -115,12 +116,14 @@ client returns non-finite tensors, which are rejected at the adapter-format boun
 
 ## Known limits
 
-* **mTLS is not finished and is not wired into the running service.** `client_id` on the HTTP path is
-  self-asserted. `server.configure_identity` (P3's identity) and `server.configure_snapshot_sink` (automatic
-  publish of every aggregate) are hooks that only tests call, so by default uploads are not tied to a client
-  certificate. `tls.py` builds TLS settings and is tested against an ephemeral test CA; uvicorn does not expose the
-  peer certificate to the app, and `start_grpc_server` is insecure. G1 has not passed. Publishing to the registry
-  works today through `POST /adapters/{id}/publish`, on request.
+* **mTLS is opt-in.** `python -m cluster.serve` serves plain HTTP unless `CLASP_TLS_CERT`, `CLASP_TLS_KEY` and
+  `CLASP_TLS_CA` are all set (a partial set refuses to start). With them, every connection must present a client
+  certificate from that CA over TLS 1.3, and `serve.PeerCertH11Protocol` puts the verified CN in each request's
+  scope, so an upload whose `client_id` is not that CN is refused (403; `CLASP_CLUSTER_BIND_IDENTITY=0` turns the
+  binding off). Seam B (`/publish`) presents the cluster's certificate to an `https://` registry. Plain HTTP keeps
+  `client_id` self-asserted. Only the h11 HTTP implementation carries the CN; `start_grpc_server` is still insecure.
+  `server.configure_snapshot_sink` (automatic publish of every aggregate) is a hook that only tests call; publishing
+  works through `POST /adapters/{id}/publish`, on request.
 * Membership and re-cluster endpoints are unauthenticated admin operations; HTTP state is in memory and per process.
 * The Flower strategy aggregates a single cluster per server; multi-cluster = the HTTP service + the in-process
   federation.

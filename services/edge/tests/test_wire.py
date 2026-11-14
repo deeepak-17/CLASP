@@ -287,3 +287,21 @@ def test_privacy_is_read_from_the_training_manifest(tmp_path):
         {"privacy": {"epsilon": 7.5, "delta": 1e-5, "noise_multiplier": 0.7,
                      "max_grad_norm": 1.0}}), encoding="utf-8")
     assert wire.privacy_from_training_manifest(adapter)["epsilon"] == 7.5
+
+
+def test_upload_payload_carries_the_base_it_was_trained_on():
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    sd = {}
+    for m in wire.TARGET_MODULES:
+        sd[wire.peft_key(0, m, "lora_A")] = rng.normal(size=(4, 8)).astype(np.float32)
+        sd[wire.peft_key(0, m, "lora_B")] = rng.normal(size=(8, 4)).astype(np.float32)
+    cfg = {"r": 4, "lora_alpha": 4, "target_modules": list(wire.TARGET_MODULES)}
+    kw = dict(client_id="c", cluster_id="web", round_id=1, num_examples=3)
+    plain = wire.upload_payload(sd, cfg, **kw)
+    assert not {"base_cluster_id", "base_sha256", "composition_alpha"} & set(plain)
+    based = wire.upload_payload(sd, cfg, **kw, base={"cluster_id": "web", "round_id": 0,
+                                                     "sha256": "a" * 64, "alpha": 0.5})
+    assert based["base_cluster_id"] == "web" and based["base_round_id"] == 0
+    assert based["base_sha256"] == "a" * 64 and based["composition_alpha"] == 0.5

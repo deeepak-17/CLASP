@@ -10,6 +10,7 @@ from cluster.adapter_format import (
 )
 from cluster.aggregation import (
     StreamingWeightedMean,
+    accumulate_svd_lowrank,
     aggregate_layerwise,
     aggregate_naive,
     aggregate_svd,
@@ -29,6 +30,7 @@ __all__ = [
     "LoRAAdapter",
     "StreamingWeightedMean",
     "__version__",
+    "accumulate_svd_lowrank",
     "aggregate_layerwise",
     "aggregate_naive",
     "aggregate_svd",

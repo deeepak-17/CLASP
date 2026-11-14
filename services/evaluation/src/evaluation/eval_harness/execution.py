@@ -250,14 +250,33 @@ def _kill_group(proc: subprocess.Popen) -> None:
             os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
-    else:  # pragma: no cover - Windows has no process groups here
+    else:
+        # Windows has no process groups: taskkill /T kills the program and every
+        # process it started, as long as the program itself is still running
+        # (an orphan of a program that already exited is out of reach here).
+        if proc.poll() is None:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, check=False)
         proc.kill()
 
 
-def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float, sentinel: str) -> ExecutionOutcome:
-    # Restricted environment: no inherited API keys/tokens, minimal PATH
-    # so the candidate cannot invoke arbitrary tools found via a broad PATH.
+def _sandbox_env() -> dict[str, str]:
+    """The program's whole environment: no inherited API keys/tokens, and a
+    minimal PATH so it cannot invoke arbitrary tools found via a broad one.
+
+    Windows needs one more variable: CPython cannot start without
+    ``SYSTEMROOT`` (it fails seeding hash randomisation, "failed to get random
+    numbers to initialize Python"), which made every program fail there.
+    """
     env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    if os.name == "nt":
+        root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+        env.update({"SYSTEMROOT": root, "PATH": os.path.join(root, "System32")})
+    return env
+
+
+def _run_process(script_path: Path, tmpdir: str, timeout_seconds: float, sentinel: str) -> ExecutionOutcome:
+    env = _sandbox_env()
     start = time.perf_counter()
     try:
         # Own session = own process group, so a child it spawns can be killed with it.

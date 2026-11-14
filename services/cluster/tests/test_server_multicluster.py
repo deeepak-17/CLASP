@@ -93,6 +93,22 @@ def test_moving_a_client_discards_its_buffered_upload_in_the_old_cluster():
     assert manifest["source_clients"] == ["carol"] and out["num_clients"] == 1
 
 
+def test_cluster_listing_names_who_uploaded_and_who_was_aggregated():
+    client.put("/clusters/team-a/members", json={"client_ids": ["alice", "bob", "carol"]})
+    entry = client.get("/clusters").json()["clusters"]["team-a"]
+    assert entry["uploaded_clients"] == [] and entry["aggregated_clients"] == []
+    assert entry["aggregated_round_id"] is None
+    for cid in ("bob", "alice"):
+        client.post("/clusters/team-a/uploads", json=_body(cid, trained_adapter(len(cid))))
+    entry = client.get("/clusters").json()["clusters"]["team-a"]
+    assert entry["uploaded_clients"] == ["alice", "bob"] and entry["pending_uploads"] == 2
+    assert entry["members"] == ["alice", "bob", "carol"]
+    client.post("/clusters/team-a/aggregate")
+    entry = client.get("/clusters").json()["clusters"]["team-a"]
+    assert entry["uploaded_clients"] == []
+    assert entry["aggregated_clients"] == ["alice", "bob"] and entry["aggregated_round_id"] == 0
+
+
 def test_unknown_cluster_and_bad_ids():
     assert client.get("/clusters/nope/adapters/active").status_code == 404
     assert client.post("/clusters/nope/aggregate").status_code == 404

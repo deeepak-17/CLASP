@@ -493,3 +493,52 @@ def aggregate_svd_lowrank(
         modules=modules,
     )
     return merged, errors
+
+
+def accumulate_svd_lowrank(
+    start: LoRAAdapter,
+    residuals: Sequence[LoRAAdapter],
+    weights: Sequence[float],
+    alpha: float,
+    rank: int | None = None,
+) -> tuple[LoRAAdapter, dict[str, float]]:
+    """FedProx's server step over D3 residuals, through the same D2 pipeline.
+
+    Under D3 a client trains its own adapter ``R_k`` on top of the frozen
+    ``W_base + alpha * dW_start``, ``start`` being the cluster adapter it was
+    sent. FedProx's server averages the clients' whole models, so the next
+    cluster adapter must satisfy ``alpha * dW_new = alpha * dW_start +
+    sum_k w_k dW(R_k)`` (``w`` normalized):
+
+        dW_new = dW_start + (1/alpha) * sum_k w_k dW(R_k)
+
+    That is a weighted *sum*, not a mean, so it is computed as the weighted
+    mean of ``[start, R_1..R_K]`` with coefficients ``[1, w_1/alpha, ...]`` by
+    ``aggregate_svd_lowrank`` — the exact average + best rank-r truncation —
+    and then scaled back by the coefficients' total. Scaling a matrix scales
+    its singular values and nothing else, so the result is exactly the best
+    rank-r truncation of ``dW_new``; the factors get sqrt of the scale each,
+    the same symmetric split ``aggregate_svd_lowrank`` uses. The returned
+    truncation errors are relative and so unchanged by the scale.
+    """
+    residuals = list(residuals)
+    weights = [float(w) for w in weights]
+    if not alpha > 0:
+        raise ValueError(f"composition alpha must be > 0, got {alpha}")
+    if not residuals or len(residuals) != len(weights):
+        raise ValueError(
+            f"got {len(residuals)} residuals and {len(weights)} weights — need one weight each"
+        )
+    if any(w <= 0 for w in weights):
+        raise ValueError(f"weights must be positive, got {weights}")
+    total = sum(weights)
+    coeffs = [1.0] + [w / total / alpha for w in weights]
+    merged, errors = aggregate_svd_lowrank([start, *residuals], coeffs, rank=rank)
+    root = np.sqrt(sum(coeffs))
+    for layer in merged.layer_indices:
+        for module in merged.target_modules:
+            parts = merged.modules[layer][module]
+            dtype = parts["lora_A"].dtype
+            parts["lora_A"] = (parts["lora_A"].astype(np.float64) * root).astype(dtype)
+            parts["lora_B"] = (parts["lora_B"].astype(np.float64) * root).astype(dtype)
+    return merged, errors

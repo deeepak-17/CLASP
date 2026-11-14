@@ -71,6 +71,7 @@ from edge.chunking import (
     pack_client,
     split_summary,
 )
+from edge import fedprox
 from edge.config import portable_path
 from edge.lora_init import attach_lora
 from edge.merge import CONTRACT_HYPERPARAMS, validate_compatibility
@@ -259,8 +260,13 @@ def convergence(step_losses: List[float], window_frac: float = 0.2) -> Dict:
 
 def train(model, chunks: List[List[int]], schedule: List[List[int]], pad_token_id: int,
           lr: float, grad_accum: int, warmup_ratio: float, grad_clip: float,
-          log_every: int) -> Dict:
+          log_every: int, fedprox_mu: float = 0.0) -> Dict:
     """LoRA training loop over packed blocks.
+
+    With ``fedprox_mu`` > 0 each optimizer step also pulls the client adapter
+    back toward where it started (``edge.fedprox``): the proximal gradient is
+    added after the window's backward passes and before clipping, i.e. as if
+    it were part of the loss.
 
     Returns a history dict; raises RuntimeError on NaN/divergence rather than
     letting a poisoned adapter reach `save_pretrained`.
@@ -275,6 +281,8 @@ def train(model, chunks: List[List[int]], schedule: List[List[int]], pad_token_i
     # so handing AdamW the full param set wastes optimizer state and can error.
     trainable = [p for p in model.parameters() if p.requires_grad]
     n_trainable = sum(p.numel() for p in trainable)
+    anchors = fedprox.snapshot_anchor(trainable)  # FedProx w0: the adapter at round start
+    prox_terms: List[float] = []
     optimizer = torch.optim.AdamW(trainable, lr=lr)
 
     opt_steps = math.ceil(len(schedule) / grad_accum)
@@ -326,6 +334,9 @@ def train(model, chunks: List[List[int]], schedule: List[List[int]], pad_token_i
         micro_n += 1
 
         if (i + 1) % grad_accum == 0 or i == len(schedule) - 1:
+            # FedProx before clipping, so the step is clipped as one vector.
+            if fedprox_mu:
+                prox_terms.append(fedprox.add_proximal_grad(trainable, anchors, fedprox_mu))
             # Clip on the LoRA params only — the base is frozen. This is the
             # main guard against a single pathological block spiking the update.
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, grad_clip)
@@ -360,6 +371,19 @@ def train(model, chunks: List[List[int]], schedule: List[List[int]], pad_token_i
         "micro_batches": len(schedule),
         "n_trainable_params": n_trainable,
         "wall_seconds": round(time.time() - t0, 1),
+        "fedprox": _fedprox_record(fedprox_mu, prox_terms, "pre-clip"),
+    }
+
+
+def _fedprox_record(mu: float, prox_terms: List[float], applied: str) -> Dict:
+    """What the manifest says about the proximal term this run trained with."""
+    return {
+        "mu": mu,
+        "objective": "task_loss + (mu/2)*||w - w0||^2 (FedProx, D2: client-side)",
+        "anchor": "client adapter at round start (on top of the frozen merged cluster layer)",
+        "applied": applied if mu else None,
+        "final_prox_term": round(prox_terms[-1], 8) if prox_terms else None,
+        "max_prox_term": round(max(prox_terms), 8) if prox_terms else None,
     }
 
 
@@ -413,6 +437,8 @@ def stack_frozen_cluster(model, cluster_dir: Path, alpha: float) -> Dict:
         raise RuntimeError(f"D3 freeze failed: trainable parameters outside the client "
                            f"adapter: {stray[:5]}")
 
+    from edge.upload import pull_provenance
+
     provenance = None
     manifest = cluster_dir / "materialize_manifest.json"
     if manifest.exists():
@@ -430,6 +456,9 @@ def stack_frozen_cluster(model, cluster_dir: Path, alpha: float) -> Dict:
         "n_trainable_tensors": len(trainable),
         "compatibility": compat,
         "registry_provenance": provenance,
+        # Set when the cluster layer was pulled back from the cluster service:
+        # its sha256 is what the upload names as this residual's base (FedProx).
+        "cluster_pull": pull_provenance(cluster_dir),
     }
 
 
@@ -464,7 +493,8 @@ def _security_dp():
 
 def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
              log_every: int, *, epochs: int, batch_size: int, target_epsilon: float,
-             delta: float, max_grad_norm: float) -> Dict:
+             delta: float, max_grad_norm: float,
+             max_steps: Optional[int] = None, fedprox_mu: float = 0.0) -> Dict:
     """DP-SGD over the client's packed blocks, via ``security.make_private``.
 
     P3's ``DPConfig`` carries the budget and ``make_private`` builds the
@@ -496,6 +526,13 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
       which is what Opacus provides. D7 asks for client-level DP; that is a
       property of the federated protocol, not of one client's loop, and is
       recorded as such rather than claimed.
+    * ``max_steps`` caps the logical steps actually taken (smoke runs). The
+      noise is still calibrated over ``epochs``; stopping early only spends
+      less ε, and the accountant reports what was spent.
+    * FedProx (``fedprox_mu`` > 0) adds ``mu * (w - w0)`` in the optimizer's
+      step hook, which Opacus calls after clipping, noising and scaling and
+      before the update. It depends on no data, so ε is unchanged; added any
+      earlier, Opacus would overwrite it with the noised gradient.
 
     ε is reported two ways. The one recorded (and uploaded) is the engine's
     own accountant over the steps actually taken: it is the accountant the
@@ -516,6 +553,8 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
 
     trainable = [p for p in model.parameters() if p.requires_grad]
     n_trainable = sum(p.numel() for p in trainable)
+    anchors = fedprox.snapshot_anchor(trainable)  # FedProx w0: the adapter at round start
+    prox_terms: List[float] = []
     optimizer = torch.optim.AdamW(trainable, lr=lr)
     loader = torch.utils.data.DataLoader(_Blocks(chunks), batch_size=batch_size)
     # D7: sigma calibrated so this run spends at most target_epsilon at delta.
@@ -546,18 +585,23 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     # Count real (noised) logical steps through Opacus's public step hook: it
     # fires only when a logical batch completes, never on the skipped
     # accumulation steps of BatchMemoryManager. Any hook already attached
-    # (e.g. an accountant) is chained, not replaced.
+    # (e.g. an accountant) is chained, not replaced. The same hook is where
+    # FedProx goes: after the noise, before the update (see the docstring).
     noised_steps = [0]
     prior_hook = dp_opt.step_hook
 
     def _count_step(opt) -> None:
         if prior_hook is not None:
             prior_hook(opt)
+        if fedprox_mu:
+            prox_terms.append(fedprox.add_proximal_grad(trainable, anchors, fedprox_mu))
         noised_steps[0] += 1
 
     dp_opt.attach_step_hook(_count_step)
 
     planned_steps = epochs * len(dp_loader)
+    if max_steps is not None:
+        planned_steps = min(planned_steps, max_steps)
     warmup_steps = max(1, int(planned_steps * warmup_ratio))
     scheduler = transformers.get_cosine_schedule_with_warmup(
         dp_opt, num_warmup_steps=warmup_steps, num_training_steps=planned_steps)
@@ -572,7 +616,11 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     with BatchMemoryManager(data_loader=dp_loader, max_physical_batch_size=1,
                             optimizer=dp_opt) as memory_loader:
         for _ in range(epochs):
+            if steps >= planned_steps:
+                break
             for x in memory_loader:
+                if steps >= planned_steps:
+                    break
                 if x.shape[0] == 0:
                     # Poisson sampling can draw an empty logical batch. There is
                     # nothing to forward; the step is skipped and NOT accounted.
@@ -624,6 +672,7 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
         "micro_batches": None,
         "n_trainable_params": n_trainable,
         "wall_seconds": round(time.time() - t0, 1),
+        "fedprox": _fedprox_record(fedprox_mu, prox_terms, "post-noise (Opacus step hook)"),
         "privacy": privacy,
         "dp": {
             "library": "security.make_private (P3) over Opacus",
@@ -639,6 +688,7 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
             "sample_rate": q,
             "logical_batch_size": batch_size,
             "epochs": epochs,
+            "max_logical_steps": max_steps,
             "privacy_unit": "one packed block (record-level DP-SGD); client-level DP "
                             "is a federated-protocol property and is not claimed here",
             "gradient_checkpointing": False,
@@ -662,13 +712,14 @@ def resolve_budget(args, n_chunks: int, client_id: str) -> int:
     return min(200, n_chunks * 2)  # D8's flat cap, with the 2-epoch guard
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Train a client LoRA on a real partition")
     ap.add_argument("--client", required=True, help="'cluster/client-x' or an absolute client dir")
     ap.add_argument("--corpus-root", default=str(DEFAULT_CORPUS_ROOT))
     ap.add_argument("--profile", default="dev", help="model profile key (config.PROFILES)")
     ap.add_argument("--seq-len", type=int, default=DEFAULT_SEQ_LEN)
-    ap.add_argument("--max-steps", type=int, help="explicit block budget (overrides --budget-plan)")
+    ap.add_argument("--max-steps", type=int, help="explicit block budget (overrides --budget-plan); under --dp it "
+                         "caps logical steps at ceil(N / --dp-batch-size)")
     ap.add_argument("--budget-plan", help="budget_plan.json from `edge.chunking --plan`")
     ap.add_argument("--lr", type=float, default=DEFAULT_LR)
     ap.add_argument("--micro-batch", type=int, default=DEFAULT_MICRO_BATCH)
@@ -701,7 +752,16 @@ def main() -> None:
     ap.add_argument("--dp-epochs", type=int,
                     help="passes over the data under DP (default: the block budget "
                          "rounded to whole epochs, at least 1)")
-    args = ap.parse_args()
+    ap.add_argument("--fedprox-mu", type=float, default=fedprox.DEFAULT_MU,
+                    help="FedProx proximal coefficient: (mu/2)*||w - w0||^2 keeps this "
+                         "client's update near the merged model it started from (0 = off)")
+    return ap
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.fedprox_mu < 0:
+        raise SystemExit("--fedprox-mu must be >= 0")
 
     client_id = args.client.replace("\\", "/").strip("/")
     client_dir = (Path(args.client) if Path(args.client).is_absolute()
@@ -758,18 +818,24 @@ def main() -> None:
     dp_epochs = None
     if args.dp:
         dp_epochs = args.dp_epochs or max(1, round(epochs))
+        # An explicit --max-steps is a hard cap under DP too: the block budget
+        # becomes logical steps of ~dp_batch_size blocks each. Without this a
+        # 1-block smoke run rounds up to a full epoch (hundreds of steps).
+        dp_max_steps = (math.ceil(args.max_steps / args.dp_batch_size)
+                        if args.max_steps else None)
         result = train_dp(model, train_split["chunks"], lr=args.lr,
                           warmup_ratio=args.warmup_ratio, log_every=args.log_every,
                           epochs=dp_epochs, batch_size=args.dp_batch_size,
                           target_epsilon=args.dp_epsilon, delta=args.dp_delta,
-                          max_grad_norm=args.dp_max_grad_norm)
+                          max_grad_norm=args.dp_max_grad_norm, max_steps=dp_max_steps,
+                          fedprox_mu=args.fedprox_mu)
     else:
         schedule = build_schedule(train_split["n_chunks"], budget, args.micro_batch,
                                   args.grad_accum, random.Random(args.seed))
         result = train(model, train_split["chunks"], schedule, pad_id,
                        lr=args.lr, grad_accum=args.grad_accum,
                        warmup_ratio=args.warmup_ratio, grad_clip=args.grad_clip,
-                       log_every=args.log_every)
+                       log_every=args.log_every, fedprox_mu=args.fedprox_mu)
 
     peak_vram_gb = (round(torch.cuda.max_memory_allocated() / 1024 ** 3, 3)
                     if torch.cuda.is_available() else None)
@@ -828,6 +894,7 @@ def main() -> None:
                               selected_adapters=[CLIENT_ADAPTER_NAME])
         tokenizer.save_pretrained(save_directory=str(out_dir / "adapter"))
 
+    fedprox_info = result.pop("fedprox")
     # contracts.PrivacySpec: epsilon None means DP was off (the ablation).
     privacy = result.pop("privacy", None) or {
         "epsilon": None, "delta": args.dp_delta, "noise_multiplier": None,
@@ -865,6 +932,7 @@ def main() -> None:
         },
         "seed": args.seed,
         "d3": d3,
+        "fedprox": fedprox_info,
         "privacy": privacy,
         "results": {
             **result,
@@ -914,6 +982,8 @@ def main() -> None:
         print(f"DP-SGD epsilon    : {dp['epsilon_engine']:.4f} (engine, {DP_ACCOUNTANT}) / "
               f"{dp['epsilon_rdp_security']:.4f} (security.PrivacyAccountant, RDP) at "
               f"delta {args.dp_delta:g}, sigma {privacy['noise_multiplier']}")
+    print(f"FedProx           : mu {args.fedprox_mu:g}"
+          + (f", final prox term {fedprox_info['final_prox_term']}" if args.fedprox_mu else " (off)"))
     print(f"loss decreased    : {loss_decreased}")
     if base_eval and final_eval:
         print(f"held-out ppl      : {base_eval['perplexity']:.2f} -> "

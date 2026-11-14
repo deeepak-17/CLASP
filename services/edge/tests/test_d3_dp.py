@@ -134,6 +134,24 @@ def test_train_dp_runs_on_p3s_api_and_calibrates_to_the_budget():
     assert dp["epsilon_rdp_security"] > 0
 
 
+def test_train_dp_honours_max_steps():
+    """--max-steps under --dp is a hard cap, not rounded up to a full epoch."""
+    pytest.importorskip("opacus")
+    security = pytest.importorskip("security")
+    if not all(hasattr(security, n) for n in ("DPConfig", "make_private", "PrivacyAccountant",
+                                              "get_privacy_engine")):
+        pytest.skip("installed security package has no DP API yet (P3 branch not integrated)")
+    torch.manual_seed(0)
+    gen = torch.Generator().manual_seed(0)
+    chunks = torch.randint(0, _TinyLM.VOCAB, (40, 6), generator=gen).tolist()
+    result = train_client.train_dp(_TinyLM(), chunks, lr=1e-2, warmup_ratio=0.1, log_every=1,
+                                   epochs=2, batch_size=8, target_epsilon=8.0,
+                                   delta=1e-5, max_grad_norm=1.0, max_steps=1)
+    assert result["planned_steps"] == 1
+    assert result["optimizer_steps"] == 1
+    assert result["dp"]["max_logical_steps"] == 1
+
+
 def test_dp_without_p3s_library_fails_with_a_clear_message():
     security = pytest.importorskip("security")
     if hasattr(security, "make_private") or "make_private" in getattr(security, "__all__", ()):

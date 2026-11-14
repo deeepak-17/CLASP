@@ -10,5 +10,6 @@ Reports, the paper draft, and figures.
 - `devops.md` — compose profiles, CI, registry mTLS, NFR evidence, reproducibility.
 - `compute-budget.md` — Phase III GPU-hours per ablation and the cut order.
 - `integration-sprint.md` — the four-seam integration record and its known gaps.
+- `multi-laptop-demo.md` — the multi-laptop demo (plan v3): what was built, how to run it, what is verified.
 - `decisions/` — decision records (e.g. the patent go/no-go).
 

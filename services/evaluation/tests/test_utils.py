@@ -217,7 +217,8 @@ class TestConfig:
         assert resolve_path("configs") == project_paths().root / "configs"
 
     def test_resolve_path_preserves_absolute(self) -> None:
-        assert resolve_path("/tmp/x") == Path("/tmp/x")
+        absolute = Path(__file__).resolve()  # "/tmp/x" is not absolute on Windows (no drive)
+        assert resolve_path(absolute) == absolute
 
     def test_real_logging_config_loads(self) -> None:
         assert isinstance(load_logging_config(), LoggingConfig)

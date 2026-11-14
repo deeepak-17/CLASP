@@ -15,6 +15,7 @@ network or ray.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os as _os
 import re
 import threading
@@ -36,6 +37,7 @@ from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
+from security.validation import detect_poisoning, validate_adapter_integrity
 
 from cluster.adapter_format import (
     DEFAULT_ALPHA,
@@ -45,6 +47,7 @@ from cluster.adapter_format import (
     LoRAAdapter,
 )
 from cluster.aggregation import (
+    accumulate_svd_lowrank,
     aggregate_layerwise,
     aggregate_naive,
     aggregate_svd,
@@ -278,7 +281,8 @@ MAX_CLUSTERS = 64
 
 
 class _StoredUpload:
-    __slots__ = ("adapter", "arrived_at", "epsilon", "num_examples", "round_id")
+    __slots__ = ("adapter", "arrived_at", "base_sha256", "composition_alpha", "epsilon",
+                 "num_examples", "round_id")
 
     def __init__(
         self,
@@ -287,12 +291,18 @@ class _StoredUpload:
         round_id: int,
         arrived_at: float = 0.0,
         epsilon: float | None = None,
+        base_sha256: str | None = None,
+        composition_alpha: float | None = None,
     ) -> None:
         self.adapter = adapter
         self.num_examples = num_examples
         self.round_id = round_id
         self.arrived_at = arrived_at
         self.epsilon = epsilon
+        # Set for a D3 residual: the merged adapter it was trained on top of,
+        # and the alpha it was composed with (see ``_check_base``).
+        self.base_sha256 = base_sha256
+        self.composition_alpha = composition_alpha
 
 
 class _ClusterState:
@@ -387,10 +397,12 @@ def _reset_clusters() -> None:
 # provider (the default) behaviour is unchanged. This module does NOT verify
 # certificates or issue identities — that is P3 (see docs/INTEGRATION_BOUNDARIES.md).
 #
-# STATUS: a hook for later. Nothing in the running service calls
-# ``configure_identity`` (or ``configure_snapshot_sink`` below) — only tests do —
-# so by default uploads are NOT bound to a client certificate and nothing is
-# published to a registry. mTLS is not finished; do not read this seam as it.
+# STATUS: ``cluster.serve`` installs the provider whenever it serves TLS
+# (``CLASP_TLS_*`` set): it reads the CN of the verified client certificate, so
+# under mTLS an upload is bound to the certificate that sent it. Over plain HTTP
+# no provider is installed and ``client_id`` stays self-asserted.
+# ``configure_snapshot_sink`` below is still test-only: publishing goes through
+# ``POST /adapters/{id}/publish``.
 IdentityProvider = Callable[[Request], "str | None"]
 
 
@@ -621,6 +633,7 @@ def _upload_locked(
                 f"{state.cluster_id}'s current round_id={state.round_id}"
             ),
         )
+    _check_base(state, upload)
     if upload.client_id not in state.uploads and len(state.uploads) >= MAX_UPLOADS_PER_CLUSTER:
         raise HTTPException(
             status_code=429,
@@ -638,6 +651,15 @@ def _upload_locked(
         )
     except AdapterFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # P3's integrity check (security.validation) on top of the format check
+    # above: a LoRA rank above D8's cap, absurd tensor norms, NaN / Inf. A
+    # broken or hostile adapter stops here, before it can reach an aggregate.
+    integrity = validate_adapter_integrity(state_dict)
+    if not integrity.valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"refused by security.validation: {'; '.join(integrity.errors[:5])}",
+        )
 
     # One round = one (rank, alpha, modules, layers) structure: reject a
     # mismatching upload now rather than failing the whole aggregate later.
@@ -659,6 +681,8 @@ def _upload_locked(
         round_id=upload.round_id,
         arrived_at=state.clock(),
         epsilon=upload.epsilon,
+        base_sha256=upload.base_sha256,
+        composition_alpha=upload.composition_alpha,
     )
     return {
         "client_id": upload.client_id,
@@ -669,6 +693,64 @@ def _upload_locked(
         "status": "accepted",
         "pending_uploads": len(state.uploads),
     }
+
+
+def _check_base(state: _ClusterState, upload: AdapterUpload) -> None:
+    """FedProx under D3: a residual must be built on the adapter served now.
+
+    An upload with ``base_sha256`` is a D3 residual: the client trained its own
+    adapter on top of frozen ``base + composition_alpha * C``, C being this
+    cluster's merged adapter with that digest. It is added onto C at aggregate
+    time (``accumulate_svd_lowrank``), so it is only meaningful against C
+    itself: any other digest — an older round, a previous process's adapter
+    with the same round number, a rolled-back version — is a 409, never folded
+    in. An upload without one is a full adapter, averaged as before. A round is
+    one or the other, with one alpha (422 otherwise), because the two rules
+    cannot be combined in one aggregate.
+    """
+    declared = upload.base_sha256 is not None
+    active = state.active
+    if declared and active is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"stale_adapter: {state.cluster_id!r} has no merged adapter yet, but "
+                f"{upload.client_id!r} was trained on one ({upload.base_sha256[:12]}); "
+                f"its first round takes adapters trained on the bare base"
+            ),
+        )
+    if declared and upload.base_sha256 != active.sha256:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"stale_adapter: {upload.client_id!r} was trained on merged adapter "
+                f"{upload.base_sha256[:12]}, but {state.cluster_id!r} now serves "
+                f"{(active.sha256 or '?')[:12]} (round {active.round_id}); pull it and train again"
+            ),
+        )
+    for other_id, other in state.uploads.items():
+        if other_id == upload.client_id:
+            continue
+        if (other.base_sha256 is not None) != declared:
+            kinds = ("a residual on the merged adapter (base_sha256)", "a full adapter")
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"incompatible with the round's other uploads: {upload.client_id!r} sent "
+                    f"{kinds[not declared]}, {other_id!r} sent {kinds[declared]}; a round is "
+                    f"one or the other"
+                ),
+            )
+        if declared and other.composition_alpha != upload.composition_alpha:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"incompatible with the round's other uploads: composition_alpha "
+                    f"{upload.composition_alpha} differs from {other_id!r}'s "
+                    f"{other.composition_alpha}"
+                ),
+            )
+        break  # all buffered uploads already agree with each other
 
 
 def _expected_clients(cluster_id: str, requested: int | None) -> int | None:
@@ -749,6 +831,16 @@ def _aggregate_locked(
     req = request or AggregateRequest()
     if req.aggregation not in ("svd", "naive"):
         raise HTTPException(status_code=422, detail=f"unknown aggregation {req.aggregation!r}")
+    residual_round = any(u.base_sha256 is not None for u in state.uploads.values())
+    if residual_round and (req.aggregation != "svd" or not req.exact_lowrank
+                           or req.retain_uploads):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "this round holds D3 residuals, which only the FedProx cumulative step "
+                "aggregates (aggregation='svd', exact_lowrank=true, retain_uploads=false)"
+            ),
+        )
     try:
         policy = StragglerPolicy(
             timeout_s=req.straggler_timeout_s,
@@ -770,11 +862,20 @@ def _aggregate_locked(
         )
         for client_id in client_ids
     ]
+    # P3's poisoning screen (security.validation.detect_poisoning): with 3+
+    # clients, an update whose norm is a robust outlier from the round's is
+    # left out and named, before the straggler policy weighs the rest.
+    flagged = [updates[i].client_id for i in
+               detect_poisoning([u.adapter.to_state_dict() for u in updates])]
+    if flagged:
+        updates = [u for u in updates if u.client_id not in flagged]
     # ``min_fraction`` is a fraction of the clients the round *expected*, not of
     # the uploads that happened to arrive (that would always be 100%). Never
     # below what actually arrived.
-    expected_n = max(len(updates), expected or 0)
+    expected_n = max(len(updates) + len(flagged), expected or 0)
     outcome = apply_policy(updates, policy, expected=expected_n)
+    outcome.skipped.update({c: "poisoning_suspect: norm outlier (security.validation."
+                               "detect_poisoning)" for c in flagged})
     if not outcome.accepted or not outcome.quorum_met:
         # keep the buffer so the caller can retry once more clients arrive
         raise HTTPException(
@@ -792,6 +893,20 @@ def _aggregate_locked(
     rank = req.rank or adapters[0].rank
 
     epsilon = cluster_epsilon([state.uploads[c].epsilon for c in used_ids])
+    round_epsilon = epsilon
+    start_broadcast = state.active if residual_round else None
+    if start_broadcast is not None:
+        stale = sorted(c for c in used_ids
+                       if state.uploads[c].base_sha256 != start_broadcast.sha256)
+        if stale:  # cannot happen through _upload; refuse rather than mis-merge
+            raise HTTPException(
+                status_code=409,
+                detail=f"stale_adapter: {stale} were trained on another merged adapter",
+            )
+        # The new adapter is a function of the one it builds on, so by basic
+        # sequential composition its epsilon is that adapter's plus this round's.
+        epsilon = (None if epsilon is None or start_broadcast.epsilon is None
+                   else float(start_broadcast.epsilon) + epsilon)
 
     manifest: dict[str, object] = {
         "cluster_id": state.cluster_id,
@@ -805,7 +920,24 @@ def _aggregate_locked(
         "sample_weights": [float(u.num_examples) for u in accepted],
         "rank": rank,
         "epsilon": epsilon,
+        "update_rule": "fedprox_cumulative" if start_broadcast is not None else "average",
+        "screening": {
+            "uploads": "security.validation.validate_adapter_integrity",
+            "round": "security.validation.detect_poisoning (robust norm outliers, 3+ clients)",
+            "flagged": sorted(flagged),
+        },
     }
+    if start_broadcast is not None:
+        alpha = float(state.uploads[used_ids[0]].composition_alpha)
+        manifest.update({
+            "composition_alpha": alpha,
+            "base_sha256": start_broadcast.sha256,
+            "base_round_id": start_broadcast.round_id,
+            "epsilon_this_round": round_epsilon,
+            "epsilon_composition": "basic sequential: base adapter's epsilon + this round's",
+            "update_definition": "dW_new = dW_base + (1/alpha) * sum_k w_k dW(residual_k), "
+                                 "best rank-r truncation (FedProx server step under D3)",
+        })
     if epsilon is None:
         manifest["epsilon_not_reported_by"] = sorted(
             c for c in used_ids if state.uploads[c].epsilon is None
@@ -813,7 +945,12 @@ def _aggregate_locked(
 
     try:
         if req.aggregation == "svd" and req.exact_lowrank:
-            merged, errors = aggregate_svd_lowrank(adapters, weights, rank=rank)
+            if start_broadcast is not None:
+                merged, errors = accumulate_svd_lowrank(
+                    adapter_from_broadcast(start_broadcast), adapters, weights,
+                    alpha=manifest["composition_alpha"], rank=rank)
+            else:
+                merged, errors = aggregate_svd_lowrank(adapters, weights, rank=rank)
             manifest["aggregation_path"] = "exact_lowrank"
             if req.include_manifest:
                 vals = list(errors.values())
@@ -824,7 +961,8 @@ def _aggregate_locked(
                     "n_modules": len(vals),
                     "definition": (
                         "relative Frobenius ||dW - dW_r|| / ||dW|| of the rank-r "
-                        "truncation against the exact weighted-average delta_W"
+                        "truncation against the exact delta_W (weighted average, or "
+                        "base + residuals/alpha under the FedProx cumulative step)"
                     ),
                 }
         else:
@@ -860,12 +998,26 @@ def _aggregate_locked(
         source_clients=used_ids,
         epsilon=epsilon,
     )
+    broadcast = broadcast.model_copy(update={
+        "update_rule": manifest["update_rule"],
+        "composition_alpha": manifest.get("composition_alpha"),
+        "base_sha256": manifest.get("base_sha256"),
+    })
+    # The identity edges train against: the digest of exactly the payload
+    # /download serves and /publish stores (the registry hashes the same bytes).
+    broadcast = broadcast.model_copy(
+        update={"sha256": hashlib.sha256(_peft_bytes(broadcast)).hexdigest()})
+    manifest["sha256"] = broadcast.sha256
 
     completed = not req.retain_uploads
     if completed:
         # Evidence for POST /recluster and the optional snapshot sink: only a
         # completed round counts, not a retained ablation run.
-        start = adapter_from_broadcast(state.active) if state.active is not None else None
+        # Under D3 a client's update IS its residual (it started from zero on
+        # top of the frozen merged adapter); a full adapter's update is
+        # measured from the adapter it was sent.
+        start = (adapter_from_broadcast(state.active)
+                 if state.active is not None and start_broadcast is None else None)
         state.last_round = {u.client_id: (u.adapter, start) for u in accepted}
         if _publishing.sink is not None:
             ref = cluster_adapter_ref(state.cluster_id, state.round_id)
@@ -966,6 +1118,12 @@ def _peft_bytes(broadcast: ClusterAdapterBroadcast) -> bytes:
                 "source_clients": ",".join(broadcast.source_clients)}
     if broadcast.peft_config is not None:
         metadata["adapter_config"] = json.dumps(broadcast.peft_config)
+    # How it was built travels with the bytes (the registry stores the payload
+    # opaquely and its metadata has no field for it under contracts v1.0).
+    for key in ("update_rule", "composition_alpha", "base_sha256"):
+        value = getattr(broadcast, key)
+        if value is not None:
+            metadata[key] = str(value)
     return _canonical_safetensors(save(tensors, metadata=metadata))
 
 
@@ -1095,8 +1253,13 @@ def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) 
         # recorded in the registry with epsilon = null.
         meta["privacy"] = {"epsilon": broadcast.epsilon}
 
+    from cluster.tls import outbound_ssl_context
+
+    # Under mTLS (CLASP_TLS_* set, see cluster.serve) the registry gets the
+    # cluster's certificate and must present one the CLASP CA signed.
+    tls = outbound_ssl_context(_os.environ) if req.registry_url.startswith("https") else None
     try:
-        with httpx.Client(timeout=req.timeout_s) as http:
+        with httpx.Client(timeout=req.timeout_s, verify=tls if tls is not None else True) as http:
             resp = http.post(
                 f"{req.registry_url.rstrip('/')}/adapters/{name}/versions",
                 files={"file": (f"{name}.safetensors", payload,
@@ -1130,17 +1293,25 @@ def list_clusters() -> dict[str, object]:
     # answers even while an aggregate is running.
     clusters = dict(_clusters)
     membership = dict(_membership)
-    return {
-        "clusters": {
-            cid: {
-                "round_id": st.round_id,
-                "pending_uploads": len(st.uploads),
-                "has_active_adapter": st.active is not None,
-                "members": sorted(c for c, owner in membership.items() if owner == cid),
-            }
-            for cid, st in sorted(clusters.items())
+    out = {}
+    for cid, st in sorted(clusters.items()):
+        uploaded = sorted(st.uploads)  # one snapshot; len() is taken from it too
+        active = st.active  # one atomic read
+        out[cid] = {
+            "round_id": st.round_id,
+            "pending_uploads": len(uploaded),
+            "has_active_adapter": active is not None,
+            "members": sorted(c for c, owner in membership.items() if owner == cid),
+            # Who has uploaded into the round that is buffering now — what the
+            # demo panel shows arriving, as opposed to ``members`` (assigned).
+            "uploaded_clients": uploaded,
+            # Who the active aggregate was built from (empty before the first).
+            "aggregated_clients": list(active.source_clients) if active is not None else [],
+            "aggregated_round_id": active.round_id if active is not None else None,
+            # What an edge compares its pulled adapter against (see _check_base).
+            "active_sha256": active.sha256 if active is not None else None,
         }
-    }
+    return {"clusters": out}
 
 
 @app.put("/clusters/{cluster_id}/members")
@@ -1212,6 +1383,134 @@ def get_cluster_active_adapter(cluster_id: str, request: Request) -> ClusterAdap
 @app.get("/clusters/{cluster_id}/aggregate/manifest")
 def get_cluster_manifest_by_path(cluster_id: str) -> dict[str, object]:
     return _manifest(_cluster(cluster_id), cluster_id)
+
+
+class RestoreRequest(_BaseModel):
+    """``POST /clusters/{id}/adapters/active/restore``: serve a registry version again."""
+
+    version: int = _Field(ge=1)
+    registry_url: str = DEFAULT_REGISTRY_URL
+    adapter_name: str | None = None  # defaults to the cluster id, as /publish does
+    timeout_s: float = 120.0
+
+
+def _registry_get(http, url: str, what: str):
+    import httpx
+
+    try:
+        resp = http.get(url)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"registry unreachable for {what}: {exc}") from exc
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502, detail=f"registry answered {resp.status_code} for {what}: {resp.text}"
+        )
+    return resp
+
+
+def _broadcast_from_payload(
+    blob: bytes, cluster_id: str, meta: dict[str, object]
+) -> ClusterAdapterBroadcast:
+    """Rebuild the broadcast a published payload was made from: tensors and
+    adapter_config from the safetensors file, provenance from its header,
+    round / clients / epsilon from the registry's record of it."""
+    import json
+
+    from safetensors.numpy import load
+
+    header = json.loads(blob[8:8 + int.from_bytes(blob[:8], "little")].decode("utf-8"))
+    md = header.get("__metadata__") or {}
+    if "adapter_config" not in md:
+        raise HTTPException(status_code=502, detail="registry payload carries no adapter_config")
+    cfg = json.loads(md["adapter_config"])
+    tensors = load(blob)
+    integrity = validate_adapter_integrity(tensors)  # same screen as an upload
+    if not integrity.valid:
+        raise HTTPException(status_code=502, detail=f"restored adapter refused by "
+                            f"security.validation: {'; '.join(integrity.errors[:5])}")
+    layers = {int(m.group(1)) for k in tensors if (m := re.search(r"layers\.(\d+)\.", k))}
+    adapter = LoRAAdapter.from_state_dict(
+        tensors, rank=int(cfg["r"]), alpha=float(cfg["lora_alpha"]),
+        target_modules=tuple(cfg["target_modules"]), num_layers=max(len(layers), 1))
+    sources = tuple(s for s in str(md.get("source_clients", "")).split(",") if s)
+    privacy = meta.get("privacy") or {}
+    broadcast = build_broadcast(
+        adapter, cluster_id=cluster_id, round_id=int(meta.get("round") or 0),
+        num_clients=max(len(sources), 1),
+        aggregation="naive" if meta.get("aggregation") == "naive_avg" else "svd",
+        source_clients=sources, epsilon=privacy.get("epsilon") if isinstance(privacy, dict) else None)
+    alpha = md.get("composition_alpha")
+    broadcast = broadcast.model_copy(update={
+        "update_rule": md.get("update_rule"),
+        "composition_alpha": float(alpha) if alpha is not None else None,
+        "base_sha256": md.get("base_sha256"),
+    })
+    return broadcast.model_copy(
+        update={"sha256": hashlib.sha256(_peft_bytes(broadcast)).hexdigest()})
+
+
+@app.post("/clusters/{cluster_id}/adapters/active/restore")
+def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, object]:
+    """Serve a registry version again: how a D5 ROLLBACK reaches the edges.
+
+    The registry repoints its ``active`` tag on a ROLLBACK, but the edges pull
+    from this service, which would otherwise keep serving the rejected merge —
+    and the next round would build on it. This fetches the version the
+    registry restored, checks its bytes against the registry's sha256,
+    rebuilds the adapter from them and checks that serving it reproduces those
+    exact bytes (so ``active_sha256`` is the registry's digest), then makes it
+    the cluster's active adapter. Residuals buffered on top of the rejected
+    merge are dropped (they would be refused at aggregate time anyway); the
+    round counter is left alone. Network first, cluster lock last.
+    """
+    import httpx
+
+    from cluster.tls import outbound_ssl_context
+
+    state = _cluster(cluster_id)
+    configured = _os.environ.get("CLASP_REGISTRY_URL", DEFAULT_REGISTRY_URL).rstrip("/")
+    if body.registry_url.rstrip("/") != configured:
+        # This endpoint changes what every edge trains on: it only reads the
+        # registry the cluster itself is configured with (no caller-chosen URL).
+        raise HTTPException(status_code=422,
+                            detail=f"restore reads only the configured registry ({configured})")
+    name = body.adapter_name or cluster_id
+    base = f"{body.registry_url.rstrip('/')}/adapters/{name}/versions/{body.version}"
+    tls = outbound_ssl_context(_os.environ) if body.registry_url.startswith("https") else None
+    with httpx.Client(timeout=body.timeout_s, verify=tls if tls is not None else True) as http:
+        meta = _registry_get(http, base, f"{name} v{body.version}").json()
+        blob = _registry_get(http, f"{base}/file", f"{name} v{body.version}'s payload").content
+    if meta.get("cluster_id") not in (None, cluster_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name} v{body.version} is cluster {meta.get('cluster_id')!r}'s, not {cluster_id!r}'s",
+        )
+    digest = hashlib.sha256(blob).hexdigest()
+    if digest != meta.get("sha256"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"{name} v{body.version}'s payload hashes to {digest[:12]}, not the registry's "
+                   f"sha256 {str(meta.get('sha256'))[:12]}; not serving it",
+        )
+    broadcast = _broadcast_from_payload(blob, cluster_id, meta)
+    if broadcast.sha256 != digest:
+        raise HTTPException(
+            status_code=502,
+            detail=f"re-serializing {name} v{body.version} does not reproduce its bytes "
+                   f"({broadcast.sha256[:12]} vs {digest[:12]}); not serving it",
+        )
+    with state.lock:
+        dropped = sorted(c for c, u in state.uploads.items()
+                         if u.base_sha256 is not None and u.base_sha256 != digest)
+        for c in dropped:
+            del state.uploads[c]
+        state.active = broadcast
+    return {
+        "cluster_id": cluster_id,
+        "restored": {"adapter_name": name, "version": body.version,
+                     "round_id": broadcast.round_id, "sha256": digest},
+        "dropped_uploads": dropped,
+    }
 
 
 @app.post("/recluster")

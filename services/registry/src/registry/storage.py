@@ -48,6 +48,7 @@ _ST_MAX_HEADER = 8 * 1024 * 1024
 _ST_DTYPE_BYTES = {"BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1, "I16": 2,
                    "U16": 2, "F16": 2, "BF16": 2, "I32": 4, "U32": 4, "F32": 4, "I64": 8,
                    "U64": 8, "F64": 8}
+_IS_WINDOWS = os.name == "nt"
 
 
 class StorageError(Exception):
@@ -68,6 +69,24 @@ class InvalidAdapterName(StorageError):
 
 class VersionExists(StorageError):
     """Refused to overwrite an existing immutable version (D9)."""
+
+
+def _fsync(path: Path) -> None:
+    """Force a file's contents, or a directory's entries, onto the disk.
+
+    Atomic renames stop a crash from leaving a half-written version; this stops
+    a power cut from losing a write the registry already acknowledged. Windows
+    cannot open a directory handle (NTFS journals its own metadata), so
+    directories are skipped there; files need a writable handle to flush.
+    """
+    is_dir = path.is_dir()
+    if is_dir and _IS_WINDOWS:
+        return
+    fd = os.open(path, os.O_RDWR if _IS_WINDOWS else os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _validate_name(name: str) -> str:
@@ -181,7 +200,9 @@ class RegistryStore:
         target = self._adapter_dir(name) / "active"
         tmp = target.with_suffix(".tmp")
         tmp.write_text(str(version))
+        _fsync(tmp)
         os.replace(tmp, target)
+        _fsync(target.parent)
 
     def check_kind(self, name: str, kind: AdapterKind) -> None:
         """Raise KindMismatch if ``name`` already holds versions of another kind."""
@@ -209,8 +230,10 @@ class RegistryStore:
     # -- promotion audit trail (D5/D9) --------------------------------------- #
     def append_log(self, name: str, log_name: str, line: str) -> None:
         """Append one JSON line to an adapter's append-only log."""
-        with (self._adapter_dir(name) / log_name).open("a") as f:
+        log = self._adapter_dir(name) / log_name
+        with log.open("a") as f:
             f.write(line + "\n")
+        _fsync(log)
 
     def record_promotion(self, name: str, decision: PromotionDecision) -> None:
         """Append a PromotionDecision to this adapter's audit log (never rewritten)."""
@@ -294,6 +317,10 @@ class RegistryStore:
                 composed_from=composed_from,
             )
             (staging / "metadata.json").write_text(json.dumps(_metadata_to_dict(meta), indent=2))
+            # Both files reach the disk BEFORE the rename makes them a version.
+            _fsync(staging / "adapter.safetensors")
+            _fsync(staging / "metadata.json")
+            _fsync(staging)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
@@ -305,6 +332,8 @@ class RegistryStore:
         except OSError as e:
             shutil.rmtree(staging, ignore_errors=True)
             raise VersionExists(f"{name} v{version} already exists") from e
+        _fsync(adapter_dir)        # the rename that named vN
+        _fsync(self.adapters_dir)  # the adapter dir itself, on its first save
         if set_active:
             self.set_active(name, version)
         return meta

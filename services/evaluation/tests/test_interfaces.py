@@ -290,8 +290,16 @@ class TestTransformersEdgeInferenceClient:
                 with pytest.raises(DependencyError, match="pip install"):
                     build_inference_client(config)
             else:  # pragma: no cover - only when every dependency is actually installed
-                client = build_inference_client(config)
+                # Construction loads the model eagerly; the seam is what is under
+                # test, not a 6.7B download onto this machine's GPU.
+                loaded = []
+                with pytest.MonkeyPatch.context() as mp:
+                    mp.setattr(TransformersEdgeInferenceClient, "_load",
+                               staticmethod(lambda model_id, **kw: loaded.append(model_id)
+                                            or (object(), object())))
+                    client = build_inference_client(config)
                 assert isinstance(client, TransformersEdgeInferenceClient)
+                assert loaded == ["deepseek-ai/deepseek-coder-6.7b-base"]
         finally:
             registry_module._EDGE_CLIENT_FACTORY = previous_factory
 

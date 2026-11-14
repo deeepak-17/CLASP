@@ -1,15 +1,18 @@
-# Registry behind mutual TLS (D7). Overlay on the main file:
+# Registry and cluster behind mutual TLS (D7). Overlay on the main file:
 #
-#   scripts/make_dev_certs.sh                       # dev CA + certs -> .runtime/certs
-#   docker compose -f docker-compose.yml -f docker-compose.mtls.yml up -d registry
+#   CLASP_LAN_IPS=<laptop A IP> scripts/make_dev_certs.sh   # dev CA + certs -> .runtime/certs
+#   docker compose -f docker-compose.yml -f docker-compose.mtls.yml up -d registry cluster
+#   docker compose -f docker-compose.yml -f docker-compose.mtls.yml --profile demo up -d
 #   curl --cacert .runtime/certs/ca.pem --cert .runtime/certs/client.pem \
 #        --key .runtime/certs/client.key https://localhost:8004/healthz
 #
-# Every connection must present a client cert signed by the CA and speak TLS 1.3;
-# a request without one is refused at the handshake. Scope: this hardens the
-# registry endpoint. Its HTTP callers (cluster seam B, edge C1/C2) must present
-# client certs too before they can use it — that client-side wiring is the
-# security library's (P3), so leave this overlay off for the plain demo round.
+# Every connection to the registry or the cluster must present a client cert
+# signed by the CA and speak TLS 1.3; a request without one is refused at the
+# handshake. The cluster also binds each upload's client_id to the CN of the
+# uploader's certificate (cluster.serve), so edge laptops use the certs from
+# .runtime/certs/edges/<client_id>/ (python -m edge.upload --mtls-dir ...).
+# The cluster presents its own cert to the registry (seam B); demo-ui presents
+# demo-ui's. The evaluation dashboard (:8005) is static and stays plain HTTP.
 services:
   registry:
     environment:
@@ -19,3 +22,22 @@ services:
     volumes:
       # Only the registry's own cert/key and the CA cert — never the CA key.
       - ./.runtime/certs/registry:/certs:ro
+
+  cluster:
+    environment:
+      CLASP_TLS_CERT: /certs/cluster.pem
+      CLASP_TLS_KEY: /certs/cluster.key
+      CLASP_TLS_CA: /certs/ca.pem
+      CLASP_REGISTRY_URL: https://registry:8004
+    volumes:
+      - ./.runtime/certs/cluster:/certs:ro
+
+  demo-ui:
+    environment:
+      CLASP_REGISTRY_URL: https://registry:8004
+      CLASP_CLUSTER_URL: https://cluster:8002
+      CLASP_TLS_CLIENT_CERT: /certs/demo-ui.pem
+      CLASP_TLS_CLIENT_KEY: /certs/demo-ui.key
+      CLASP_TLS_CA: /certs/ca.pem
+    volumes:
+      - ./.runtime/certs/demo-ui:/certs:ro

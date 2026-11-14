@@ -43,9 +43,10 @@ services:
     environment:
       CLASP_REGISTRY_URL: http://registry:8004
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8002/healthz').status==200 else sys.exit(1)"]
+      # TLS-aware: probes over mTLS when CLASP_TLS_* is set.
+      test: ["CMD", "python", "-m", "cluster.healthcheck"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 5
       start_period: 5s
     restart: unless-stopped
@@ -76,10 +77,11 @@ services:
     environment:
       CLASP_REGISTRY_URL: http://registry:8004
       CLASP_CLUSTER_URL: http://cluster:8002
-      CLASP_EDGE_ARTIFACTS: /artifacts
     volumes:
-      # Committed edge manifests (numbers shown on the panel pages), read-only.
-      - ./services/edge/artifacts:/artifacts:ro
+      # Evaluation's measured results, which the live panel's Promote sends
+      # (demo_ui/evidence.py): round manifests + HumanEval anchors + noise band.
+      - ./experiments/w12-integration/results:/app/experiments/w12-integration/results:ro
+      - ./services/evaluation/results:/app/services/evaluation/results:ro
 
   # P5 evaluation dashboard (static React build behind nginx). Results are baked
   # in at build time from services/evaluation/results/; rebuild after

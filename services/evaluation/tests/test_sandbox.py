@@ -89,9 +89,11 @@ def test_pass_requires_reaching_the_end_of_the_tests(body: str, expected: bool) 
 
 def test_spawned_child_does_not_outlive_the_timeout(tmp_path) -> None:
     marker = tmp_path / "alive"
+    # A Python child rather than /bin/sh, so the check also runs on Windows.
+    child = f"import time; time.sleep(2); open({str(marker)!r}, 'w').write('alive')"
     program = (
-        "import subprocess, time\n"
-        f"subprocess.Popen(['/bin/sh', '-c', 'sleep 2; echo alive > {marker}'])\n"
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
         "time.sleep(30)\n"
     )
     outcome = execute_program(program, timeout_seconds=1, sandbox="process")

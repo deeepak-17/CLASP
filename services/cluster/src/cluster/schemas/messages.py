@@ -130,8 +130,27 @@ class AdapterUpload(BaseModel):
     # but has not yet pulled its new cluster's adapter), mirroring the
     # federation's ``stale_adapter`` skip. ``None`` = not stated, not checked.
     base_cluster_id: str | None = None
+    # Optional (backward compatible; schema stays "1.0"), FedProx under D3: the
+    # client trained its own adapter on top of frozen base + composition_alpha *
+    # (the merged adapter this cluster served, identified by its sha256). Such
+    # an upload is a residual: the cluster adds it onto that merged adapter
+    # instead of averaging it as a full adapter, and refuses it (409) unless the
+    # digest is the adapter it serves now. Both or neither; base_round_id is
+    # informational (the digest is what is checked).
+    base_round_id: int | None = Field(None, ge=0)
+    base_sha256: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    composition_alpha: float | None = Field(None, gt=0, allow_inf_nan=False)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tensors: list[TensorPayload]
+
+    @model_validator(mode="after")
+    def _base_comes_whole(self) -> AdapterUpload:
+        if (self.base_sha256 is None) != (self.composition_alpha is None):
+            raise ValueError(
+                "base_sha256 and composition_alpha come together: a residual names the "
+                "merged adapter it trained on and the alpha it was composed with"
+            )
+        return self
 
     @field_validator("target_modules")
     @classmethod
@@ -223,6 +242,16 @@ class ClusterAdapterBroadcast(BaseModel):
     # consumer can materialize a loadable PEFT directory from this broadcast
     # alone, alongside ``tensors`` in PEFT key form (LoRAAdapter.to_peft_state_dict()).
     peft_config: dict[str, object] | None = None
+    # How this aggregate was built: "average" (full adapters, D2) or
+    # "fedprox_cumulative" (D3 residuals added onto base_sha256's adapter with
+    # composition_alpha). Written into the safetensors header, so the registry
+    # keeps them with the payload.
+    update_rule: str | None = None
+    composition_alpha: float | None = None
+    base_sha256: str | None = None
+    # sha256 of this aggregate's safetensors payload (what /download serves and
+    # what the registry stores and hashes) — the identity edges train against.
+    sha256: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tensors: list[TensorPayload]
 

@@ -1,0 +1,116 @@
+{
+  "feed_version": "1.0.0",
+  "generated_at": "2026-10-09T16:45:20Z",
+  "guard_pass_at_1_tolerance": 0.02,
+  "rounds": [
+    {
+      "round": 1,
+      "finished_utc": "2026-09-06T17:10:09.305616+00:00",
+      "wall_minutes": 17.94,
+      "nfr_round_minutes": 30.0,
+      "nfr_met": true,
+      "noise_band": 0.0,
+      "counters": {
+        "uploads": 6,
+        "aggregations": 4,
+        "snapshots": 4,
+        "composites": 4,
+        "decisions": 2
+      },
+      "guard": {
+        "available": false,
+        "reason": "no HumanEval anchor supplied for candidate and/or baseline \u2014 evalplus imports the Unix-only `resource` module and cannot score on Windows (W1 debt). D5 treats a missing guard as a failed guard, so the rule will return ROLLBACK.",
+        "candidate_pass_at_1": null,
+        "baseline_pass_at_1": null
+      },
+      "clusters": [
+        {
+          "cluster_id": "scientific",
+          "registry_name": "cluster-scientific",
+          "representative_client": "client-scikit-learn",
+          "baseline": {
+            "version": 1,
+            "aggregation": "naive",
+            "sha256": "14ea6d1d5be30696ab2f7c3642a76add123abbaf2ea021a5a67b92fe2bea2e98",
+            "in_project": {
+              "edit_similarity": 0.48372582350504634,
+              "exact_match": 0.23333333333333334,
+              "perplexity": 2.378,
+              "n_examples": 60,
+              "examples_sha256": "3ce1f684d04fcb09168acc86157a6a290d43789197df42e043503c744730829f"
+            }
+          },
+          "candidate": {
+            "version": 2,
+            "aggregation": "svd",
+            "sha256": "139a801adebb31b554024395f63f5d728d5ed25c771f69d9fa7ea9a04a5fa03f",
+            "in_project": {
+              "edit_similarity": 0.48605117102122225,
+              "exact_match": 0.23333333333333334,
+              "perplexity": 2.385,
+              "n_examples": 60,
+              "examples_sha256": "3ce1f684d04fcb09168acc86157a6a290d43789197df42e043503c744730829f"
+            }
+          },
+          "edit_similarity_delta": 0.002325,
+          "decision": {
+            "action": "rollback",
+            "active_version_after": 1,
+            "reason": "rolled back: edit_similarity +0.0023 clears noise band 0.0000; HumanEval guard metrics missing on candidate or baseline"
+          },
+          "authoritative": false
+        },
+        {
+          "cluster_id": "web",
+          "registry_name": "cluster-web",
+          "representative_client": "client-werkzeug",
+          "baseline": {
+            "version": 1,
+            "aggregation": "naive",
+            "sha256": "063b708cf8d4ce5e6305bfb519d6f674e6099c5ae177ae5d6271d7aa26a72570",
+            "in_project": {
+              "edit_similarity": 0.5336909700481193,
+              "exact_match": 0.26666666666666666,
+              "perplexity": 2.661,
+              "n_examples": 60,
+              "examples_sha256": "c32a9f5fc9f28780ff994aec03d071dd248998100cc8d180077844144e636749"
+            }
+          },
+          "candidate": {
+            "version": 2,
+            "aggregation": "svd",
+            "sha256": "9758be92bbde4f01e344dcc368f245b98e3c861517c87b023d2df5b3b55c1279",
+            "in_project": {
+              "edit_similarity": 0.5469771535013989,
+              "exact_match": 0.2833333333333333,
+              "perplexity": 2.665,
+              "n_examples": 60,
+              "examples_sha256": "c32a9f5fc9f28780ff994aec03d071dd248998100cc8d180077844144e636749"
+            }
+          },
+          "edit_similarity_delta": 0.013286,
+          "decision": {
+            "action": "rollback",
+            "active_version_after": 1,
+            "reason": "rolled back: edit_similarity +0.0133 clears noise band 0.0000; HumanEval guard metrics missing on candidate or baseline"
+          },
+          "authoritative": false
+        }
+      ]
+    }
+  ],
+  "alerts": [
+    {
+      "round": 1,
+      "cluster_id": "scientific",
+      "kind": "guard_unavailable",
+      "message": "HumanEval guard not scored for candidate and baseline"
+    },
+    {
+      "round": 1,
+      "cluster_id": "web",
+      "kind": "guard_unavailable",
+      "message": "HumanEval guard not scored for candidate and baseline"
+    }
+  ]
+}

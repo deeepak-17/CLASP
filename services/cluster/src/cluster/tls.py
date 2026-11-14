@@ -23,6 +23,7 @@ from __future__ import annotations
 import ssl
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -86,3 +87,22 @@ def common_name_from_peercert(peercert: dict[str, Any] | None) -> str | None:
             if key == "commonName":
                 return str(value)
     return None
+
+
+def outbound_ssl_context(env: Mapping[str, str]) -> ssl.SSLContext | None:
+    """Client-side context for the cluster's own outbound call (seam B, publish
+    to the registry), or ``None`` when no TLS is configured.
+
+    Presents ``CLASP_TLS_CLIENT_CERT`` / ``CLASP_TLS_CLIENT_KEY`` when set, else
+    the cluster's server pair (``make_dev_certs.sh`` issues it for both
+    serverAuth and clientAuth), and trusts only ``CLASP_TLS_CA``. TLS 1.3, as the
+    registry requires.
+    """
+    ca = env.get("CLASP_TLS_CA")
+    cert = env.get("CLASP_TLS_CLIENT_CERT") or env.get("CLASP_TLS_CERT")
+    key = env.get("CLASP_TLS_CLIENT_KEY") or env.get("CLASP_TLS_KEY")
+    if not (ca and cert and key):
+        return None
+    ctx = client_ssl_context(MTLSFiles(Path(ca), Path(cert), Path(key)))
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    return ctx

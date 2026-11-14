@@ -53,6 +53,9 @@ jobs:
           # services/edge depends on clasp-evaluation for the B5 in-project
           # completion metric, so the shared packages go in before the matrix one.
           pip install -e services/evaluation
+          # The cluster screens uploads with P3's library (clasp-security), which
+          # is not on PyPI: install it from the checkout first.
+          if [ "${{ matrix.package.name }}" = "cluster" ]; then pip install -e security; fi
           # A missing [test] extra only warns, so install errors are no longer hidden.
           pip install -e "${{ matrix.package.path }}[test]"
           pip install pytest pytest-cov httpx
@@ -88,6 +91,7 @@ jobs:
       - name: Install contracts + cluster + registry
         run: |
           pip install -e contracts
+          pip install -e security
           pip install -e services/cluster
           pip install -e services/registry
           pip install pytest httpx safetensors
@@ -105,7 +109,7 @@ jobs:
       - name: Install every package the seams cross
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e contracts -e services/evaluation
+          pip install -e contracts -e services/evaluation -e security
           pip install -e services/cluster -e services/registry
           pip install --no-deps -e services/edge
           pip install peft safetensors requests pytest httpx
