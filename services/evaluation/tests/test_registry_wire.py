@@ -299,7 +299,7 @@ def test_humaneval_only_guard_does_not_promote() -> None:
     )
     baseline = tuple(c.GuardMetrics.from_json(g) for g in reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.5)]))
     decision = decide(to_contracts_eval_result(wire), baseline_guard=baseline,
-                      active_version_before=2, previous_version=1)
+                      active_version_before=2)
     assert decision.action.value == "rollback"
     assert "guard metrics missing" in decision.reason
 

@@ -26,7 +26,7 @@ def test_empty_registry_lists_nothing(client):
 
 
 def test_save_then_list_and_get(client, safetensors_blob):
-    r = _upload(client, "django", safetensors_blob, {"kind": "client", "cluster_id": "web", "seed": 7})
+    r = _upload(client, "django", safetensors_blob, {"kind": "client", "cluster_id": "web", "seed": 7, "set_active": True})
     assert r.status_code == 201
     body = r.json()
     assert body["ref"]["version"] == 1
@@ -77,8 +77,8 @@ def test_cluster_snapshot_metadata(client, safetensors_blob):
 
 
 def test_active_endpoint(client, safetensors_blob):
-    _upload(client, "numpy", safetensors_blob, {"kind": "client"})
-    _upload(client, "numpy", safetensors_blob, {"kind": "client"})
+    _upload(client, "numpy", safetensors_blob, {"kind": "client", "set_active": True})
+    _upload(client, "numpy", safetensors_blob, {"kind": "client", "set_active": True})
     active = client.get("/adapters/numpy/active").json()
     assert active["ref"]["version"] == 2
 
@@ -100,7 +100,7 @@ def test_active_endpoint_corrupt_pointer_is_a_clean_500(client, safetensors_blob
     import os
     from pathlib import Path
 
-    _upload(client, "corrupt", safetensors_blob, {"kind": "client"})
+    _upload(client, "corrupt", safetensors_blob, {"kind": "client", "set_active": True})
     active_path = Path(os.environ["CLASP_REGISTRY_DATA"]) / "adapters" / "corrupt" / "active"
     active_path.write_text("not-an-int")
 

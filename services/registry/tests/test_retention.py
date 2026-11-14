@@ -74,7 +74,7 @@ def _upload(client, name, n=1, meta=None):
         r = client.post(
             f"/adapters/{name}/versions",
             files={"file": ("a.safetensors", make_safetensors(), "application/octet-stream")},
-            data={"meta": json.dumps(meta or {"kind": "client"})},
+            data={"meta": json.dumps(meta or {"kind": "client", "set_active": True})},
         )
         assert r.status_code == 201, r.text
 
@@ -156,7 +156,7 @@ def test_concurrent_writes_are_serialized(client):
         return client.post(
             "/adapters/flask/versions",
             files={"file": ("a.safetensors", make_safetensors(), "application/octet-stream")},
-            data={"meta": json.dumps({"kind": "client"})},
+            data={"meta": json.dumps({"kind": "client", "set_active": True})},
         ).status_code
 
     with ThreadPoolExecutor(max_workers=8) as pool:

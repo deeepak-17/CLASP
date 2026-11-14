@@ -5,17 +5,17 @@
       2. next-line completion edit similarity on the frozen guard set
          (benchmark ``LineCompletion``) did not drop against the baseline by
          more than 2 points absolute.
-    Otherwise: rollback to the previous version. Never gate on one side alone.
+    Otherwise: reject the candidate. Never gate on one side alone.
 
 The guard replaced HumanEval pass@1 (contracts >= 1.2.0 carries edit_similarity
 on GuardMetrics). A guard without ``LineCompletion`` edit similarity on both
 sides is not a pass: the rule refuses to promote, and the API answers 422
 before anything is recorded.
 
-The registry always activates a version on save (see storage.save); this rule
-runs *after* the fact, on whatever is currently active, and either confirms
-that choice (PROMOTE) or reverts it (ROLLBACK to the previous version). It is
-a pure function — no filesystem access — so it's cheap to unit test the D5
+An uploaded version is an inactive *candidate* (see storage.save): the live
+pointer does not move on upload. This rule runs on that candidate and either
+makes it active (PROMOTE) or records REJECT and leaves the pointer where it
+was, so a failed candidate never goes live. It is a pure function — no filesystem access — so it's cheap to unit test the D5
 math in isolation from the storage/HTTP layers.
 """
 from __future__ import annotations
@@ -28,6 +28,9 @@ GUARD_BENCHMARK = "LineCompletion"
 #: Absolute edit-similarity drop tolerated before it blocks a promotion (D5),
 #: a fraction since edit similarity is 0..1 (0.02 = 2 points).
 GUARD_EDIT_SIMILARITY_TOLERANCE = 0.02
+
+#: Operator restores are recorded in the same log; their reason starts with this.
+RESTORE_REASON_PREFIX = "operator restore"
 
 GUARD_MISSING_REASON = (
     f"{GUARD_BENCHMARK} guard metrics missing on candidate or baseline "
@@ -78,14 +81,13 @@ def decide(
     eval_result: EvalResult,
     *,
     baseline_guard: tuple[GuardMetrics, ...],
-    active_version_before: int,
-    previous_version: int | None,
+    active_version_before: int | None,
 ) -> PromotionDecision:
-    """Apply the D5 two-sided rule to a candidate that is currently `active`.
+    """Apply the D5 two-sided rule to an inactive candidate.
 
-    Raises ``ValueError`` if the rule says rollback but there is no previous
-    version to roll back to — that's a caller error (rollback candidates must
-    have a version to fall back to), surfaced as a clean 422 at the API layer.
+    PROMOTE makes the evaluated version active. Otherwise the decision is
+    REJECT and the pointer stays where it was: ``active_version_after`` is
+    ``active_version_before``, or 0 ("nothing active") when there is none.
     """
     improved, improved_reason = _in_project_improved(eval_result)
     guard_ok, guard_reason = _guard_holds(eval_result, baseline_guard)
@@ -94,20 +96,14 @@ def decide(
         return PromotionDecision(
             adapter=eval_result.adapter,
             action=PromotionAction.PROMOTE,
-            active_version_after=active_version_before,
+            active_version_after=eval_result.adapter.version,
             reason=f"promoted: {improved_reason}; {guard_reason}",
-        )
-
-    if previous_version is None:
-        raise ValueError(
-            f"rollback indicated ({improved_reason}; {guard_reason}) but no previous "
-            f"version exists for {eval_result.adapter.name!r} — nothing to roll back to"
         )
     return PromotionDecision(
         adapter=eval_result.adapter,
-        action=PromotionAction.ROLLBACK,
-        active_version_after=previous_version,
-        reason=f"rolled back: {improved_reason}; {guard_reason}",
+        action=PromotionAction.REJECT,
+        active_version_after=active_version_before if active_version_before is not None else 0,
+        reason=f"rejected: {improved_reason}; {guard_reason}",
     )
 
 
@@ -125,5 +121,5 @@ def restore_decision(
         adapter=candidate,
         action=PromotionAction.ROLLBACK if backwards else PromotionAction.PROMOTE,
         active_version_after=to_version,
-        reason=f"operator restore v{candidate.version} -> v{to_version}{gate}: {reason}",
+        reason=f"{RESTORE_REASON_PREFIX} v{candidate.version} -> v{to_version}{gate}: {reason}",
     )

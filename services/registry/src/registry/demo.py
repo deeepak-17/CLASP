@@ -4,10 +4,11 @@
 
 Walks every P4 capability over real HTTP, asserting each response:
 
-    1. save a cluster adapter and a client adapter        (versioning, sha256)
-    2. compose them into a pre-merged composite            (D6)
-    3. save a better client v2, PROMOTE it with build-on-promote composite (D5+D6)
-    4. save a bad client v3, D5 ROLLS IT BACK                (D5, real rule)
+    1. upload a cluster adapter (seeded active) and a client candidate v1,
+       which stays inactive until promoted                (versioning, sha256)
+    2. PROMOTE v1, then compose it with the cluster into a composite (D5+D6)
+    3. upload a better client v2, PROMOTE it with build-on-promote composite
+    4. upload a bad client v3, D5 REJECTS it: the pointer stays on v2 (D5)
     5. restore drill on a 1.3B-sized client: its composite follows, timed
        on the composite the edge fetches            (D11: <= 10 s)
     6. lineage + audit trail, then a retention dry run      (D9)
@@ -136,12 +137,12 @@ def _restore_drill(reg: Registry, run_id: str, hp: dict, *, layers: int, hidden:
     cluster, client, composite = f"nfr-cluster-{run_id}", f"nfr-{run_id}", f"nfr-composite-{run_id}"
     status, body = reg.save(cluster, make_adapter(5, layers=layers, hidden=hidden),
                             {"kind": "cluster", "hparams": hp, "aggregation": "svd_exact",
-                             "source_clients": [client]})
+                             "source_clients": [client], "set_active": True})
     _expect("save nfr cluster", status, 201, body)
     compose = {"cluster": cluster, "client": client, "alpha": 0.5, "beta": 1.0}
     for seed in (6, 7):
         status, body = reg.save(client, make_adapter(seed, layers=layers, hidden=hidden),
-                                {"kind": "client", "hparams": hp})
+                                {"kind": "client", "hparams": hp, "set_active": True})
         _expect("save nfr client", status, 201, body)
         status, body = reg.post_json(f"/adapters/{composite}/compose", compose)
         _expect("compose nfr", status, 201, body)
@@ -179,16 +180,26 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     _expect("healthz", status, 200, body)
     log("healthz", contracts=body["contracts"])
 
+    # the cluster layer is operator-seeded active; client versions are candidates
     status, body = reg.save(cluster, make_adapter(1, layers=layers, hidden=hidden), {
         "kind": "cluster", "hparams": hp, "aggregation": "svd_exact", "round": 1,
         "cluster_id": "web", "source_clients": ["flask", "requests", "werkzeug"],
-        "privacy": {"epsilon": 3.0}})
+        "privacy": {"epsilon": 3.0}, "set_active": True})
     _expect("save cluster", status, 201, body)
     status, body = reg.save(client, make_adapter(2, layers=layers, hidden=hidden), {
         "kind": "client", "hparams": hp, "round": 1, "cluster_id": "web",
         "privacy": {"epsilon": 2.5}})
     _expect("save client v1", status, 201, body)
     log("save", cluster_sha256=body["sha256"][:12])
+    status, _ = reg.get(f"/adapters/{client}/active")
+    if status != 404:
+        raise DemoFailure(f"save client v1: an upload must not be active, got HTTP {status}")
+
+    status, body = reg.post_json(f"/adapters/{client}/promote", _eval(client, 1, 0.70, 0.60))
+    _expect("promote v1", status, 200, body)
+    if body["action"] != "promote" or body["active_version_after"] != 1:
+        raise DemoFailure(f"promote v1: unexpected decision {body}")
+    log("promote_v1", action=body["action"])
 
     status, body = reg.post_json(f"/adapters/{composite}/compose", {
         "cluster": cluster, "client": client, "alpha": 0.5, "beta": 1.0})
@@ -206,16 +217,20 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     _expect("promote v2", status, 200, body)
     if body["action"] != "promote" or body["composite"]["composed_from"]["client_version"] != 2:
         raise DemoFailure(f"promote v2: unexpected decision {body}")
-    log("promote", action=body["action"], composite_version=body["composite"]["ref"]["version"])
+    log("promote_v2", action=body["action"], composite_version=body["composite"]["ref"]["version"])
 
     status, body = reg.save(client, make_adapter(4, layers=layers, hidden=hidden),
                             {"kind": "client", "hparams": hp, "round": 3, "cluster_id": "web"})
     _expect("save client v3", status, 201, body)
     status, body = reg.post_json(f"/adapters/{client}/promote", _eval(client, 3, 0.61, 0.40))
     _expect("promote v3", status, 200, body)
-    if body["action"] != "rollback" or body["active_version_after"] != 2:
-        raise DemoFailure(f"promote v3: expected rollback to v2, got {body}")
-    log("rollback", reason=body["reason"])
+    if body["action"] != "reject" or body["active_version_after"] != 2:
+        raise DemoFailure(f"promote v3: expected reject with v2 still active, got {body}")
+    status, active = reg.get(f"/adapters/{client}/active")
+    _expect("active after reject", status, 200, active)
+    if active["ref"]["version"] != 2:
+        raise DemoFailure(f"reject: v3 went live, active is {active['ref']['version']}")
+    log("reject", reason=body["reason"])
 
     report["restore_seconds"] = _restore_drill(reg, run_id, hp, layers=nfr_layers,
                                                hidden=nfr_hidden, log=log)

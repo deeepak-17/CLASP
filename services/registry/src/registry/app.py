@@ -11,7 +11,7 @@ Endpoints:
     GET  /adapters/{name}/active                   metadata for the active version
     GET  /adapters/{name}/lineage                  versions + parents + decisions
     POST /adapters/{name}/compose                  store a pre-merged D6 composite
-    POST /adapters/{name}/promote                  D5 two-sided rule on the active version
+    POST /adapters/{name}/promote                  D5 two-sided rule on an inactive candidate
                                                    (+ optional build-on-promote composite)
     POST /adapters/{name}/restore                  operator restore / rollback drill
     POST /adapters/{name}/gc                       retention: keep last N + ever-live
@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from dataclasses import replace
 
 from contracts import (
     CONTRACTS_VERSION,
@@ -57,7 +58,13 @@ from .composition import (
     store_composite,
 )
 from .lineage import build_lineage
-from .promotion import GUARD_MISSING_REASON, decide, guard_present, restore_decision
+from .promotion import (
+    GUARD_MISSING_REASON,
+    RESTORE_REASON_PREFIX,
+    decide,
+    guard_present,
+    restore_decision,
+)
 from .retention import RetentionPlan, collect_referenced, default_keep_last, gc_adapter
 from .storage import (
     AdapterNotFound,
@@ -147,7 +154,7 @@ def _parse_save_meta(raw: str) -> dict:
         raise HTTPException(422, "meta must be a JSON object")
     try:
         composed = m.get("composed_from")
-        if not isinstance(m.get("set_active", True), bool):
+        if not isinstance(m.get("set_active", False), bool):
             raise ValueError("set_active must be a boolean")
         return {
             "kind": AdapterKind(m.get("kind", "client")),
@@ -158,7 +165,7 @@ def _parse_save_meta(raw: str) -> dict:
             "seed": m.get("seed", 0),
             "cluster_id": m.get("cluster_id"),
             "source_clients": tuple(m.get("source_clients", ())),
-            "set_active": m.get("set_active", True),
+            "set_active": m.get("set_active", False),
             "composed_from": CompositeProvenance.from_json(composed) if composed else None,
         }
     except (KeyError, TypeError, ValueError) as e:
@@ -258,7 +265,9 @@ def compose(name: str, response: Response, body: dict = Body(...)) -> dict:
     return _metadata_to_dict(meta)
 
 
-def _composite_on_promote(spec: object, candidate: str) -> tuple[str, PlannedComposite]:
+def _composite_on_promote(
+    spec: object, candidate: str, version: int
+) -> tuple[str, PlannedComposite]:
     """Validate a promote body's ``composite`` block and plan it (writes nothing)."""
     if not isinstance(spec, dict) or not isinstance(spec.get("name"), str):
         raise HTTPException(422, "composite must be an object with a 'name'")
@@ -270,6 +279,12 @@ def _composite_on_promote(spec: object, candidate: str) -> tuple[str, PlannedCom
         raise HTTPException(
             422, f"composite must include the promoted adapter {candidate!r} as cluster or client"
         )
+    # the candidate is not active yet (the pointer moves after planning), so the
+    # composite is pinned to the version being promoted, not to its stale active
+    if req.cluster_name == candidate and req.cluster_version is None:
+        req = replace(req, cluster_version=version)
+    if req.client_name == candidate and req.client_version is None:
+        req = replace(req, client_version=version)
     try:
         return spec["name"], plan_composite(get_store(), req, spec["name"])
     except CompositionError as e:
@@ -301,10 +316,13 @@ def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...
 
 @app.post("/adapters/{name}/promote")
 def promote(name: str, body: dict = Body(...)) -> dict:
-    """Apply the D5 two-sided rule to the currently-active version.
+    """Apply the D5 two-sided rule to an inactive candidate version.
 
-    Saves auto-activate; this endpoint is the checkpoint that confirms or
-    reverts that activation once evaluation lands. Body::
+    An upload is a candidate and does not move the active pointer. This
+    endpoint decides it once evaluation lands: PROMOTE makes it active,
+    REJECT records the failure and leaves the pointer alone, so a failed
+    candidate never goes live. The version must exist (404), be newer than
+    the active version (409) and not already be decided (409). Body::
 
         {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...],
          "composite"?: {"name", "cluster", "client", "alpha", "beta"}}
@@ -317,9 +335,8 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     The composite is built in memory *before* anything is written, so a bad
     composite request rejects the whole call and records no decision.
 
-    A ROLLBACK also moves every composite the edge is serving from the
-    rolled-back version onto the restored one (``registry.cascade``), so what
-    is served changes with the pointer. The moves are listed in ``composites``.
+    A REJECT moves nothing, so no composite changes. Only an operator
+    ``/restore`` moves the pointer backwards (and its composites with it).
     """
     with _WRITE_LOCK:
         return _promote(name, body)
@@ -336,39 +353,28 @@ def _promote(name: str, body: dict) -> dict:
             422, f"eval.adapter.name {eval_result.adapter.name!r} does not match path {name!r}"
         )
 
+    version = eval_result.adapter.version
+    store.get_metadata(name, version)  # 404 if the version does not exist
     active_before = store.get_active(name)
-    if active_before is None:
-        raise HTTPException(404, f"no active version for {name}")
-    if active_before != eval_result.adapter.version:
-        raise HTTPException(
-            409,
-            f"candidate v{eval_result.adapter.version} is not the active version "
-            f"(active is v{active_before}) — promotion only evaluates the current active",
-        )
+    if active_before is not None and version <= active_before:
+        raise HTTPException(409, f"v{version} is not a candidate: active is v{active_before}")
+    if any(d.adapter.version == version and not d.reason.startswith(RESTORE_REASON_PREFIX)
+           for d in store.list_promotions(name)):
+        raise HTTPException(409, f"v{version} was already decided")
 
-    try:
-        decision = decide(
-            eval_result,
-            baseline_guard=baseline_guard,
-            active_version_before=active_before,
-            previous_version=store.previous_version(name, eval_result.adapter.version),
-        )
-    except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+    decision = decide(eval_result, baseline_guard=baseline_guard,
+                      active_version_before=active_before)
 
     wants_composite = "composite" in body
     planned = None
     if wants_composite and decision.action == PromotionAction.PROMOTE:
-        planned = _composite_on_promote(body["composite"], name)
+        planned = _composite_on_promote(body["composite"], name, version)
 
-    cascade = []
-    if decision.action == PromotionAction.ROLLBACK:
-        cascade = _plan_cascade(name, active_before, decision.active_version_after)
+    if decision.action == PromotionAction.PROMOTE:
         store.set_active(name, decision.active_version_after)
     store.record_promotion(name, decision)
     result = _promotion_decision_to_dict(decision)
-    result["composites"] = apply_cascade(store, cascade, action=decision.action,
-                                         reason=f"{name} {decision.reason}")
+    result["composites"] = []  # only an operator restore moves the pointer back
     if wants_composite:
         composite_name, plan = planned if planned else (None, None)
         result["composite"] = (

@@ -18,7 +18,7 @@ def _upload(client, name, blob=None, kind="client"):
     r = client.post(
         f"/adapters/{name}/versions",
         files={"file": (f"{name}.safetensors", blob or make_safetensors(), "application/octet-stream")},
-        data={"meta": json.dumps({"kind": kind})},
+        data={"meta": json.dumps({"kind": kind, "set_active": True})},
     )
     assert r.status_code == 201, r.text
     return r.json()

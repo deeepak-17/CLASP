@@ -28,7 +28,7 @@ def _promote_v2_with_composite(api):
     """flask v1 composed, then v2 promoted with build-on-promote: composite v2 serves v2."""
     _seed(api)
     assert _compose(api).status_code == 201
-    _save(api, "flask", make_adapter(3), kind="client", cluster_id="web")
+    _save(api, "flask", make_adapter(3), kind="client", cluster_id="web", set_active=False)
     body = _promote_body("flask", 2, good=True)
     body["composite"] = {"name": COMPOSITE, "cluster": "cluster-web", "client": "flask",
                          "alpha": 0.5, "beta": 1.0}
@@ -37,19 +37,17 @@ def _promote_v2_with_composite(api):
     assert _served_client_version(api) == 2
 
 
-def test_d5_rollback_moves_the_served_composite_back(client):
-    _promote_v2_with_composite(client)
+def test_reject_leaves_the_served_composite_alone(client):
+    """A rejected candidate never went live, so no composite has anything to move back."""
+    _seed(client)
+    assert _compose(client).status_code == 201
+    _save(client, "flask", make_adapter(3), kind="client", cluster_id="web", set_active=False)
     r = client.post("/adapters/flask/promote", json=_promote_body("flask", 2, good=False))
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["action"] == "rollback" and body["active_version_after"] == 1
+    assert r.json()["action"] == "reject" and r.json()["composites"] == []
     assert _active(client, "flask")["ref"]["version"] == 1
     assert _served_client_version(client) == 1
-    assert body["composites"] == [{
-        "name": COMPOSITE, "from_version": 2, "to_version": 1, "rebuilt": False,
-        "composed_from": _active(client, COMPOSITE)["composed_from"],
-    }]
-    assert _active(client, COMPOSITE)["ref"]["version"] == 1  # reused, not rebuilt
+    assert _active(client, COMPOSITE)["ref"]["version"] == 1
 
 
 def test_restore_moves_the_served_composite_back(client):
@@ -128,8 +126,8 @@ def test_unbuildable_replacement_refuses_and_changes_nothing(client):
     assert client.get("/adapters/flask/promotions").json()["decisions"] == []
 
 
-def test_rollback_without_composites_reports_none(client):
+def test_reject_without_composites_reports_none(client):
     _save(client, "flask", make_adapter(2), kind="client")
-    _save(client, "flask", make_adapter(3), kind="client")
+    _save(client, "flask", make_adapter(3), kind="client", set_active=False)
     r = client.post("/adapters/flask/promote", json=_promote_body("flask", 2, good=False))
     assert r.status_code == 200 and r.json()["composites"] == []

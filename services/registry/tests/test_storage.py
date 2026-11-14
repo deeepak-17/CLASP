@@ -72,7 +72,10 @@ def test_metadata_roundtrips_cluster_fields(store, safetensors_blob):
 def test_active_pointer(store, safetensors_blob):
     store.save("sk", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
     store.save("sk", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
-    assert store.get_active("sk") == 2  # last save is active by default
+    assert store.get_active("sk") is None  # a save is a candidate, not live
+    store.save("sk", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams(),
+               set_active=True)
+    assert store.get_active("sk") == 3
     store.set_active("sk", 1)
     assert store.get_active("sk") == 1
 

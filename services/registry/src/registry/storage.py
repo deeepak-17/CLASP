@@ -261,10 +261,14 @@ class RegistryStore:
         seed: int = 0,
         cluster_id: str | None = None,
         source_clients: tuple[str, ...] = (),
-        set_active: bool = True,
+        set_active: bool = False,
         composed_from: CompositeProvenance | None = None,
     ) -> AdapterMetadata:
-        """Write a new immutable version. Assigns the next version number."""
+        """Write a new immutable version. Assigns the next version number.
+
+        The version is an inactive candidate unless ``set_active`` is true
+        (operator use); a promote is what normally makes it live.
+        """
         _validate_name(name)
         if not is_safetensors(payload):
             raise StorageError("payload is not a valid safetensors blob")

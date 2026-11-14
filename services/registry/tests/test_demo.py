@@ -12,11 +12,11 @@ def test_demo_walks_every_capability_against_a_live_registry(running):
     report = run_demo(Registry(f"http://127.0.0.1:{port}"), run_id="t1",
                       nfr_layers=4, nfr_hidden=256)
     steps = [s["step"] for s in report["steps"]]
-    assert steps == ["healthz", "save", "compose", "promote", "rollback", "restore_nfr",
-                     "lineage", "audit_trail", "gc_dry_run"]
+    assert steps == ["healthz", "save", "promote_v1", "compose", "promote_v2", "reject",
+                     "restore_nfr", "lineage", "audit_trail", "gc_dry_run"]
     assert report["ok"] is True
     audit = next(s for s in report["steps"] if s["step"] == "audit_trail")
-    assert audit["decisions"] == ["promote", "rollback"]
+    assert audit["decisions"] == ["promote", "promote", "reject"]
 
 
 def test_demo_cli_writes_report_and_is_rerunnable(running, tmp_path):

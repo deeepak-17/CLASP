@@ -87,8 +87,10 @@ def test_lineage_lists_versions_parents_and_decisions(client):
     _upload(client, "cluster-web", {
         "kind": "cluster", "aggregation": "svd_exact", "round": 1,
         "cluster_id": "web", "source_clients": ["flask", "requests", "werkzeug"],
+        "set_active": True,
     })
-    _upload(client, "composite-flask", {"kind": "composite", "composed_from": PROV.to_json()})
+    _upload(client, "composite-flask", {"kind": "composite", "composed_from": PROV.to_json(),
+                                        "set_active": True})
 
     r = client.get("/adapters/cluster-web/lineage")
     assert r.status_code == 200
@@ -106,12 +108,12 @@ def test_lineage_lists_versions_parents_and_decisions(client):
 
 
 def test_lineage_attaches_promotion_events(client):
-    _upload(client, "flask")
-    _upload(client, "flask")
+    _upload(client, "flask", {"kind": "client", "set_active": True})
+    _upload(client, "flask")  # candidate v2
     r = client.post("/adapters/flask/promote", json=_promote_body("flask", 2, good=False))
-    assert r.json()["action"] == "rollback"
+    assert r.json()["action"] == "reject"
     versions = client.get("/adapters/flask/lineage").json()["versions"]
-    assert [e["action"] for e in versions[1]["decisions"]] == ["rollback"]
+    assert [e["action"] for e in versions[1]["decisions"]] == ["reject"]
     assert versions[0]["is_active"] is True and versions[1]["is_active"] is False
 
 

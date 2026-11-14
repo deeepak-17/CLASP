@@ -230,8 +230,7 @@ def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict],
     try:
         decision = decide(result,
                           baseline_guard=tuple(_guard_contract(g) for g in baseline_guard),
-                          active_version_before=result.adapter.version,
-                          previous_version=previous_version)
+                          active_version_before=result.adapter.version)
     except ValueError as exc:
         return "unavailable", f"registry.promotion.decide could not decide: {exc}"
     return decision.action.value, decision.reason
