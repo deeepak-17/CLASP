@@ -1,6 +1,6 @@
 # Third-party notices
 
-`line_guard_v1.jsonl` contains short excerpts of source code from the following BSD-3-Clause projects. Their copyright notices are kept here.
+`line_guard_v1.jsonl` contains source code from the following BSD-3-Clause projects (whole-file prefixes used as completion prompts). Their copyright notices are kept here; each line is taken from the LICENSE file of the upstream project as shipped in the PyPI distribution click 8.5.0 / jinja2 3.1.6 / colorama 0.4.6.
 
 ## click
 
@@ -14,14 +14,14 @@
 - Source: https://github.com/pallets/jinja.git
 - Pinned ref: dd4a8b5466d8790540c181590b14db4d4d889d57
 - Licence: BSD-3-Clause
-- Copyright 2014 Pallets
+- Copyright 2007 Pallets
 
 ## colorama
 
 - Source: https://github.com/tartley/colorama.git
 - Pinned ref: 3de9f013df4b470069d03d250224062e8cf15c49
 - Licence: BSD-3-Clause
-- Copyright Jonathan Hartley 2013
+- Copyright (c) 2010 Jonathan Hartley
 
 ## BSD 3-Clause License
 

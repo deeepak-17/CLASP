@@ -66,6 +66,10 @@ def test_committed_guard_set_matches_its_manifest():
     assert len(ex) == 300 and examples_fingerprint(ex) == man["fingerprint"]
     assert {e.file.split("/")[0] for e in ex} == set(line_guard.GUARD_SOURCES)
     assert {s["license"] for s in man["sources"].values()} == {"BSD-3-Clause"}
+    assert {k: v["copyright"] for k, v in man["sources"].items()} == {
+        "client-click": "Copyright 2014 Pallets",
+        "client-jinja": "Copyright 2007 Pallets",
+        "client-colorama": "Copyright (c) 2010 Jonathan Hartley"}
 
 
 def test_guard_metrics_shape():

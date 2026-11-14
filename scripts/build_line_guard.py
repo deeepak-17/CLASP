@@ -23,7 +23,13 @@ sys.path.insert(0, str(REPO_ROOT / "services"))
 from evaluation.completion import examples_fingerprint  # noqa: E402
 from evaluation.eval_harness import line_guard  # noqa: E402
 
-PALLETS_COPYRIGHT = "Copyright 2014 Pallets"
+# Copyright lines: the LICENSE file of the upstream project, as shipped in the PyPI
+# distribution click 8.5.0 / jinja2 3.1.6 / colorama 0.4.6.
+COPYRIGHT_LINES = {
+    "client-click": "Copyright 2014 Pallets",
+    "client-jinja": "Copyright 2007 Pallets",
+    "client-colorama": "Copyright (c) 2010 Jonathan Hartley",
+}
 STRIDE = 7  # collect_examples' default; recorded in the manifest
 
 BSD3 = """Redistribution and use in source and binary forms, with or without
@@ -66,21 +72,13 @@ def read_provenance(partitions: Path, source: str) -> dict:
     return {"license": lic, "source_url": url, "source_ref": ref}
 
 
-def copyright_line(source: str, source_dir: Path) -> str:
-    """Pallets projects share one line; colorama's is quoted from its file header."""
-    if source != "client-colorama":
-        return PALLETS_COPYRIGHT
-    for path in sorted((source_dir / "repo").rglob("*.py")):
-        first = path.read_text(encoding="utf-8").splitlines()[0]
-        if "Copyright" in first:
-            return first.split(". BSD")[0].lstrip("# ").rstrip(".")
-    raise SystemExit("no copyright header found in colorama sources")
-
-
 def notice(entries: dict) -> str:
     out = ["# Third-party notices", "",
-           "`line_guard_v1.jsonl` contains short excerpts of source code from the "
-           "following BSD-3-Clause projects. Their copyright notices are kept here.", ""]
+           "`line_guard_v1.jsonl` contains source code from the "
+           "following BSD-3-Clause projects (whole-file prefixes used as completion prompts). "
+           "Their copyright notices are kept here; each line is taken from the LICENSE "
+           "file of the upstream project as shipped in the PyPI distribution click 8.5.0 / "
+           "jinja2 3.1.6 / colorama 0.4.6.", ""]
     for name, e in entries.items():
         out += [f"## {name[len('client-'):]}", "",
                 f"- Source: {e['source_url']}",
@@ -114,7 +112,7 @@ def main() -> None:
     sources = {}
     for name, d in zip(line_guard.GUARD_SOURCES, dirs):
         sources[name] = {**read_provenance(args.partitions, name),
-                         "copyright": copyright_line(name, d),
+                         "copyright": COPYRIGHT_LINES[name],
                          "n_examples": sum(e.file.startswith(name + "/") for e in examples)}
     manifest = {"benchmark": line_guard.GUARD_BENCHMARK, "version": 1,
                 "size": len(examples), "seed": args.seed, "stride": STRIDE,
