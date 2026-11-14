@@ -42,6 +42,7 @@ secrets/
 # --- Experiment outputs (keep configs, ignore heavy results) ---
 experiments/**/results/*
 !experiments/**/results/.gitkeep
+_demo_data/
 
 # --- Node / dashboard ---
 node_modules/
