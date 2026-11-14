@@ -260,6 +260,14 @@ def start_grpc_server(
 #       POST /adapters/{id}/publish               seam B: push to the registry
 #       GET  /adapters/cluster/active, /aggregate/manifest   default cluster
 #
+#   promotion (decision U11: aggregate -> candidate -> promote | reject)
+#       POST /aggregate builds a CANDIDATE; ``active`` (what edges pull and train
+#       on) is untouched until the candidate is promoted. A rejected candidate is
+#       dropped and the previously promoted adapter keeps being served.
+#       GET  /clusters/{id}/adapters/candidate
+#       POST /clusters/{id}/adapters/candidate/promote|reject   body {"sha256"}
+#       POST /adapters/{id}/publish sends the candidate to the registry inactive.
+#
 #   cluster-addressed surface (P2: membership, isolation, re-clustering)
 #       PUT  /clusters/{id}/members               the only call that *registers*
 #       POST /clusters/{id}/uploads|aggregate     404 for an unregistered id
@@ -306,7 +314,11 @@ class _StoredUpload:
 
 
 class _ClusterState:
-    """One cluster's upload buffer, round counter and active adapter.
+    """One cluster's upload buffer, round counter, active adapter and candidate.
+
+    ``active`` is the promoted adapter edges pull and train on. ``candidate`` is
+    the latest aggregate, awaiting promote or reject (decision U11); at most one
+    exists, and no new aggregate runs while it is pending.
 
     The service holds one ``_ClusterState`` per cluster id in ``_clusters``; the
     legacy single-cluster endpoints are the same handlers bound to
@@ -316,7 +328,8 @@ class _ClusterState:
     Concurrency: the handlers are plain ``def`` functions, so FastAPI runs them
     on a thread pool and several can touch one cluster at the same time, even
     with a single worker process. ``lock`` serializes every read-modify-write of
-    ``uploads``, ``round_id``, ``active``, ``last_manifest`` and ``last_round``:
+    ``uploads``, ``round_id``, ``active``, ``candidate``, ``last_manifest`` and
+    ``last_round`` (promote and reject take it too):
     ``_upload`` and ``_aggregate`` hold it for their whole body, so an upload can
     neither be iterated while it is added nor be cleared without having been
     aggregated. An upload that waits behind a running aggregate then sees the
@@ -342,6 +355,7 @@ class _ClusterState:
         self.uploads: dict[str, _StoredUpload] = {}
         self.round_id: int = 0
         self.active: ClusterAdapterBroadcast | None = None
+        self.candidate: ClusterAdapterBroadcast | None = None
         self.last_manifest: dict[str, object] | None = None
         # Evidence for POST /recluster: client_id -> (adapter it uploaded,
         # adapter it started from) for the contributors of the *last completed*
@@ -382,6 +396,7 @@ def _reset_clusters() -> None:
             _state.uploads.clear()
             _state.round_id = 0
             _state.active = None
+            _state.candidate = None
             _state.last_manifest = None
             _state.last_round.clear()
 
@@ -502,7 +517,7 @@ DEFAULT_REGISTRY_URL = _os.environ.get("CLASP_REGISTRY_URL", "http://localhost:8
 
 
 class PublishRequest(_BaseModel):
-    """Seam B: push this cluster's active aggregate into the State Registry."""
+    """Seam B: push this cluster's candidate aggregate into the State Registry."""
 
     registry_url: str = DEFAULT_REGISTRY_URL
     #: Registry adapter name; defaults to the cluster_id, which is what makes
@@ -510,7 +525,9 @@ class PublishRequest(_BaseModel):
     adapter_name: str | None = None
     round: int | None = None
     seed: int = 0
-    set_active: bool = True
+    #: The published version is the cluster's candidate; it becomes the
+    #: registry's active version only on a PROMOTE, so this defaults to False.
+    set_active: bool = False
     timeout_s: float = 120.0
 
 
@@ -801,8 +818,9 @@ def _aggregate_target(
 
 def _aggregate(state: _ClusterState, request: AggregateRequest | None) -> ClusterAdapterBroadcast:
     """Runs the existing aggregation core over every upload currently
-    buffered in ``state``, then clears the buffer and advances that cluster's
-    round counter — the same one-round-at-a-time semantics
+    buffered in ``state``, stores the result as the cluster's **candidate**
+    (409 ``candidate_pending`` while one is already waiting), then clears the
+    buffer and advances that cluster's round counter — the same one-round-at-a-time semantics
     ``simulation.run_round`` already uses.
 
     The cluster lock is held for the whole call. ``aggregate_svd`` can take
@@ -822,7 +840,16 @@ def _aggregate(state: _ClusterState, request: AggregateRequest | None) -> Cluste
 def _aggregate_locked(
     state: _ClusterState, request: AggregateRequest | None, expected: int | None
 ) -> ClusterAdapterBroadcast:
-    """Body of ``_aggregate``; the caller must hold ``state.lock``."""
+    """Body of ``_aggregate``; the caller must hold ``state.lock``.
+
+    The result is stored as ``state.candidate``; ``state.active`` is not
+    touched (it changes only on a promote). The aggregate still builds on
+    ``active`` (the FedProx base round), which is what edges trained on."""
+    if state.candidate is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "candidate_pending", "sha256": state.candidate.sha256},
+        )
     if not state.uploads:
         raise HTTPException(
             status_code=400, detail=f"no uploads to aggregate for {state.cluster_id}"
@@ -1027,7 +1054,7 @@ def _aggregate_locked(
             except Exception as exc:  # noqa: BLE001 - registry trouble must not lose a round
                 manifest["publish_error"] = f"{type(exc).__name__}: {exc}"
 
-    state.active = broadcast
+    state.candidate = broadcast
     manifest["retained_uploads"] = req.retain_uploads
     state.last_manifest = manifest
     if completed:
@@ -1199,7 +1226,9 @@ def get_cluster_manifest(cluster_id: str) -> dict[str, object]:
 
 @app.post("/adapters/{cluster_id}/publish", status_code=201)
 def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) -> dict:
-    """Seam B: Cluster -> Registry. POST the active aggregate as a new version.
+    """Seam B: Cluster -> Registry. POST the **candidate** aggregate as a new
+    (inactive) version; 404 when no candidate is pending. The registry makes it
+    active only on a PROMOTE.
 
     This is the one place Cluster talks to another service. It sends exactly
     what ``/download`` serves, plus the metadata envelope the registry records:
@@ -1210,7 +1239,7 @@ def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) 
     own sha256 over the payload; Edge verifies the download against that on the
     way back out (seam C1).
 
-    The cluster lock is taken to read ``active`` (so a publish that arrives
+    The cluster lock is taken to read ``candidate`` (so a publish that arrives
     during an aggregate waits for it and sends the new round, never a torn
     one) and released before the network call.
     """
@@ -1223,10 +1252,10 @@ def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) 
     broadcast = None
     if state is not None:
         with state.lock:
-            broadcast = state.active
+            broadcast = state.candidate
     if broadcast is None:
         raise HTTPException(
-            status_code=404, detail=f"no aggregated cluster adapter for {cluster_id!r}"
+            status_code=404, detail=f"no candidate adapter to publish for {cluster_id!r}"
         )
     name = req.adapter_name or cluster_id
     payload = _peft_bytes(broadcast)
@@ -1297,6 +1326,7 @@ def list_clusters() -> dict[str, object]:
     for cid, st in sorted(clusters.items()):
         uploaded = sorted(st.uploads)  # one snapshot; len() is taken from it too
         active = st.active  # one atomic read
+        candidate = st.candidate
         out[cid] = {
             "round_id": st.round_id,
             "pending_uploads": len(uploaded),
@@ -1310,6 +1340,8 @@ def list_clusters() -> dict[str, object]:
             "aggregated_round_id": active.round_id if active is not None else None,
             # What an edge compares its pulled adapter against (see _check_base).
             "active_sha256": active.sha256 if active is not None else None,
+            # The aggregate awaiting promote / reject (null when none).
+            "candidate_sha256": candidate.sha256 if candidate is not None else None,
         }
     return {"clusters": out}
 
@@ -1383,6 +1415,64 @@ def get_cluster_active_adapter(cluster_id: str, request: Request) -> ClusterAdap
 @app.get("/clusters/{cluster_id}/aggregate/manifest")
 def get_cluster_manifest_by_path(cluster_id: str) -> dict[str, object]:
     return _manifest(_cluster(cluster_id), cluster_id)
+
+
+class CandidateDecision(_BaseModel):
+    """Body of ``.../adapters/candidate/promote`` and ``.../reject``."""
+
+    sha256: str
+
+
+def _pending_candidate(state: _ClusterState, sha256: str) -> ClusterAdapterBroadcast:
+    """The pending candidate, if ``sha256`` names it; the caller holds the lock."""
+    candidate = state.candidate
+    if candidate is None:
+        raise HTTPException(status_code=409, detail={"error": "no_candidate", "sha256": None})
+    if sha256 != candidate.sha256:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "candidate_mismatch", "sha256": candidate.sha256},
+        )
+    return candidate
+
+
+@app.get("/clusters/{cluster_id}/adapters/candidate", response_model=ClusterAdapterBroadcast)
+def get_cluster_candidate_adapter(cluster_id: str, request: Request) -> ClusterAdapterBroadcast:
+    """The aggregate awaiting promote or reject (404 when none is pending).
+    Edges do not read this: they keep pulling ``.../adapters/active``."""
+    state = _cluster(cluster_id)
+    _read_access(state, request)
+    candidate = state.candidate  # one atomic read
+    if candidate is None:
+        raise HTTPException(status_code=404, detail=f"no candidate adapter for {cluster_id!r}")
+    return candidate
+
+
+@app.post("/clusters/{cluster_id}/adapters/candidate/promote")
+def promote_candidate(cluster_id: str, body: CandidateDecision) -> dict[str, object]:
+    """Make the pending candidate the served (active) adapter. ``sha256`` must
+    name it, else 409. Uploads buffered meanwhile are kept: they declare the
+    previous active adapter as base, and are judged against the new one only
+    at the next aggregate."""
+    state = _cluster(cluster_id)
+    with state.lock:
+        candidate = _pending_candidate(state, body.sha256)
+        state.active = candidate
+        state.candidate = None
+    return {"active_sha256": candidate.sha256, "round_id": candidate.round_id}
+
+
+@app.post("/clusters/{cluster_id}/adapters/candidate/reject")
+def reject_candidate(cluster_id: str, body: CandidateDecision) -> dict[str, object]:
+    """Drop the pending candidate; the previously promoted adapter keeps being
+    served and uploads buffered for the next round are kept. The round number
+    is not reused: the next aggregate takes the next one."""
+    state = _cluster(cluster_id)
+    with state.lock:
+        _pending_candidate(state, body.sha256)
+        state.candidate = None
+        active = state.active
+    return {"active_sha256": active.sha256 if active is not None else None}
 
 
 class RestoreRequest(_BaseModel):
@@ -1459,7 +1549,7 @@ def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, o
     registry restored, checks its bytes against the registry's sha256,
     rebuilds the adapter from them and checks that serving it reproduces those
     exact bytes (so ``active_sha256`` is the registry's digest), then makes it
-    the cluster's active adapter. Residuals buffered on top of the rejected
+    the cluster's active adapter (a pending candidate is left untouched). Residuals buffered on top of the rejected
     merge are dropped (they would be refused at aggregate time anyway); the
     round counter is left alone. Network first, cluster lock last.
     """

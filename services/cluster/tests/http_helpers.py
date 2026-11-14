@@ -13,6 +13,7 @@ def reset_server_state() -> tuple[dict, dict]:
     saved = (dict(server._clusters), dict(server._membership))
     default.uploads.clear()
     default.round_id, default.active, default.last_manifest = 0, None, None
+    default.candidate = None
     default.last_round.clear()
     server._clusters.clear()
     server._clusters[server.DEFAULT_CLUSTER_ID] = default
@@ -54,3 +55,12 @@ def upload_body(client_id, adapter: LoRAAdapter, round_id=0, n=10, **extra):
         ],
         **extra,
     }
+
+
+def promote(client, cluster_id: str, broadcast: dict | None = None) -> dict:
+    """Promote ``cluster_id``'s pending candidate (the one just aggregated, or
+    the given ``broadcast``) and return the promote response."""
+    sha = (broadcast or client.get(f"/clusters/{cluster_id}/adapters/candidate").json())["sha256"]
+    r = client.post(f"/clusters/{cluster_id}/adapters/candidate/promote", json={"sha256": sha})
+    assert r.status_code == 200, r.text
+    return r.json()

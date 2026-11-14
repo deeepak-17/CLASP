@@ -27,7 +27,13 @@ from fastapi.testclient import TestClient
 from cluster import server
 from cluster.aggregation import accumulate_svd_lowrank, aggregate_svd_lowrank
 from tests.conftest import trained_adapter
-from tests.http_helpers import create_cluster, reset_server_state, restore_server_state, upload_body
+from tests.http_helpers import (
+    create_cluster,
+    promote,
+    reset_server_state,
+    restore_server_state,
+    upload_body,
+)
 
 client = TestClient(server.app)
 ALPHA = 0.5
@@ -78,7 +84,9 @@ def test_accumulate_refuses_a_non_positive_alpha():
 # --------------------------------------------------------------------------- #
 # over HTTP
 # --------------------------------------------------------------------------- #
-def _round0(cid="web", members=("a", "b")):
+def _round0(cid="web", members=("a", "b"), promoted=True):
+    """Round 0 of ``cid``, returned as its broadcast. ``promoted`` (default)
+    also promotes the candidate, so the adapter is the one edges are served."""
     create_cluster(client, cid, members={cid: list(members)})
     for i, c in enumerate(members):
         r = client.post(f"/clusters/{cid}/uploads",
@@ -86,6 +94,8 @@ def _round0(cid="web", members=("a", "b")):
         assert r.status_code == 201, r.text
     r = client.post(f"/clusters/{cid}/aggregate", json={})
     assert r.status_code == 200, r.text
+    if promoted:
+        promote(client, cid, r.json())
     return r.json()
 
 
@@ -113,6 +123,7 @@ def test_a_round_of_residuals_builds_on_the_merged_adapter():
     assert client.post("/clusters/web/uploads", json=_based("b", r_b, active, n=30)).status_code == 201
     r = client.post("/clusters/web/aggregate", json={})
     assert r.status_code == 200, r.text
+    promote(client, "web", r.json())
     merged = server.adapter_from_broadcast(server._clusters["web"].active)
     for m in start.target_modules:
         want = _best_rank(_dense(start, m) + (0.25 * _dense(r_a, m) + 0.75 * _dense(r_b, m)) / ALPHA,
@@ -136,6 +147,7 @@ def test_plain_round_averages_like_before():
     client.post("/clusters/web/uploads", json=upload_body("a", a, round_id=1, n=10))
     client.post("/clusters/web/uploads", json=upload_body("b", b, round_id=1, n=10))
     r = client.post("/clusters/web/aggregate", json={})
+    promote(client, "web", r.json())
     merged = server.adapter_from_broadcast(server._clusters["web"].active)
     ref, _ = aggregate_svd_lowrank([a, b], [10.0, 10.0], rank=16)
     m = a.target_modules[0]
@@ -199,6 +211,7 @@ def test_epsilon_composes_across_the_rounds_it_builds_on():
         body = upload_body(c, trained_adapter(seed), privacy={"epsilon": eps})
         assert client.post("/clusters/web/uploads", json=body).status_code == 201
     active = client.post("/clusters/web/aggregate", json={}).json()
+    promote(client, "web", active)
     assert active["epsilon"] == 3.0
     for c, eps, seed in (("a", 4.0, 20), ("b", 1.0, 21)):
         body = _based(c, trained_adapter(seed), active, privacy={"epsilon": eps})
@@ -282,13 +295,15 @@ def _publish(name="cluster-web"):
 
 def _two_rounds(monkeypatch):
     registry = _MemoryRegistry(monkeypatch)
-    active0 = _round0()
-    v1 = _publish()
+    active0 = _round0(promoted=False)
+    v1 = _publish()  # publishes the candidate
+    promote(client, "web", active0)
     for c, seed in (("a", 20), ("b", 21)):
         assert client.post("/clusters/web/uploads",
                            json=_based(c, trained_adapter(seed), active0)).status_code == 201
     active1 = client.post("/clusters/web/aggregate", json={}).json()
     v2 = _publish()
+    promote(client, "web", active1)
     assert v1["sha256"] == active0["sha256"] and v2["sha256"] == active1["sha256"]
     return registry, active0, active1
 

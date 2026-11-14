@@ -13,6 +13,7 @@ from cluster.redistribution import adapter_from_broadcast
 from tests.conftest import trained_adapter
 from tests.http_helpers import (
     create_cluster,
+    promote,
     reset_server_state,
     restore_server_state,
     upload_body,
@@ -47,6 +48,7 @@ def test_http_aggregate_publishes_a_loadable_snapshot_per_round():
             assert r.status_code == 201
         resp = client.post("/clusters/team-a/aggregate")
         assert resp.status_code == 200
+        promote(client, "team-a", resp.json())  # the next round needs no pending candidate
     assert [ref.version for ref, _ in sink.snapshots] == [1, 2]
     ref, broadcast = sink.latest("team-a")
     assert ref.kind is AdapterKind.CLUSTER and ref.cluster_id == "team-a"
@@ -71,7 +73,7 @@ def test_a_failing_sink_is_reported_but_never_loses_the_round():
     client.post("/clusters/team-a/uploads", json=upload_body("c1", trained_adapter(1)))
     resp = client.post("/clusters/team-a/aggregate")
     assert resp.status_code == 200
-    assert server._clusters["team-a"].round_id == 1 and server._clusters["team-a"].active
+    assert server._clusters["team-a"].round_id == 1 and server._clusters["team-a"].candidate
     manifest = client.get("/clusters/team-a/aggregate/manifest").json()
     assert "ConnectionError" in manifest["publish_error"] and "published_as" not in manifest
 

@@ -22,6 +22,7 @@ from cluster.server import cluster_epsilon
 from tests.conftest import trained_adapter
 from tests.http_helpers import (
     create_cluster,
+    promote,
     reset_server_state,
     restore_server_state,
     upload_body,
@@ -85,6 +86,7 @@ def test_upload_by_body_aggregate_by_path_read_by_adapters_route():
 
     agg = client.post("/clusters/cluster-web/aggregate")
     assert agg.status_code == 200 and agg.json()["source_clients"] == ["a1", "a2"]
+    promote(client, "cluster-web", agg.json())
     for route in ("/adapters/cluster-web/active", "/clusters/cluster-web/adapters/active"):
         got = client.get(route)
         assert got.status_code == 200 and got.json()["cluster_id"] == "cluster-web"
@@ -99,6 +101,7 @@ def test_upload_by_path_aggregate_by_body_cluster_id():
     assert _up("team-a", "c1", 1, route="/clusters/team-a/uploads").status_code == 201
     agg = client.post("/aggregate", json={"cluster_id": "team-a", "include_manifest": True})
     assert agg.status_code == 200 and agg.json()["cluster_id"] == "team-a"
+    promote(client, "team-a", agg.json())
     assert client.get("/adapters/team-a/active").status_code == 200
 
 
@@ -120,7 +123,9 @@ def test_aggregate_on_a_cluster_that_does_not_exist_is_a_404_and_creates_nothing
 
 def test_default_cluster_aliases_still_work():
     assert client.post("/uploads", json=upload_body("c1", trained_adapter(1))).status_code == 201
-    assert client.post("/aggregate").status_code == 200
+    agg = client.post("/aggregate")
+    assert agg.status_code == 200
+    promote(client, server.DEFAULT_CLUSTER_ID, agg.json())
     assert client.get("/adapters/cluster/active").json()["cluster_id"] == server.DEFAULT_CLUSTER_ID
     assert client.get("/aggregate/manifest").status_code == 200
 
@@ -170,6 +175,7 @@ def test_a_retained_aggregate_is_an_ablation_not_a_completed_round():
     assert st.round_id == 0 and st.uploads.keys() == {"a1", "a2"}  # buffer + round kept
     assert st.last_round == {} and sink.n == 0  # not evidence, not published
     assert client.get("/adapters/cluster-web/manifest").json()["retained_uploads"] is True
+    promote(client, "cluster-web")  # the retained run's candidate is pending
     assert client.post("/aggregate", json={"cluster_id": "cluster-web"}).status_code == 200
     assert st.round_id == 1 and sink.n == 1 and set(st.last_round) == {"a1", "a2"}
 

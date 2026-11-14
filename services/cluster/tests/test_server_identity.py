@@ -9,6 +9,7 @@ from cluster import server
 from tests.conftest import trained_adapter
 from tests.http_helpers import (
     create_cluster,
+    promote,
     reset_server_state,
     restore_server_state,
     upload_body,
@@ -82,7 +83,7 @@ def test_members_cannot_read_another_clusters_adapter_but_unassigned_callers_can
         client.put(f"/clusters/{cid}/members", json={"client_ids": ids})
     for cid, who in (("team-a", "a1"), ("team-b", "b1")):
         client.post(f"/clusters/{cid}/uploads", json=upload_body(who, trained_adapter(2)))
-        client.post(f"/clusters/{cid}/aggregate")
+        promote(client, cid, client.post(f"/clusters/{cid}/aggregate").json())
     server.configure_identity(_stub_provider)
 
     own = client.get("/clusters/team-a/adapters/active", headers={HEADER: "a1"})

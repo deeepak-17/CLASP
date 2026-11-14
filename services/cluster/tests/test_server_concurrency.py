@@ -18,6 +18,7 @@ from cluster import server
 from tests.conftest import trained_adapter
 from tests.http_helpers import (
     create_cluster,
+    promote,
     reset_server_state,
     restore_server_state,
     upload_body,
@@ -222,6 +223,8 @@ def test_stress_every_accepted_upload_is_aggregated_exactly_once(monkeypatch):
             while not done.is_set():
                 r = client.post("/clusters/team-a/aggregate")
                 assert r.status_code in (200, 400), r.text  # 400 = nothing buffered yet
+                if r.status_code == 200:  # no new aggregate while a candidate is pending
+                    promote(client, "team-a", r.json())
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 

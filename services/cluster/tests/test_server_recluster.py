@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from cluster import server
 from cluster.redistribution import adapter_from_broadcast
 from tests.conftest import planted_directions, trained_adapter
-from tests.http_helpers import reset_server_state, restore_server_state, upload_body
+from tests.http_helpers import promote, reset_server_state, restore_server_state, upload_body
 
 client = TestClient(server.app)
 WEB, SCI = "web", "sci"
@@ -153,6 +153,7 @@ def test_invalid_parameters_are_rejected():
 def test_second_round_evidence_uses_the_previous_cluster_adapter_as_start():
     _setup_two_clusters(wrong_label=False)
     st = server._clusters[WEB]
+    promote(client, WEB)  # round 1 builds on a promoted adapter
     first_active = adapter_from_broadcast(st.active)
     assert all(start is None for _, start in st.last_round.values())  # round 0: no start yet
     for c in ("w0", "w1", "w2"):
