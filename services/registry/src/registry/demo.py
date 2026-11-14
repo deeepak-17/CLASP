@@ -105,18 +105,23 @@ def _expect(step: str, status: int, want: int, body) -> None:
         raise DemoFailure(f"{step}: expected HTTP {want}, got {status}: {body}")
 
 
-def _eval(name: str, version: int, sim: float, pass1: float) -> dict:
+def _line_guard(edit_similarity: float) -> dict:
+    return {"benchmark": "LineCompletion", "edit_similarity": edit_similarity,
+            "exact_match": edit_similarity / 2, "n_examples": 300, "pass_at_k": {}}
+
+
+def _eval(name: str, version: int, sim: float, guard_sim: float) -> dict:
     metrics = lambda s: {"edit_similarity": s, "exact_match": s / 2,  # noqa: E731
                          "perplexity": 3.0, "n_examples": 40}
     return {
         "eval": {
             "adapter": {"name": name, "version": version, "kind": "client", "cluster_id": "web"},
             "in_project": metrics(sim),
-            "guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": pass1}}],
+            "guard": [_line_guard(guard_sim)],
             "baseline_in_project": metrics(0.60),
             "baseline_noise_band": 0.02,
         },
-        "baseline_guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.30}}],
+        "baseline_guard": [_line_guard(0.60)],
     }
 
 
@@ -194,7 +199,7 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     status, body = reg.save(client, make_adapter(3, layers=layers, hidden=hidden),
                             {"kind": "client", "hparams": hp, "round": 2, "cluster_id": "web"})
     _expect("save client v2", status, 201, body)
-    promote = _eval(client, 2, sim=0.70, pass1=0.30)
+    promote = _eval(client, 2, sim=0.70, guard_sim=0.60)
     promote["composite"] = {"name": composite, "cluster": cluster, "client": client,
                             "alpha": 0.5, "beta": 1.0}
     status, body = reg.post_json(f"/adapters/{client}/promote", promote)
@@ -206,7 +211,7 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     status, body = reg.save(client, make_adapter(4, layers=layers, hidden=hidden),
                             {"kind": "client", "hparams": hp, "round": 3, "cluster_id": "web"})
     _expect("save client v3", status, 201, body)
-    status, body = reg.post_json(f"/adapters/{client}/promote", _eval(client, 3, 0.61, 0.20))
+    status, body = reg.post_json(f"/adapters/{client}/promote", _eval(client, 3, 0.61, 0.40))
     _expect("promote v3", status, 200, body)
     if body["action"] != "rollback" or body["active_version_after"] != 2:
         raise DemoFailure(f"promote v3: expected rollback to v2, got {body}")

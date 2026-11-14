@@ -23,19 +23,24 @@ def _in_project(edit_similarity=0.8, exact_match=0.5, perplexity=3.0, n=20):
     }
 
 
+def _line_guard(edit_similarity):
+    return {"benchmark": "LineCompletion", "edit_similarity": edit_similarity,
+            "exact_match": 0.3, "n_examples": 300, "pass_at_k": {}}
+
+
 def _promote_body(name, version, *, good: bool):
     """A payload that clears both D5 checks (good) or fails both (not good)."""
     candidate_sim = 0.80 if good else 0.705
-    candidate_pass1 = 0.30 if good else 0.10
+    candidate_guard = 0.60 if good else 0.40
     return {
         "eval": {
             "adapter": {"name": name, "version": version, "kind": "client"},
             "in_project": _in_project(edit_similarity=candidate_sim),
-            "guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": candidate_pass1}}],
+            "guard": [_line_guard(candidate_guard)],
             "baseline_in_project": _in_project(edit_similarity=0.70),
             "baseline_noise_band": 0.02,
         },
-        "baseline_guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.30}}],
+        "baseline_guard": [_line_guard(0.60)],
     }
 
 
@@ -80,6 +85,20 @@ def test_promote_with_no_fallback_version_is_a_clean_422(client):
     assert r.status_code == 422
     # active pointer must be untouched by the failed attempt
     assert client.get("/adapters/pandas/active").json()["ref"]["version"] == 1
+
+
+def test_humaneval_only_body_is_422_and_records_nothing(client):
+    _upload(client, "scipy")
+    _upload(client, "scipy")
+    body = _promote_body("scipy", 2, good=True)
+    body["eval"]["guard"] = [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.3}}]
+    body["baseline_guard"] = [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.3}}]
+    r = client.post("/adapters/scipy/promote", json=body)
+    assert r.status_code == 422
+    assert "LineCompletion guard metrics missing" in r.json()["detail"]
+    assert "1.2.0" in r.json()["detail"]
+    assert client.get("/adapters/scipy/promotions").json()["decisions"] == []
+    assert client.get("/adapters/scipy/active").json()["ref"]["version"] == 2
 
 
 def test_promote_name_mismatch_422(client):

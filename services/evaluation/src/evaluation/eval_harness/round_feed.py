@@ -37,12 +37,14 @@ from evaluation.utils.timing import utc_timestamp
 #: Version of the ``rounds.json`` shape (``dashboard/src/lib/rounds.ts`` mirrors it).
 FEED_VERSION = "1.0.0"
 
-#: Mirrors ``registry.promotion.GUARD_PASS_AT_1_TOLERANCE`` (asserted equal in
-#: the tests when the registry package is importable).
+#: The former HumanEval guard's tolerance, kept only to read rounds recorded
+#: before the line-completion guard (the registry no longer has this constant).
 GUARD_PASS_AT_1_TOLERANCE = 0.02
 
 #: The line-completion guard's tolerated edit-similarity drop
-#: (``configs/guard_thresholds.yaml``: ``line_guard.tolerance_edit_similarity``).
+#: (``configs/guard_thresholds.yaml``: ``line_guard.tolerance_edit_similarity``);
+#: mirrors ``registry.promotion.GUARD_EDIT_SIMILARITY_TOLERANCE`` (asserted equal
+#: in the tests when the registry package is importable).
 GUARD_EDIT_SIMILARITY_TOLERANCE = 0.02
 
 _LABELS = ("baseline", "candidate")

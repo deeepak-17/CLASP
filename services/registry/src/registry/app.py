@@ -57,7 +57,7 @@ from .composition import (
     store_composite,
 )
 from .lineage import build_lineage
-from .promotion import decide, restore_decision
+from .promotion import GUARD_MISSING_REASON, decide, guard_present, restore_decision
 from .retention import RetentionPlan, collect_referenced, default_keep_last, gc_adapter
 from .storage import (
     AdapterNotFound,
@@ -328,6 +328,9 @@ def promote(name: str, body: dict = Body(...)) -> dict:
 def _promote(name: str, body: dict) -> dict:
     store = get_store()
     eval_result, baseline_guard = _parse_promote_body(body)
+    if not guard_present(eval_result.guard, baseline_guard):
+        # refused before decide(): nothing is decided, so nothing is recorded
+        raise HTTPException(422, GUARD_MISSING_REASON)
     if eval_result.adapter.name != name:
         raise HTTPException(
             422, f"eval.adapter.name {eval_result.adapter.name!r} does not match path {name!r}"

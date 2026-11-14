@@ -119,7 +119,12 @@ def _upload_payload(adapter, client_id: str, round_id: int, num_examples: int) -
     }
 
 
-def _eval_body(name: str, version: int, *, edit_similarity: float, pass_at_1: float) -> dict:
+def _line_guard(edit_similarity: float) -> dict:
+    return {"benchmark": "LineCompletion", "edit_similarity": edit_similarity,
+            "exact_match": 0.3, "n_examples": 300, "pass_at_k": {}}
+
+
+def _eval_body(name: str, version: int, *, edit_similarity: float, guard_similarity: float) -> dict:
     """A synthetic EvalResult + baseline_guard, shaped exactly as
     `registry.app._eval_result_from` parses it."""
     return {
@@ -129,7 +134,7 @@ def _eval_body(name: str, version: int, *, edit_similarity: float, pass_at_1: fl
                 "edit_similarity": edit_similarity, "exact_match": 0.3,
                 "perplexity": 3.1, "n_examples": 40,
             },
-            "guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": pass_at_1}}],
+            "guard": [_line_guard(guard_similarity)],
             "baseline_in_project": {
                 "edit_similarity": 0.50, "exact_match": 0.25,
                 "perplexity": 3.4, "n_examples": 40,
@@ -137,7 +142,7 @@ def _eval_body(name: str, version: int, *, edit_similarity: float, pass_at_1: fl
             "baseline_noise_band": 0.01,
             "seed": 0,
         },
-        "baseline_guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.31}}],
+        "baseline_guard": [_line_guard(0.61)],
     }
 
 
@@ -271,7 +276,7 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
     # ---- Seam C2: Edge -> Registry, PROMOTE reachable -----------------------
     promote_resp = registry_client.post(
         f"/adapters/{name}/promote",
-        json=_eval_body(name, version=1, edit_similarity=0.62, pass_at_1=0.30),
+        json=_eval_body(name, version=1, edit_similarity=0.62, guard_similarity=0.60),
     )
     assert promote_resp.status_code == 200, promote_resp.text
     assert promote_resp.json()["action"] == "promote"
@@ -294,7 +299,7 @@ def test_full_loop_edge_to_cluster_to_registry_and_back(cluster_client, registry
 
     rollback_resp = registry_client.post(
         f"/adapters/{name}/promote",
-        json=_eval_body(name, version=2, edit_similarity=0.40, pass_at_1=0.20),
+        json=_eval_body(name, version=2, edit_similarity=0.40, guard_similarity=0.40),
     )
     assert rollback_resp.status_code == 200, rollback_resp.text
     decision = rollback_resp.json()

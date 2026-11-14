@@ -8,7 +8,7 @@ import struct
 import pytest
 
 from evaluation.eval_harness.round_feed import (
-    GUARD_PASS_AT_1_TOLERANCE,
+    GUARD_EDIT_SIMILARITY_TOLERANCE,
     build_feed,
     d5_alerts,
     summarize_round,
@@ -146,7 +146,7 @@ class TestD5Alerts:
 
     def test_tolerance_mirrors_the_registry(self) -> None:
         promotion = pytest.importorskip("registry.promotion")
-        assert GUARD_PASS_AT_1_TOLERANCE == promotion.GUARD_PASS_AT_1_TOLERANCE
+        assert GUARD_EDIT_SIMILARITY_TOLERANCE == promotion.GUARD_EDIT_SIMILARITY_TOLERANCE
 
 
 class TestBuildFeed:

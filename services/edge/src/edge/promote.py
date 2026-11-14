@@ -13,8 +13,7 @@ Three facts about D5 that shape everything here, all read off
    than ``GUARD_TOLERANCE``. A missing guard on either side is not
    neutral — ``_guard_holds`` returns False, so the answer is ROLLBACK. The
    guard is next-line completion on the frozen line-completion guard set
-   (``LineCompletion``); the registry's rule still reads HumanEval pass@1 until
-   it is changed to match, so a PROMOTE needs both to agree.
+   (``LineCompletion``), and the registry's rule reads exactly that.
 2. The rule only ever judges the version that is CURRENTLY ACTIVE, and the API
    rejects an eval whose version is not the active one (409).
 3. ROLLBACK with no previous version raises, surfaced as a 422. So a promote
@@ -263,9 +262,23 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
     # Read before C2: a rollback moves the active pointer, not the history.
     versions = [v["ref"]["version"] for v in client.list_versions(adapter_name)["versions"]]
     previous_version = _previous_version(versions, version)
-    decision = client.promote(adapter_name, eval_result, baseline_guard)
     expected_action, expected_why = predict_decision(
         eval_result, baseline_guard, previous_version)
+    if guard.available:
+        decision = client.promote(adapter_name, eval_result, baseline_guard)
+    else:
+        # The registry refuses a promote that carries no guard (422, nothing
+        # recorded), so it is not asked. What is recorded here is the rule's own
+        # reading of the inputs, and the registry's pointer was NOT moved.
+        decision = {
+            "adapter": eval_result["adapter"],
+            "action": expected_action,
+            "active_version_after": previous_version,
+            "reason": expected_why,
+            "registry_called": False,
+            "registry_note": ("not sent: the registry refuses a promote without "
+                              "LineCompletion guard metrics; its active pointer is unchanged"),
+        }
     return {
         "adapter": adapter_name,
         "candidate_version": version,

@@ -520,7 +520,7 @@ def test_seam_c2_rolls_back_when_the_in_project_metric_does_not_improve(
 
 def test_seam_c2_rolls_back_when_the_guard_regresses(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    """The rule is two-sided: an in-project win does not buy a pass@1 regression."""
+    """The rule is two-sided: an in-project win does not buy a guard regression."""
     publish_two_versions(cluster_client, registry_client, monkeypatch)
     guard = _guard(candidate_edit_similarity=0.20, baseline_edit_similarity=0.30, tmp_path=tmp_path)
 
@@ -530,7 +530,7 @@ def test_seam_c2_rolls_back_when_the_guard_regresses(
         guard=guard, noise_band=0.0)
 
     assert record["decision"]["action"] == "rollback"
-    assert "pass@1" in record["decision"]["reason"]
+    assert "LineCompletion edit similarity dropped" in record["decision"]["reason"]
 
 
 def test_seam_c2_rolls_back_when_the_guard_is_unavailable(

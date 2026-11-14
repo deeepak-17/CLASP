@@ -19,8 +19,9 @@ line_guard:
 # keys are still read by build_noise_report.py and score_humaneval_samples.py
 # to regenerate that report, so the block is kept (renamed in a later cleanup).
 humaneval_guard:
-  # The former D5 rule as the registry implements it (registry.promotion
-  # GUARD_PASS_AT_1_TOLERANCE). Owned by P4; P5 does not change it.
+  # The former D5 guard's tolerance (the registry's rule now reads
+  # line_guard.tolerance_edit_similarity, registry.promotion
+  # GUARD_EDIT_SIMILARITY_TOLERANCE). Kept to regenerate the HumanEval report.
   tolerance_pass_at_1: 0.02
   # Scored baseline anchor the noise floor is measured from.
   baseline_anchor: "results/humaneval_guard/base_anchor.json"

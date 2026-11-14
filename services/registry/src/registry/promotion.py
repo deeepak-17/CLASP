@@ -2,8 +2,15 @@
 
     Promote iff:
       1. in-project quality improved beyond the measured noise band, AND
-      2. HumanEval pass@1 did not regress by more than 2 points absolute.
-    Otherwise: rollback to the previous version. Never gate on pass@k alone.
+      2. next-line completion edit similarity on the frozen guard set
+         (benchmark ``LineCompletion``) did not drop against the baseline by
+         more than 2 points absolute.
+    Otherwise: rollback to the previous version. Never gate on one side alone.
+
+The guard replaced HumanEval pass@1 (contracts >= 1.2.0 carries edit_similarity
+on GuardMetrics). A guard without ``LineCompletion`` edit similarity on both
+sides is not a pass: the rule refuses to promote, and the API answers 422
+before anything is recorded.
 
 The registry always activates a version on save (see storage.save); this rule
 runs *after* the fact, on whatever is currently active, and either confirms
@@ -15,9 +22,17 @@ from __future__ import annotations
 
 from contracts import AdapterRef, EvalResult, GuardMetrics, PromotionAction, PromotionDecision
 
-#: Absolute pass@1 regression tolerated before it blocks a promotion (D5),
-#: expressed as a fraction since GuardMetrics.pass_at_k is 0..1 (e.g. 0.31 = 31%).
-GUARD_PASS_AT_1_TOLERANCE = 0.02
+#: The benchmark name the guard is reported under (evaluation's line guard).
+GUARD_BENCHMARK = "LineCompletion"
+
+#: Absolute edit-similarity drop tolerated before it blocks a promotion (D5),
+#: a fraction since edit similarity is 0..1 (0.02 = 2 points).
+GUARD_EDIT_SIMILARITY_TOLERANCE = 0.02
+
+GUARD_MISSING_REASON = (
+    f"{GUARD_BENCHMARK} guard metrics missing on candidate or baseline "
+    "(contracts >= 1.2.0 required)"
+)
 
 
 def _in_project_improved(eval_result: EvalResult) -> tuple[bool, str]:
@@ -31,19 +46,32 @@ def _in_project_improved(eval_result: EvalResult) -> tuple[bool, str]:
     return False, f"edit_similarity delta {delta:.4f} does not clear noise band {band:.4f}"
 
 
+def guard_present(
+    guard: tuple[GuardMetrics, ...], baseline_guard: tuple[GuardMetrics, ...]
+) -> bool:
+    """Whether both sides carry a ``LineCompletion`` entry with an edit similarity."""
+    return all(
+        entry is not None and entry.edit_similarity is not None
+        for entry in (
+            next((g for g in guard if g.benchmark == GUARD_BENCHMARK), None),
+            next((g for g in baseline_guard if g.benchmark == GUARD_BENCHMARK), None),
+        )
+    )
+
+
 def _guard_holds(
     eval_result: EvalResult, baseline_guard: tuple[GuardMetrics, ...]
 ) -> tuple[bool, str]:
-    candidate = next((g for g in eval_result.guard if g.benchmark == "HumanEval"), None)
-    baseline = next((g for g in baseline_guard if g.benchmark == "HumanEval"), None)
-    if candidate is None or baseline is None:
-        return False, "HumanEval guard metrics missing on candidate or baseline"
-    if 1 not in candidate.pass_at_k or 1 not in baseline.pass_at_k:
-        return False, "pass@1 missing from HumanEval guard metrics"
-    drop = baseline.pass_at_k[1] - candidate.pass_at_k[1]
-    if drop <= GUARD_PASS_AT_1_TOLERANCE:
-        return True, f"HumanEval pass@1 drop {drop:.4f} within {GUARD_PASS_AT_1_TOLERANCE:.2f} tolerance"
-    return False, f"HumanEval pass@1 dropped {drop:.4f}, exceeds {GUARD_PASS_AT_1_TOLERANCE:.2f} tolerance"
+    if not guard_present(eval_result.guard, baseline_guard):
+        return False, GUARD_MISSING_REASON
+    candidate = next(g for g in eval_result.guard if g.benchmark == GUARD_BENCHMARK)
+    baseline = next(g for g in baseline_guard if g.benchmark == GUARD_BENCHMARK)
+    drop = baseline.edit_similarity - candidate.edit_similarity
+    tolerance = GUARD_EDIT_SIMILARITY_TOLERANCE
+    # the epsilon absorbs float noise at exactly the tolerance (0.60 - 0.58 > 0.02 in binary)
+    if drop <= tolerance + 1e-9:
+        return True, f"{GUARD_BENCHMARK} edit similarity drop {drop:.4f} within {tolerance:.2f} tolerance"
+    return False, f"{GUARD_BENCHMARK} edit similarity dropped {drop:.4f}, exceeds {tolerance:.2f} tolerance"
 
 
 def decide(
