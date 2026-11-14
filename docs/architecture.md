@@ -14,23 +14,27 @@ model:
 Wnew = Wbase + alpha * dWcluster + beta * dWclient
 ```
 
-- **Wbase** — frozen DeepSeek-Coder-6.7B (NF4 4-bit).
+- **Wbase** — frozen base model, 4-bit (NF4). The design names DeepSeek-Coder-6.7B;
+  every Phase II run uses the 1.3B profile because the team's GPUs have 4 GB.
 - **dWcluster** — LoRA adapter aggregated across a cluster of clients (federated).
 - **dWclient** — per-client LoRA, trained on the frozen merged `Wbase + alpha·dWcluster` (D3).
-- **alpha, beta** — composition coefficients; composition happens **offline at
-  promotion time**. The registry stores one pre-merged composite per developer;
-  inference loads a single adapter (D6). No runtime dual-adapter stacking.
+- **alpha, beta** — composition coefficients; the composite is merged **on the
+  edge** at pull time (D6, amended by U1): the edge pulls the merged cluster
+  adapter and merges it with its own client layer, and inference loads a single
+  adapter. No runtime dual-adapter stacking. The registry's `/compose` path and
+  the `composite` block of `/promote` exist and are tested but are not called by
+  the live loop. See `docs/decisions/2026-11-14-amended-decisions.md`.
 
 ## 2. Modules and owners
 
 | Module | Path | Owner | Deploys as | Responsibility |
 |---|---|---|---|---|
-| Edge | `services/edge/` | Adithyaa (P1) | container | PEFT training, 4-bit inference, composite merge |
-| Cluster | `services/cluster/` | Prasanth (P2) | container | Flower + FedProx, SVD aggregation (D2), re-clustering (D4) |
+| Edge | `services/edge/` | Adithyaa (P1) | container | PEFT training, 4-bit inference, composite merge (on the edge) |
+| Cluster | `services/cluster/` | Prasanth (P2) | container | FastAPI service; FedProx; SVD aggregation (D2); Flower in simulation only; re-clustering (D4) |
 | Security | `security/` | Kapilan (P3) | **library only** | Opacus DP-SGD (D7), mTLS — imported by edge & cluster, never a service |
 | **Registry** | `services/registry/` | **Deepak (P4)** | **stateful container** | **versioned safetensors, two-sided promotion/rollback (D5), composite storage, run manifests** |
-| Evaluation | `services/evaluation/` | Aditya (P5) | container | in-project eval (D5 primary), HumanEval/MBPP guard, dashboard |
-| Contracts | `contracts/` | shared (seam) | installed pkg | the integration types; **frozen v1.0** |
+| Evaluation | `services/evaluation/` | Aditya (P5) | library + scripts | library + scripts + static dashboard: in-project eval (D5 primary), HumanEval/MBPP guard |
+| Contracts | `contracts/` | shared (seam) | installed pkg | the integration types; **v1.1.0** |
 
 Architectural invariants: monorepo (not multi-repo); Security is a library with
 **no Dockerfile, ever**; `contracts/` is the only cross-module import path;
@@ -46,8 +50,11 @@ overwritten in place.
   │ (P1)   │  dWclient +      │  (P2)   │  dWcluster (SVD-  │  (P4)    │  in-project + │   (P5)     │
   │        │  hparams,ε,seed  │         │  aggregated)      │          │  guard metrics│            │
   └────────┘                  └─────────┘                   └──────────┘               └────────────┘
-       ▲  composite adapter (base⊕α·cluster⊕β·client)            │ promote / rollback
-       └───────────────────────────────────────────────────────┘  repoints `active` tag (D5)
+       ▲                             │
+       └─────────────────────────────┘
+         merged cluster adapter (Cluster → Edge); the edge merges it
+         with its own client layer. Evaluation → Registry: results go to
+         `/promote`, which repoints `active` (promote / rollback, D5).
 ```
 
 1. **Edge → Cluster** (`AdapterUpload`): each client trains a LoRA on its repo
@@ -60,7 +67,7 @@ overwritten in place.
 3. **Cluster → Registry** (`ClusterSnapshot`): the aggregated cluster adapter is
    versioned and stored with its aggregation method, participating clients, ε,
    and seed.
-4. **Registry → Evaluation** (`EvalResult`): the evaluator returns primary
+4. **Evaluation → Registry** (`EvalResult`): the evaluator returns primary
    in-project metrics (edit similarity, exact match, perplexity on the client's
    held-out files) plus HumanEval/MBPP guard numbers.
 5. **Promotion (D5, two-sided)**: the registry promotes a version iff in-project
@@ -80,11 +87,8 @@ commands, and the debt log.
 |---|---|---|
 | Edge → Cluster | `POST /uploads` (:8002) | live over HTTP with the real 192-tensor adapters |
 | Cluster → Registry | `POST /adapters/{id}/publish` → `POST /adapters/{name}/versions` (:8004) | live |
-| Registry → Edge | `GET /active` + `GET .../file`, sha256-verified | live |
-| Edge → Registry | `POST /adapters/{name}/promote` | live; decisions PROVISIONAL while the HumanEval guard is unscored |
-
-Security stays a library this sprint: nothing on this channel is
-differentially private or mutually authenticated (still W7/W10).
+| Cluster → Edge | `GET /clusters/{id}/adapters/active` (:8002) | live; the edge pulls the merged cluster adapter and merges its own client layer |
+| Evaluation → Registry | `POST /adapters/{name}/promote` | live; the demo panel posts the result of `scripts/evaluate_candidate.py`; decisions PROVISIONAL while the HumanEval guard is unscored |
 
 ## 4. Registry internals (P4 — this repo's primary module)
 
@@ -108,8 +112,6 @@ adapters/<name>/
   size, source clients, timestamp.
 - **Run manifests** — `RunManifest` (run_id, seed, config hash, adapter versions,
   GPU-hrs estimate/actual) written per experiment for reproducibility (D9).
-- **Auth** — endpoints go behind mTLS in W10 (D7); currently open on the internal
-  compose network.
 
 See `docs/registry_api.md` for the endpoint contract.
 

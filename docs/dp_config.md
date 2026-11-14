@@ -4,11 +4,12 @@
 - **Unit**: Per-sample (record-level). Each individual training example is the
   privacy unit. This means ε bounds the information leakage about any single
   training record.
-- **Client-level vs record-level**: CLASP currently operates at record-level
-  privacy. In federated settings, each client's local dataset contributes
-  updates clipped and noised per-sample. Client-level DP (bounding leakage
-  about an entire client's dataset) is a future extension tracked in
-  MASTER_PLAN §2.
+- **Example-level, applied per client**: CLASP operates at example-level
+  privacy, applied on each client: Opacus DP-SGD over 1024- or 512-token
+  blocks, on the LoRA parameters only. In federated settings, each client's
+  local dataset contributes updates clipped and noised per-sample. This is
+  weaker than DP over a developer's whole contribution, because one developer contributes many blocks
+  (see `docs/decisions/2026-11-14-amended-decisions.md`, D7).
 - **Implication**: The guarantee is (ε, δ)-DP with respect to adding or
   removing a single training example from the dataset.
 

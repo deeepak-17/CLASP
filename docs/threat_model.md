@@ -42,13 +42,13 @@ CLASP is a federated code-generation system with per-developer personalization. 
 - **Model Extraction**: Steal the model via API queries. (Severity: Medium, Likelihood: Low)
 - **Eavesdropping**: Passive interception of network traffic. (Severity: Critical, Likelihood: High)
 
-## DP Unit Justification (Client-Level)
-In CLASP, each client (edge node) represents one developer's private codebase. The privacy unit is the entire client's participation in a federated round — i.e., whether a given developer participated at all, not whether a specific code snippet was in the training set. 
+## DP Unit Justification (Example-Level, Applied Per Client)
+In CLASP, each client (edge node) represents one developer's private codebase. DP is example-level, applied per client: each client runs Opacus DP-SGD over its own 1024- or 512-token blocks, on the LoRA parameters only, before anything leaves the node. The privacy unit is a single training block, not the client's whole participation in a round. This is weaker than DP over a developer's whole contribution, because one developer contributes many blocks.
 
 This is because:
 1. The adapter upload is the atomic unit of information leaving the client.
-2. The cluster server sees one update per client per round.
-3. Client-level DP matches the threat model where the adversary wants to determine if a specific developer's code influenced the model.
+2. The cluster server sees one update per client per round, and the guarantee bounds what that update reveals about any single block.
+3. Hiding that a developer participated at all is not claimed; see `docs/decisions/2026-11-14-amended-decisions.md` (D7).
 
 ## Mitigation Matrix
 | Threat | Mitigation | Mechanism |
