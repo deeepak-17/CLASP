@@ -90,7 +90,7 @@ commands, and the debt log.
 | Edge → Cluster | `POST /uploads` (:8002) | live over HTTP with the real 192-tensor adapters |
 | Cluster → Registry | `POST /adapters/{id}/publish` → `POST /adapters/{name}/versions` (:8004) | live |
 | Cluster → Edge | `GET /clusters/{id}/adapters/active` (:8002) | live; the edge pulls the merged cluster adapter and merges its own client layer |
-| Evaluation → Registry | `POST /adapters/{name}/promote` | live; the demo panel posts the result of `scripts/evaluate_candidate.py`; decisions PROVISIONAL while the HumanEval guard is unscored |
+| Evaluation → Registry | `POST /adapters/{name}/promote` | live; the demo panel posts the result of `scripts/evaluate_candidate.py`; the promote decision uses the line-completion guard (D5); its noise measurement is pending, see `services/evaluation/results/line_guard/noise.json` |
 
 ## 4. Registry internals (P4 — this repo's primary module)
 

@@ -7,11 +7,11 @@
 directions:
 
 Outbound — what P5 sends (seam C2, ``POST /adapters/{name}/promote``)
-    :func:`guard_metrics`, :func:`in_project_wire`, :func:`eval_result_wire`
+    :func:`line_guard_wire`, :func:`in_project_wire`, :func:`eval_result_wire`
     and :func:`promote_body` build exactly the JSON
     ``contracts.EvalResult.from_json`` (what the registry's ``POST /promote`` calls) parses — the same field set
-    ``edge.promote.build_eval_result`` sends. P5's HumanEval/MBPP pass@k
-    becomes ``EvalResult.guard``; the in-project metric becomes
+    ``edge.promote.build_eval_result`` sends. The line-completion guard
+    becomes ``EvalResult.guard`` (HumanEval/MBPP pass@k, :func:`reported_pass_at_k`, is reported only); the in-project metric becomes
     ``EvalResult.in_project``.
 
 Inbound — what P5 reads (seam C1 metadata)
@@ -41,10 +41,10 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
+from evaluation.eval_harness.line_guard import GUARD_BENCHMARK
 from evaluation.interfaces.contracts import (
     AdapterKind,
     AdapterRef,
-    BenchmarkName,
     EvalResult,
     InProjectMetrics,
     SnapshotMetadata,
@@ -56,15 +56,33 @@ from evaluation.utils.errors import ClaspP5Error, ContractViolationError
 #: same v1.0 shape; contracts v1.1 (additive) parses it unchanged.
 WIRE_CONTRACTS_VERSION = "1.0.0"
 
-#: The benchmark the D5 guard reads (``registry.promotion._guard_holds``).
-GUARD_BENCHMARK = BenchmarkName.HUMANEVAL.value
-
 
 # ---------------------------------------------------------------------------
 # Outbound: P5 metrics -> contracts v1.0 JSON
 # ---------------------------------------------------------------------------
-def guard_metrics(results: Iterable[EvalResult]) -> list[dict[str, Any]]:
-    """``contracts.GuardMetrics`` dicts from P5's per-benchmark results.
+def line_guard_wire(edit_similarity: float, exact_match: float, n_examples: int) -> list[dict[str, Any]]:
+    """The D5 guard on the wire: one ``LineCompletion`` ``contracts.GuardMetrics`` entry.
+
+    This is what ``registry.promotion`` reads. Takes the fields of
+    ``evaluation.eval_harness.line_guard.guard_metrics``; see :func:`line_guard_from_metrics`.
+    """
+    if n_examples < 1:
+        raise ContractViolationError("a guard with n_examples=0 is not a measurement")
+    return [{"benchmark": GUARD_BENCHMARK, "edit_similarity": float(edit_similarity),
+             "exact_match": float(exact_match), "n_examples": int(n_examples)}]
+
+
+def line_guard_from_metrics(metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """:func:`line_guard_wire` from a ``line_guard.guard_metrics`` dict."""
+    return line_guard_wire(metrics["edit_similarity"], metrics["exact_match"], metrics["n_examples"])
+
+
+def reported_pass_at_k(results: Iterable[EvalResult]) -> list[dict[str, Any]]:
+    """``contracts.GuardMetrics`` dicts from P5's HumanEval/MBPP pass@k results.
+
+    REPORTED NUMBERS ONLY: since D5 moved to the line-completion guard the
+    registry ignores these entries for its decision, and a payload carrying
+    only these does not satisfy D5 (use :func:`line_guard_wire`).
 
     One entry per benchmark, ``pass_at_k`` keyed by ``str(k)`` (JSON keys are
     strings; the registry casts them back with ``int(k)``). Two results for the
@@ -133,7 +151,7 @@ def eval_result_wire(
 
     Same keys as ``edge.promote.build_eval_result``. ``in_project`` /
     ``baseline_in_project`` are :func:`in_project_wire` dicts; ``guard`` is
-    :func:`guard_metrics` output. ``baseline_noise_band`` has no default: every
+    :func:`line_guard_wire` output. ``baseline_noise_band`` has no default: every
     result that feeds promotion must carry the band measured from repeated
     baseline evaluations (D5), so a caller cannot send one by omission.
     """

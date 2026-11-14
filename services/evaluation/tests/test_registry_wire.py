@@ -18,9 +18,10 @@ from evaluation.interfaces.registry_client import RegistryReadClient, SnapshotNo
 from evaluation.interfaces.registry_wire import (
     HttpRegistryReadClient,
     eval_result_wire,
-    guard_metrics,
     in_project_wire,
+    line_guard_wire,
     promote_body,
+    reported_pass_at_k,
     snapshot_from_registry,
     to_contracts_eval_result,
 )
@@ -67,7 +68,7 @@ EDGE_EVAL_KEYS = {"adapter", "in_project", "guard", "baseline_in_project", "base
 # ---------------------------------------------------------------------------
 class TestGuardMetrics:
     def test_one_entry_per_benchmark_with_string_keys(self) -> None:
-        guard = guard_metrics([_bench(BenchmarkName.HUMANEVAL, k1=0.31, k10=0.52), _bench(BenchmarkName.MBPP, k1=0.4)])
+        guard = reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.31, k10=0.52), _bench(BenchmarkName.MBPP, k1=0.4)])
         assert guard == [
             {"benchmark": "HumanEval", "pass_at_k": {"1": 0.31, "10": 0.52}},
             {"benchmark": "MBPP", "pass_at_k": {"1": 0.4}},
@@ -75,11 +76,11 @@ class TestGuardMetrics:
 
     def test_duplicate_benchmark_refused(self) -> None:
         with pytest.raises(ContractViolationError):
-            guard_metrics([_bench(BenchmarkName.HUMANEVAL, k1=0.3), _bench(BenchmarkName.HUMANEVAL, k1=0.4)])
+            reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.3), _bench(BenchmarkName.HUMANEVAL, k1=0.4)])
 
     def test_empty_pass_at_k_refused(self) -> None:
         with pytest.raises(ContractViolationError):
-            guard_metrics([EvalResult(adapter=CLUSTER, benchmark=BenchmarkName.MBPP)])
+            reported_pass_at_k([EvalResult(adapter=CLUSTER, benchmark=BenchmarkName.MBPP)])
 
 
 class TestInProjectWire:
@@ -108,7 +109,7 @@ class TestEvalResultWire:
         return eval_result_wire(
             CLUSTER,
             in_project_wire(_metrics(), perplexity=2.665),
-            guard=guard_metrics([_bench(BenchmarkName.HUMANEVAL, k1=0.31)]),
+            guard=reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.31)]),
             baseline_in_project=in_project_wire(_metrics(0.5337), perplexity=2.7),
             **kw,
         )
@@ -138,7 +139,7 @@ class TestEvalResultWire:
             self._wire(baseline_noise_band=-0.1)
 
     def test_promote_body_shape(self) -> None:
-        body = promote_body(self._wire(), guard_metrics([_bench(BenchmarkName.HUMANEVAL, k1=0.32)]))
+        body = promote_body(self._wire(), reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.32)]))
         assert set(body) == {"eval", "baseline_guard"}
         assert body["baseline_guard"][0]["benchmark"] == "HumanEval"
 
@@ -257,28 +258,53 @@ class TestAgainstRealRegistry:
         assert len(one.artifact_sha256) == 64
         assert registry.get(one.artifact_path).status_code == 200
 
-    def _promote(self, registry, *, candidate_pass1: float, candidate_edit_sim: float):
+    def _promote(self, registry, *, candidate_guard: float, candidate_edit_sim: float):
         reader = HttpRegistryReadClient("", session=registry)
         active = reader.active("cluster-web").adapter
         wire = eval_result_wire(
             active,
             in_project_wire(_metrics(candidate_edit_sim), perplexity=2.665),
-            guard=guard_metrics([_bench(BenchmarkName.HUMANEVAL, k1=candidate_pass1)]),
+            guard=line_guard_wire(candidate_guard, 0.3, 300),
             baseline_in_project=in_project_wire(_metrics(0.5337), perplexity=2.7),
             baseline_noise_band=0.0,
         )
-        baseline_guard = guard_metrics([_bench(BenchmarkName.HUMANEVAL, k1=0.30)])
+        baseline_guard = line_guard_wire(0.60, 0.3, 300)
         resp = registry.post("/adapters/cluster-web/promote", json=promote_body(wire, baseline_guard))
         assert resp.status_code == 200, resp.text
         return resp.json(), reader
 
     def test_d5_promotes_on_p5_metrics(self, registry) -> None:
-        decision, reader = self._promote(registry, candidate_pass1=0.30, candidate_edit_sim=0.547)
+        decision, reader = self._promote(registry, candidate_guard=0.585, candidate_edit_sim=0.547)
         assert decision["action"] == "promote", decision["reason"]
         assert reader.active("cluster-web").adapter.version == 2
 
     def test_d5_rolls_back_when_the_p5_guard_drops(self, registry) -> None:
-        decision, reader = self._promote(registry, candidate_pass1=0.25, candidate_edit_sim=0.547)
+        decision, reader = self._promote(registry, candidate_guard=0.57, candidate_edit_sim=0.547)
         assert decision["action"] == "rollback"
-        assert "HumanEval pass@1 dropped" in decision["reason"]
+        assert "LineCompletion edit similarity dropped" in decision["reason"]
         assert reader.active("cluster-web").adapter.version == 1
+
+
+def test_humaneval_only_guard_does_not_promote() -> None:
+    pytest.importorskip("registry.promotion")
+    import contracts as c
+    from registry.promotion import decide
+
+    wire = eval_result_wire(
+        CLUSTER,
+        in_project_wire(_metrics(0.9), perplexity=2.0),
+        guard=reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.5)]),
+        baseline_in_project=in_project_wire(_metrics(0.5), perplexity=2.0),
+        baseline_noise_band=0.0,
+    )
+    baseline = tuple(c.GuardMetrics.from_json(g) for g in reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.5)]))
+    decision = decide(to_contracts_eval_result(wire), baseline_guard=baseline,
+                      active_version_before=2, previous_version=1)
+    assert decision.action.value == "rollback"
+    assert "guard metrics missing" in decision.reason
+
+
+def test_line_guard_wire_uses_the_guard_benchmark() -> None:
+    from evaluation.eval_harness import line_guard
+
+    assert line_guard_wire(0.5, 0.2, 300)[0]["benchmark"] == line_guard.GUARD_BENCHMARK
