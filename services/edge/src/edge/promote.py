@@ -3,7 +3,7 @@
     candidate version + baseline version + EvalResult
         -> POST /adapters/{name}/promote
         -> registry.promotion.decide  (D5, unmodified)
-        -> PROMOTE or ROLLBACK, recorded in the registry's audit trail
+        -> PROMOTE or REJECT, recorded in the registry's audit trail
 
 Three facts about D5 that shape everything here, all read off
 ``registry/src/registry/promotion.py`` rather than assumed:
@@ -11,16 +11,18 @@ Three facts about D5 that shape everything here, all read off
 1. The rule is TWO-SIDED. It promotes only if in-project ``edit_similarity``
    improves beyond the noise band AND the regression guard has not dropped more
    than ``GUARD_TOLERANCE``. A missing guard on either side is not
-   neutral — ``_guard_holds`` returns False, so the answer is ROLLBACK. The
+   neutral — ``_guard_holds`` returns False, so the answer is REJECT. The
    guard is next-line completion on the frozen line-completion guard set
    (``LineCompletion``), and the registry's rule reads exactly that.
-2. The rule only ever judges the version that is CURRENTLY ACTIVE, and the API
-   rejects an eval whose version is not the active one (409).
-3. ROLLBACK with no previous version raises, surfaced as a 422. So a promote
-   call is only well-formed once the adapter has at least two versions.
+2. An uploaded version is an inactive candidate. The rule judges a candidate
+   newer than the active version (the API answers 409 otherwise, and 409 for a
+   version already decided).
+3. PROMOTE makes the candidate active; REJECT records the decision and leaves
+   the active pointer where it was (``0`` when nothing was active yet), so a
+   rejected candidate is never served.
 
-Hence the shape of the flow: publish a baseline version, publish the candidate
-(which auto-activates), evaluate both, then call promote.
+Hence the shape of the flow: publish the candidate (inactive), evaluate it and
+the active baseline, then call promote.
 
 The line-completion guard
 -------------------------
@@ -29,7 +31,7 @@ The line-completion guard
 ``LineCompletion`` metrics on the frozen guard set), and if there is no such
 file it returns an unavailable status with a reason string. The caller
 then sends an EvalResult with an empty ``guard`` tuple and D5 does what it was
-designed to do when it cannot see the guard: roll back. That is the sprint's
+designed to do when it cannot see the guard: reject. That is the sprint's
 stated F3 position — a legitimate refusal to promote beats a fabricated number.
 """
 from __future__ import annotations
@@ -76,7 +78,7 @@ class GuardStatus:
 
 _NO_GUARD_EVIDENCE = ("no line-completion guard evidence supplied: the line-completion guard was "
                       "not scored (scripts/evaluate_candidate.py writes it). D5 treats a missing "
-                      "guard as a failed guard, so the rule will return ROLLBACK.")
+                      "guard as a failed guard, so the rule will return REJECT.")
 
 
 def _line_guard(entries) -> Optional[Dict]:
@@ -137,7 +139,7 @@ def resolve_guard(evidence: Optional[Path | str] = None,
 #: honest signal is ``n_examples == 0``: zero examples were scored, therefore the
 #: other three fields are not measurements and must not be read as any. Every
 #: record produced from this carries ``in_project_measured: false``, and the
-#: resulting ROLLBACK is marked provisional. This is the sprint's F3 position:
+#: resulting REJECT is marked provisional. This is the sprint's F3 position:
 #: a refusal to promote beats a fabricated edit_similarity.
 UNMEASURED_IN_PROJECT: Dict[str, float] = {
     "edit_similarity": 0.0,
@@ -176,33 +178,18 @@ def _guard_contract(metrics: Dict):
     return GuardMetrics.from_json(metrics)
 
 
-def _previous_version(versions: Sequence[int], version: int) -> Optional[int]:
-    """The rollback target D5 would use: the version just before ``version``.
-
-    Mirrors ``registry.storage.previous_version`` over a version list the
-    registry itself returned; None when ``version`` is the first one.
-    """
-    earlier = [v for v in versions if v < version]
-    return max(earlier) if earlier else None
-
-
-def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict],
-                     previous_version: Optional[int]) -> Tuple[str, str]:
+def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict]) -> Tuple[str, str]:
     """What D5 will say, and why — for the manifest ONLY.
 
     Computed by the registry's own rule, ``registry.promotion.decide`` (P4), on
     exactly the inputs being sent: the EvalResult body and baseline guard of
-    seam C2, with the candidate as the active version (the only one the
-    registry evaluates) and ``previous_version`` as the rollback target. The
-    edge does not keep a copy of D5. The authoritative decision is still
-    whatever the live registry returns; this sits beside it in the manifest so
-    a disagreement between the inputs' implications and the service's answer is
-    visible instead of invisible.
+    seam C2. The edge does not keep a copy of D5. The authoritative decision is
+    still whatever the live registry returns; this sits beside it in the
+    manifest so a disagreement between the inputs' implications and the
+    service's answer is visible instead of invisible.
 
     Returns ("unavailable", why) if the registry package is not installed
-    alongside the edge, or if the rule cannot decide on these inputs (a
-    rollback with no previous version) — a prediction the edge cannot make is
-    not made up.
+    alongside the edge — a prediction the edge cannot make is not made up.
     """
     try:
         from contracts import AdapterKind, AdapterRef, EvalResult, InProjectMetrics
@@ -227,12 +214,11 @@ def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict],
         baseline_in_project=metrics(baseline) if baseline else None,
         baseline_noise_band=float(eval_result.get("baseline_noise_band", 0.0)),
         seed=int(eval_result.get("seed", 0)))
-    try:
-        decision = decide(result,
-                          baseline_guard=tuple(_guard_contract(g) for g in baseline_guard),
-                          active_version_before=result.adapter.version)
-    except ValueError as exc:
-        return "unavailable", f"registry.promotion.decide could not decide: {exc}"
+    # The action and reason do not depend on the active version; only the
+    # pointer after a REJECT does, and the prediction does not report it.
+    decision = decide(result,
+                      baseline_guard=tuple(_guard_contract(g) for g in baseline_guard),
+                      active_version_before=None)
     return decision.action.value, decision.reason
 
 
@@ -262,12 +248,9 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         guard=[guard.candidate] if guard.available else [],
         baseline_noise_band=noise_band, seed=seed)
     baseline_guard: List[Dict] = [guard.baseline] if guard.available else []
-    # Read before C2: a rollback moves the active pointer, not the history.
+    # Read before C2: the active version the candidate is judged against.
     listing = client.list_versions(adapter_name)
-    versions = [v["ref"]["version"] for v in listing["versions"]]
-    previous_version = _previous_version(versions, version)
-    expected_action, expected_why = predict_decision(
-        eval_result, baseline_guard, previous_version)
+    expected_action, expected_why = predict_decision(eval_result, baseline_guard)
     if guard.available:
         decision = client.promote(adapter_name, eval_result, baseline_guard)
     else:

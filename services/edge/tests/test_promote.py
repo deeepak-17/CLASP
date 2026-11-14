@@ -16,7 +16,6 @@ import json
 
 from edge.promote import (
     GuardStatus,
-    _previous_version,
     build_eval_result,
     predict_decision,
     resolve_guard,
@@ -41,7 +40,7 @@ NO_GUARD = GuardStatus(available=False, reason="no anchors — test")
 
 
 def predict(cand: float, base: float, noise_band: float, guard_status: GuardStatus,
-            *, version: int = 3, previous_version=2):
+            *, version: int = 3):
     """Predict on the same C2 body ``promote_candidate`` sends."""
     eval_result = build_eval_result(
         adapter_name="cluster-web", version=version, kind="cluster",
@@ -49,7 +48,7 @@ def predict(cand: float, base: float, noise_band: float, guard_status: GuardStat
         guard=[guard_status.candidate] if guard_status.available else [],
         baseline_noise_band=noise_band)
     baseline_guard = [guard_status.baseline] if guard_status.available else []
-    return predict_decision(eval_result, baseline_guard, previous_version)
+    return predict_decision(eval_result, baseline_guard)
 
 
 @pytest.fixture
@@ -59,19 +58,19 @@ def registry_rule():
 
 @pytest.mark.parametrize("cand,base,guard_status,expected", [
     (0.55, 0.50, guard(0.30, 0.31), "promote"),       # both halves hold
-    (0.50, 0.55, guard(0.30, 0.31), "rollback"),      # in-project regressed
-    (0.55, 0.50, guard(0.20, 0.31), "rollback"),      # pass@1 dropped > 2 pts
-    (0.55, 0.50, NO_GUARD, "rollback"),               # guard missing => fails
+    (0.50, 0.55, guard(0.30, 0.31), "reject"),        # in-project regressed
+    (0.55, 0.50, guard(0.20, 0.31), "reject"),        # guard dropped > 2 pts
+    (0.55, 0.50, NO_GUARD, "reject"),                 # guard missing => fails
 ])
 def test_prediction_is_the_registrys_rule(registry_rule, cand, base, guard_status, expected):
     action, reason = predict(cand, base, 0.0, guard_status)
     assert action == expected
-    assert reason.startswith("promoted:" if expected == "promote" else "rolled back:")
+    assert reason.startswith("promoted:" if expected == "promote" else "rejected:")
 
 
 def test_noise_band_is_passed_through(registry_rule):
     action, _ = predict(0.51, 0.50, 0.05, guard(0.3, 0.3))
-    assert action == "rollback"          # +0.01 does not clear a 0.05 band
+    assert action == "reject"            # +0.01 does not clear a 0.05 band
 
 
 def test_without_the_registry_package_nothing_is_made_up(monkeypatch):
@@ -88,20 +87,16 @@ def test_without_the_registry_package_nothing_is_made_up(monkeypatch):
     assert "registry" in why
 
 
-def test_rollback_without_a_previous_version_is_not_made_up(registry_rule):
-    action, why = predict(0.50, 0.55, 0.0, guard(0.3, 0.3), version=1, previous_version=None)
-    assert action == "unavailable"
-    assert "no previous version" in why
+def test_a_first_candidate_that_fails_is_rejected_not_unavailable(registry_rule):
+    # Nothing is active before the first promote: a failing first candidate is
+    # simply rejected, the rule has nothing to roll back to and needs nothing.
+    action, why = predict(0.50, 0.55, 0.0, guard(0.3, 0.3), version=1)
+    assert action == "reject" and why.startswith("rejected:")
 
 
-def test_promote_needs_no_previous_version(registry_rule):
-    action, _ = predict(0.55, 0.50, 0.0, guard(0.30, 0.31), version=1, previous_version=None)
+def test_a_first_candidate_can_be_promoted(registry_rule):
+    action, _ = predict(0.55, 0.50, 0.0, guard(0.30, 0.31), version=1)
     assert action == "promote"
-
-
-def test_previous_version_is_the_one_just_before():
-    assert _previous_version([1, 2, 4, 5], 4) == 2
-    assert _previous_version([1, 2, 3], 1) is None
 
 
 def _evidence_file(tmp_path, cluster="web", **entry):

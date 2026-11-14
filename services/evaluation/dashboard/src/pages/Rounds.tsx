@@ -2,7 +2,15 @@ import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, X
 import { ErrorState, LoadingState } from "../components/DataState";
 import { StatTile } from "../components/StatTile";
 import { useRounds } from "../lib/rounds";
-import { candidateTrend, clusterIds, type ClusterRound, type RoundEntry, type VersionBlock } from "../lib/roundsFeed";
+import {
+  activeLabel,
+  candidateTrend,
+  clusterIds,
+  decisionWord,
+  type ClusterRound,
+  type RoundEntry,
+  type VersionBlock,
+} from "../lib/roundsFeed";
 
 // Fixed categorical order (same validated slots the Pass@k chart uses). The
 // system has two clusters (web, scientific); colour follows the cluster id.
@@ -29,7 +37,8 @@ const signed = (v: number | null) => (v === null ? "N/A" : `${v >= 0 ? "+" : ""}
 function versionCell(v: VersionBlock) {
   return (
     <>
-      v{v.version} <span style={{ color: "var(--text-muted)" }}>({v.aggregation})</span>
+      {v.version === null ? "base model" : `v${v.version}`}{" "}
+      <span style={{ color: "var(--text-muted)" }}>({v.aggregation})</span>
     </>
   );
 }
@@ -40,7 +49,8 @@ function DecisionBadge({ c }: { c: ClusterRound }) {
   return (
     <span className={"badge " + (promote ? "badge-real" : "badge-demo")}>
       <span className="badge-dot" />
-      {notSent ? "NOT SENT" : promote ? "▲ PROMOTE" : "▼ ROLLBACK"} · active v{c.decision.active_version_after}
+      {notSent ? "" : promote ? "▲ " : "▼ "}
+      {decisionWord(c.decision.action)} · {activeLabel(c.decision.active_version_after)}
       {c.authoritative ? "" : " · provisional"}
     </span>
   );

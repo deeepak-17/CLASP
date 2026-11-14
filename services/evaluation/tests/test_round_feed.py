@@ -171,8 +171,16 @@ def _blob(value: float) -> bytes:
     return struct.pack("<Q", len(header)) + header + data
 
 
+def _lc_status(promote, candidate: float, baseline: float):
+    side = lambda es: {"benchmark": "LineCompletion", "edit_similarity": es,  # noqa: E731
+                       "exact_match": 0.1, "n_examples": 300}
+    return promote.GuardStatus(available=True, reason="scored", candidate=side(candidate),
+                               baseline=side(baseline))
+
+
 def test_feed_reads_what_the_real_producers_write(tmp_path, monkeypatch) -> None:
-    """seam_c2 / humaneval_guard built by edge.promote against the real registry app."""
+    """seam_c2 built by edge.promote against the real registry app, under the
+    candidate flow: v1 promoted, v2 published inactive, its promote not sent."""
     promote = pytest.importorskip("edge.promote")
     registry_client = pytest.importorskip("edge.registry_client")
     appmod = pytest.importorskip("registry.app")
@@ -181,28 +189,83 @@ def test_feed_reads_what_the_real_producers_write(tmp_path, monkeypatch) -> None
     monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "registry"))
     appmod._store = None
     with TestClient(appmod.app) as client:
+        rc = registry_client.RegistryClient(base_url="", session=client)
         published = {}
         for label, value in (("baseline", 0.1), ("candidate", 0.2)):
             resp = client.post("/adapters/cluster-web/versions",
                                files={"file": ("a.safetensors", _blob(value), "application/octet-stream")},
                                data={"meta": json.dumps({"kind": "cluster", "cluster_id": "web", "round": 1})})
             published[label] = resp.json()
+            if label == "baseline":  # a published version is a candidate: promote v1 first
+                first = promote.promote_candidate(
+                    rc, "cluster-web", version=1, kind="cluster", cluster_id="web",
+                    in_project=_ip(0.53), baseline_in_project=_ip(0.50),
+                    guard=_lc_status(promote, 0.60, 0.60))
+                assert first["decision"]["action"] == "promote"
         guard = promote.GuardStatus(available=False, reason="no anchor")
         seam_c2 = promote.promote_candidate(
-            registry_client.RegistryClient(base_url="", session=client), "cluster-web",
-            version=2, kind="cluster", cluster_id="web",
+            rc, "cluster-web", version=2, kind="cluster", cluster_id="web",
             in_project=_ip(0.547), baseline_in_project=_ip(0.5337), guard=guard)
     appmod._store = None
 
-    cluster = _cluster("web", 0.5337, 0.547, "rollback")
+    cluster = _cluster("web", 0.5337, 0.547, "reject")
     cluster["seam_c2"] = seam_c2
     for label in ("baseline", "candidate"):
         cluster["seam_a_b"]["versions"][label]["registry_version"] = published[label]
     feed = build_feed([_manifest(1, {"web": cluster}, guard.as_dict())])
     web = feed["rounds"][0]["clusters"][0]
-    assert web["decision"]["action"] == "not_sent" and web["decision"]["active_version_after"] == 2
+    # not sent: the pointer is where it was, on the promoted v1
+    assert web["decision"]["action"] == "not_sent" and web["decision"]["active_version_after"] == 1
     assert web["candidate"]["sha256"] == published["candidate"]["sha256"]
     assert [a["kind"] for a in feed["alerts"]] == ["guard_unavailable"]
+
+
+def test_a_first_candidate_with_nothing_active_does_not_crash_the_feed(tmp_path, monkeypatch) -> None:
+    """The edge's not-sent record before any promotion carries active_version_after None."""
+    promote = pytest.importorskip("edge.promote")
+    registry_client = pytest.importorskip("edge.registry_client")
+    appmod = pytest.importorskip("registry.app")
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "registry"))
+    appmod._store = None
+    with TestClient(appmod.app) as client:
+        resp = client.post("/adapters/cluster-web/versions",
+                           files={"file": ("a.safetensors", _blob(0.2), "application/octet-stream")},
+                           data={"meta": json.dumps({"kind": "cluster", "cluster_id": "web", "round": 1})})
+        published = resp.json()
+        guard = promote.GuardStatus(available=False, reason="no anchor")
+        seam_c2 = promote.promote_candidate(
+            registry_client.RegistryClient(base_url="", session=client), "cluster-web",
+            version=1, kind="cluster", cluster_id="web",
+            in_project=_ip(0.547), baseline_in_project=_ip(0.50), guard=guard)
+    appmod._store = None
+    assert seam_c2["decision"]["active_version_after"] is None
+
+    cluster = _cluster("web", 0.50, 0.547, "not_sent")
+    cluster["seam_c2"] = seam_c2
+    # nothing was active, so demo_round records no baseline version: the bare base model
+    del cluster["seam_a_b"]["versions"]["baseline"]
+    cluster["seam_a_b"]["versions"]["candidate"]["registry_version"] = published
+    feed = build_feed([_manifest(1, {"web": cluster}, guard.as_dict())])
+    web = feed["rounds"][0]["clusters"][0]
+    assert web["decision"]["active_version_after"] is None
+    base = web["baseline"]
+    assert (base["version"], base["aggregation"], base["sha256"]) == (None, "base model", None)
+    assert base["in_project"]["edit_similarity"] == 0.50
+    assert web["edit_similarity_delta"] == pytest.approx(0.047)
+    json.dumps(feed)
+
+
+def test_a_rejected_first_candidate_is_nothing_active_not_version_0() -> None:
+    cluster = _cluster("web", 0.50, 0.45, "reject")
+    cluster["seam_c2"]["decision"]["active_version_after"] = 0  # registry: nothing active
+    entry = summarize_round(_manifest(1, {"web": cluster}, _guard(0.3, 0.3)))
+    web = entry["clusters"][0]
+    assert web["decision"] == {"action": "reject", "active_version_after": None,
+                               "reason": "reject: ..."}
+    # a reject is the refusal D5 implies here: no decision_mismatch
+    assert [a["kind"] for a in d5_alerts(entry)] == ["in_project_not_improved"]
 
 
 def _line_guard(candidate: float | None = None, baseline: float | None = None) -> dict:

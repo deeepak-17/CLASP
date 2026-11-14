@@ -243,6 +243,17 @@ def registry(tmp_path, monkeypatch):
                 data={"meta": json.dumps(meta)},
             )
             assert resp.status_code == 201, resp.text
+            if version == 1:
+                # an upload is an inactive candidate: promote v1 so v2 has a live baseline
+                v1 = AdapterRef("cluster-web", 1, AdapterKind.CLUSTER, "web")
+                wire = eval_result_wire(
+                    v1, in_project_wire(_metrics(0.5337), perplexity=2.7),
+                    guard=line_guard_wire(0.60, 0.3, 300),
+                    baseline_in_project=in_project_wire(_metrics(0.50), perplexity=2.8),
+                    baseline_noise_band=0.0)
+                promoted = client.post("/adapters/cluster-web/promote",
+                                       json=promote_body(wire, line_guard_wire(0.60, 0.3, 300)))
+                assert promoted.status_code == 200 and promoted.json()["action"] == "promote"
         yield client
     appmod._store = None
 
@@ -252,7 +263,8 @@ class TestAgainstRealRegistry:
         reader = HttpRegistryReadClient("", session=registry)
         versions = reader.list_versions("cluster-web", AdapterKind.CLUSTER)
         assert [s.adapter.version for s in versions] == [1, 2]
-        assert reader.active("cluster-web").adapter.version == 2  # saves auto-activate
+        # an upload is a candidate: v2 is not live until a promote; v1 was promoted
+        assert reader.active("cluster-web").adapter.version == 1
         assert reader.latest("cluster-web", AdapterKind.CLUSTER) == versions[-1]
         one = reader.load_metadata(AdapterRef("cluster-web", 1, AdapterKind.CLUSTER, "web"))
         assert len(one.artifact_sha256) == 64
@@ -260,9 +272,11 @@ class TestAgainstRealRegistry:
 
     def _promote(self, registry, *, candidate_guard: float, candidate_edit_sim: float):
         reader = HttpRegistryReadClient("", session=registry)
-        active = reader.active("cluster-web").adapter
+        # the candidate is the newest version, above the active one
+        candidate = reader.latest("cluster-web", AdapterKind.CLUSTER).adapter
+        assert candidate.version == 2 and reader.active("cluster-web").adapter.version == 1
         wire = eval_result_wire(
-            active,
+            candidate,
             in_project_wire(_metrics(candidate_edit_sim), perplexity=2.665),
             guard=line_guard_wire(candidate_guard, 0.3, 300),
             baseline_in_project=in_project_wire(_metrics(0.5337), perplexity=2.7),
@@ -278,11 +292,13 @@ class TestAgainstRealRegistry:
         assert decision["action"] == "promote", decision["reason"]
         assert reader.active("cluster-web").adapter.version == 2
 
-    def test_d5_rolls_back_when_the_p5_guard_drops(self, registry) -> None:
+    def test_d5_rejects_when_the_p5_guard_drops(self, registry) -> None:
         decision, reader = self._promote(registry, candidate_guard=0.57, candidate_edit_sim=0.547)
-        assert decision["action"] == "rollback"
+        assert decision["action"] == "reject"
+        assert decision["reason"].startswith("rejected: ")
         assert "LineCompletion edit similarity dropped" in decision["reason"]
-        assert reader.active("cluster-web").adapter.version == 1
+        assert decision["active_version_after"] == 1
+        assert reader.active("cluster-web").adapter.version == 1  # v2 is never served
 
 
 def test_humaneval_only_guard_does_not_promote() -> None:
@@ -299,8 +315,9 @@ def test_humaneval_only_guard_does_not_promote() -> None:
     )
     baseline = tuple(c.GuardMetrics.from_json(g) for g in reported_pass_at_k([_bench(BenchmarkName.HUMANEVAL, k1=0.5)]))
     decision = decide(to_contracts_eval_result(wire), baseline_guard=baseline,
-                      active_version_before=2)
-    assert decision.action.value == "rollback"
+                      active_version_before=1)
+    assert decision.action.value == "reject"
+    assert decision.active_version_after == 1
     assert "guard metrics missing" in decision.reason
 
 

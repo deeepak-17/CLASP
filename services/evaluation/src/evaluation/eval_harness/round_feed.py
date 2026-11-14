@@ -1,8 +1,10 @@
 """Dashboard feed for federated rounds — ``round{N}_manifest.json`` -> ``rounds.json``.
 
 ``scripts/demo_round.py`` (the one-command four-seam round) writes everything
-a round did to ``experiments/<run>/results/round{N}_manifest.json``: both
-registry versions per cluster, their in-project metrics, the regression guard
+a round did to ``experiments/<run>/results/round{N}_manifest.json``: the
+candidate registry version per cluster and the active version it was judged
+against (absent when nothing was active: the baseline is then the bare base
+model, recorded here as ``version: null``), their in-project metrics, the regression guard
 status (``line_guard``, per cluster; manifests from before the line-completion
 guard carry one ``humaneval_guard`` instead) and the registry's D5 decision. That file is large and nested; the
 dashboard is a static app that reads small JSON from ``public/data/``. This
@@ -25,6 +27,11 @@ input that was not measured — plus a round-over-round drop of a cluster's
 candidate edit similarity. From the D5 reasons it predicts the action and
 records whether the registry's actual decision agrees; a disagreement is
 itself an alert, because it means either this logic or the rule changed.
+
+A refused candidate is ``reject`` (the active pointer stays where it was);
+rounds recorded before the candidate flow say ``rollback`` for the same
+refusal. ``active_version_after`` is ``null`` when nothing is active (a
+not-sent promote before the first promotion, or a first candidate rejected).
 """
 
 from __future__ import annotations
@@ -48,6 +55,9 @@ GUARD_PASS_AT_1_TOLERANCE = 0.02
 GUARD_EDIT_SIMILARITY_TOLERANCE = 0.02
 
 _LABELS = ("baseline", "candidate")
+
+#: The D5 refusal, as the registry records it now and as older rounds did.
+_REFUSALS = ("reject", "rollback")
 
 
 def _get(data: Mapping[str, Any], *path: str) -> Any:
@@ -131,6 +141,17 @@ def _round_guards(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str
     return _guard_entry(_get(manifest, "humaneval_guard")), {}
 
 
+def _active_after(decision: Mapping[str, Any]) -> int | None:
+    """The active version after the decision, or None when nothing is active.
+
+    A not-sent promote before the first promotion records ``None``; the
+    registry's REJECT of a first candidate records ``0``. Both mean "nothing
+    active", never a version 0.
+    """
+    value = _get(decision, "active_version_after")
+    return int(value) if value else None
+
+
 def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """One round manifest -> one ``rounds.json`` round entry."""
     # Read one demo_round manifest and keep only what the Rounds page shows.
@@ -143,10 +164,16 @@ def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
         decision = _get(block, "seam_c2", "decision")
         entry_versions: dict[str, Any] = {}
         for label in _LABELS:
+            if label == "baseline" and label not in versions:
+                # nothing was active: the candidate was judged against the bare base model
+                entry_versions[label] = {"version": None, "aggregation": "base model",
+                                         "sha256": None,
+                                         "in_project": _in_project(evaluation.get(label))}
+                continue
             meta = _get(versions, label, "registry_version")
             entry_versions[label] = {
                 "version": int(_get(meta, "ref", "version")),
-                "aggregation": _get(versions, label, "aggregation"),
+                "aggregation": versions[label].get("aggregation") or meta.get("aggregation"),
                 "sha256": meta.get("sha256"),
                 "in_project": _in_project(evaluation.get(label)),
             }
@@ -168,7 +195,7 @@ def summarize_round(manifest: Mapping[str, Any]) -> dict[str, Any]:
                 "edit_similarity_delta": delta,
                 "decision": {
                     "action": str(_get(decision, "action")),
-                    "active_version_after": int(_get(decision, "active_version_after")),
+                    "active_version_after": _active_after(decision),
                     "reason": str(decision.get("reason", "")),
                 },
                 "authoritative": bool(block["seam_c2"].get("decision_is_authoritative", False)),
@@ -221,8 +248,10 @@ def d5_alerts(round_entry: Mapping[str, Any]) -> list[dict[str, Any]]:
                 reasons.append(
                     ("guard_regression", f"HumanEval pass@1 dropped {drop:.4f} (> {GUARD_PASS_AT_1_TOLERANCE:.2f})")
                 )
-        predicted = "rollback" if reasons else "promote"
+        predicted = "reject" if reasons else "promote"
         actual = cluster["decision"]["action"]
+        if actual in _REFUSALS:  # an older round's ROLLBACK is the same refusal
+            actual = "reject"
         common = {"round": round_entry["round"], "cluster_id": cluster["cluster_id"]}
         for kind, message in reasons:
             alerts.append({**common, "kind": kind, "message": message})
