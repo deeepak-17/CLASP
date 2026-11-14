@@ -131,6 +131,14 @@ def _live_guard_text(entry: Dict, cand: Dict, base: Dict) -> str:
             f"paired noise {entry.get('guard_noise')}")
 
 
+def _has_line_guard(entry: Dict) -> bool:
+    """Both sides carry a ``LineCompletion`` guard with an edit similarity."""
+    return all(
+        any(isinstance(g, dict) and g.get("benchmark") == GUARD_BENCHMARK
+            and isinstance(g.get("edit_similarity"), (int, float)) for g in entry.get(key) or [])
+        for key in ("guard", "baseline_guard"))
+
+
 def _from_live_eval(cluster_id: str, version: int, sha256: Optional[str]) -> Optional[Dict]:
     """``scripts/evaluate_candidate.py``'s file for exactly this version (and sha256)."""
     path = LIVE_EVAL_DIR / f"{cluster_id}-v{version}.json"
@@ -142,6 +150,8 @@ def _from_live_eval(cluster_id: str, version: int, sha256: Optional[str]) -> Opt
     entry = (doc.get("clusters") or {}).get(cluster_id)
     if not entry:
         return None
+    if not _has_line_guard(entry) or not entry.get("guard_examples_sha256"):
+        return None  # scored before the line-completion guard (HumanEval era): not evaluated
     details, band = doc.get("details") or {}, doc.get("noise_band") or {}
     cand, base = details.get("candidate") or {}, details.get("baseline") or {}
     rel = _rel(path)

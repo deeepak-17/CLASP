@@ -370,7 +370,7 @@ async def live_publish(cluster_id: str) -> dict:
 @app.post("/api/live/promote/{cluster_id}")
 async def live_promote(cluster_id: str) -> dict:
     """Step 5: D5 on the version just published, with evaluation's measured
-    in-project metric, HumanEval guard and noise band (``evidence.py``)
+    in-project metric, line-completion guard and noise band (``evidence.py``)
     instead of constants. The registry decides PROMOTE or ROLLBACK."""
     from demo_ui.evidence import EvidenceMissing, evidence_for
 

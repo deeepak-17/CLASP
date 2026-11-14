@@ -126,7 +126,7 @@ function decisionStop(cid, c) {
   const canEval = enough && reg.active === newest && !measured && !ev.running && !busy[cid];
   const canAsk = enough && reg.active === newest && measured && !decided && !busy[cid];
   const evalNote = ev.running
-    ? `<p class="fine">Evaluating v${newest} on this laptop's GPU (in-project completion + HumanEval, v${newest} and the version before it)…</p><pre class="tail">${esc((ev.lines || []).join("\n"))}</pre>`
+    ? `<p class="fine">Evaluating v${newest} on this laptop's GPU (in-project completion + the line-completion guard, v${newest} and the version before it)…</p><pre class="tail">${esc((ev.lines || []).join("\n"))}</pre>`
     : ev.exit_code && !measured ? `<p class="fine warn">Evaluation failed (exit ${ev.exit_code}): ${esc((ev.lines || []).slice(-1)[0] || "")}</p>`
     : measured && !decided ? `<p class="fine">v${newest} has been measured; the registry can decide.</p>` : "";
   let body;
@@ -135,7 +135,8 @@ function decisionStop(cid, c) {
     const promoted = d.action === "promote";
     const fresh = stamped[cid] !== d.timestamp;
     stamped[cid] = d.timestamp;
-    const g = (x) => x && x.length ? fmt(x[0].pass_at_k["1"], 2) : "not scored";
+    const g = (x) => x && x.length && typeof x[0].edit_similarity === "number"
+      ? `${fmt(x[0].edit_similarity, 4)}${x[0].n_examples ? ` (${x[0].n_examples} examples)` : ""}` : "not scored";
     const back = r.cluster_restore
       ? (r.cluster_restore.restored
         ? `<p class="fine">The cluster serves v${r.cluster_restore.restored.version} again (${esc(r.cluster_restore.restored.sha256.slice(0, 12))}), so the laptops' next round builds on it${r.cluster_restore.dropped_uploads.length ? `; dropped ${esc(r.cluster_restore.dropped_uploads.join(", "))}, trained on the rejected one` : ""}.</p>`
@@ -144,13 +145,13 @@ function decisionStop(cid, c) {
     body = `<div class="stamp ${promoted ? "" : "rollback"} ${fresh ? "fresh" : ""}">${promoted ? "Promoted" : "Rolled back"}
         <small>v${d.active_version_after} ${promoted ? "now serving" : "serving again"}</small></div>
       <p class="why">${esc(d.reason)}</p>${back}
-      <p class="numbers">Edit similarity ${fmt(s.in_project.edit_similarity, 4)} against ${fmt(s.baseline_in_project.edit_similarity, 4)}, noise band ${fmt(s.baseline_noise_band, 4)}. HumanEval pass@1 ${g(s.guard)} against ${g(s.baseline_guard)}.</p>
+      <p class="numbers">Edit similarity ${fmt(s.in_project.edit_similarity, 4)} against ${fmt(s.baseline_in_project.edit_similarity, 4)}, noise band ${fmt(s.baseline_noise_band, 4)}. Line-completion guard edit similarity ${g(s.guard)} against ${g(s.baseline_guard)}.</p>
       <details class="source"><summary>Where these numbers come from</summary>
         <p>${esc(p.in_project)}</p><p>${esc(p.guard)}</p><p>Noise band: ${esc(p.noise_band)}</p>
         ${p.stale ? `<p>${esc(p.note)}</p>` : ""}</details>`;
   } else {
     body = `<p class="lead">${enough ? `Ready to judge v${newest}` : "Needs two versions to compare"}</p>
-      <p class="fine">The registry keeps the new version only if completion quality beats the last one and HumanEval does not drop, measured on this version itself.</p>`;
+      <p class="fine">The registry keeps the new version only if completion quality beats the last one and the line-completion guard does not drop, measured on this version itself.</p>`;
   }
   return `<div class="stop"><h3>Decision</h3>${body}${evalNote}
     <div class="act"><button class="quiet" data-act="evaluate" data-c="${cid}" ${canEval ? "" : "disabled"}>${measured ? `v${newest} is measured` : ev.running ? "Evaluating…" : enough ? `Evaluate v${newest}` : "Evaluate"}</button>

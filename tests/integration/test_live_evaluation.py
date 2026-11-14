@@ -232,3 +232,24 @@ def test_without_live_guard_evidence_the_fallback_has_no_guard_and_says_why(tmp_
     assert "line-completion guard was not scored" in note and "HumanEval" not in note
     assert "failed" in note  # D5 counts a missing guard as failed
     assert not hasattr(evidence, "guard_anchors")
+
+
+def test_a_humaneval_era_evidence_file_counts_as_not_evaluated(tmp_path, monkeypatch):
+    """A live-eval file written before the line guard is neither read nor a crash: re-evaluate."""
+    monkeypatch.delenv("CLASP_EVAL_EVIDENCE", raising=False)
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    ip = {"edit_similarity": 0.52, "exact_match": 0.2, "perplexity": 3.1, "n_examples": 60}
+    old = {"candidate_version": 2, "candidate_sha256": "b" * 64, "baseline_version": 1,
+           "clusters": {"web": {"in_project": ip, "baseline_in_project": ip, "noise_band": 0.0,
+                                "guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.45}}],
+                                "baseline_guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.5}}]}},
+           "details": {"candidate": {"humaneval_n": 20, "humaneval_solved": 9}, "baseline": {}}}
+    (tmp_path / "web-v2.json").write_text(json.dumps(old), encoding="utf-8")
+    assert evidence.evaluated_version("web", 2, "b" * 64) is False
+    with pytest.raises(evidence.EvidenceMissing, match="Evaluate"):
+        evidence.evidence_for("web", version=2, sha256="b" * 64)
+    # the same file with a line guard but no fingerprint is not trusted either
+    entry = old["clusters"]["web"]
+    entry["guard"] = entry["baseline_guard"] = [SCORES["candidate"]["guard"]]
+    (tmp_path / "web-v2.json").write_text(json.dumps(old), encoding="utf-8")
+    assert evidence.evaluated_version("web", 2, "b" * 64) is False
