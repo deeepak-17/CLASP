@@ -69,7 +69,8 @@ def test_promote_makes_the_candidate_active_and_clears_it():
     cand = _round0(promoted=False)
     r = _decide("promote", cand["sha256"])
     assert r.status_code == 200, r.text
-    assert r.json() == {"active_sha256": cand["sha256"], "round_id": cand["round_id"]}
+    assert r.json() == {"active_sha256": cand["sha256"], "round_id": cand["round_id"],
+                         "dropped_uploads": []}
     assert client.get("/clusters/web/adapters/active").json()["sha256"] == cand["sha256"]
     assert client.get("/clusters/web/adapters/candidate").status_code == 404
     assert server._clusters["web"].candidate is None
@@ -204,3 +205,37 @@ def test_clusters_listing_reports_candidate_sha256():
     promote(client, "web", cand)
     row = client.get("/clusters").json()["clusters"]["web"]
     assert row["candidate_sha256"] is None and row["active_sha256"] == cand["sha256"]
+
+
+def test_promote_drops_uploads_trained_on_the_replaced_adapter_and_the_next_aggregate_works():
+    promoted = _round0()
+    for c in ("a", "b"):
+        client.post("/clusters/web/uploads", json=_based(c, trained_adapter(60), promoted))
+    cand = client.post("/clusters/web/aggregate", json={}).json()
+    rnd = server._clusters["web"].round_id
+    # edges still serve `promoted` while the candidate is evaluated
+    assert client.post("/clusters/web/uploads", json=_based(
+        "a", trained_adapter(61), promoted, round_id=rnd)).status_code == 201
+    r = _decide("promote", cand["sha256"])
+    assert r.status_code == 200, r.text
+    assert r.json()["dropped_uploads"] == ["a"]
+    assert server._clusters["web"].uploads == {}
+    for c in ("a", "b"):
+        assert client.post("/clusters/web/uploads", json=_based(
+            c, trained_adapter(62), cand, round_id=rnd)).status_code == 201
+    assert client.post("/clusters/web/aggregate", json={}).status_code == 200
+
+
+def test_reject_keeps_uploads_buffered_during_the_candidate_and_the_next_aggregate_uses_them():
+    promoted = _round0()
+    for c in ("a", "b"):
+        client.post("/clusters/web/uploads", json=_based(c, trained_adapter(70), promoted))
+    cand = client.post("/clusters/web/aggregate", json={}).json()
+    rnd = server._clusters["web"].round_id
+    assert client.post("/clusters/web/uploads", json=_based(
+        "a", trained_adapter(71), promoted, round_id=rnd)).status_code == 201
+    assert _decide("reject", cand["sha256"]).status_code == 200
+    assert set(server._clusters["web"].uploads) == {"a"}
+    r = client.post("/clusters/web/aggregate", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["source_clients"] == ["a"] and r.json()["round_id"] == rnd

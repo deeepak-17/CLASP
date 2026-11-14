@@ -1448,18 +1448,32 @@ def get_cluster_candidate_adapter(cluster_id: str, request: Request) -> ClusterA
     return candidate
 
 
+def _drop_uploads_not_based_on(state: _ClusterState, digest: str) -> list[str]:
+    """Drop buffered residuals whose declared base is not ``digest`` (the adapter
+    about to become active); uploads declaring no base are kept. Returns the
+    dropped client ids. The caller holds ``state.lock``."""
+    dropped = sorted(c for c, u in state.uploads.items()
+                     if u.base_sha256 is not None and u.base_sha256 != digest)
+    for c in dropped:
+        del state.uploads[c]
+    return dropped
+
+
 @app.post("/clusters/{cluster_id}/adapters/candidate/promote")
 def promote_candidate(cluster_id: str, body: CandidateDecision) -> dict[str, object]:
     """Make the pending candidate the served (active) adapter. ``sha256`` must
-    name it, else 409. Uploads buffered meanwhile are kept: they declare the
-    previous active adapter as base, and are judged against the new one only
-    at the next aggregate."""
+    name it, else 409. Uploads buffered while the candidate was pending were
+    trained on the previous active adapter; residuals among them would make the
+    next aggregate fail as stale, so they are dropped (as ``restore`` does) and
+    named in ``dropped_uploads``. Uploads declaring no base are kept."""
     state = _cluster(cluster_id)
     with state.lock:
         candidate = _pending_candidate(state, body.sha256)
+        dropped = _drop_uploads_not_based_on(state, candidate.sha256)
         state.active = candidate
         state.candidate = None
-    return {"active_sha256": candidate.sha256, "round_id": candidate.round_id}
+    return {"active_sha256": candidate.sha256, "round_id": candidate.round_id,
+            "dropped_uploads": dropped}
 
 
 @app.post("/clusters/{cluster_id}/adapters/candidate/reject")
@@ -1590,10 +1604,7 @@ def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, o
                    f"({broadcast.sha256[:12]} vs {digest[:12]}); not serving it",
         )
     with state.lock:
-        dropped = sorted(c for c, u in state.uploads.items()
-                         if u.base_sha256 is not None and u.base_sha256 != digest)
-        for c in dropped:
-            del state.uploads[c]
+        dropped = _drop_uploads_not_based_on(state, digest)
         state.active = broadcast
     return {
         "cluster_id": cluster_id,
