@@ -43,6 +43,13 @@ from contracts import (
 
 from .config import data_root
 from .durable import fsync_path as _fsync
+from .errors import (  # noqa: F401  (re-exported: callers import these from registry.storage)
+    AdapterNotFound,
+    InvalidAdapterName,
+    KindMismatch,
+    StorageError,
+    VersionExists,
+)
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: Header size bound. A real 24-layer adapter's header is ~30 KB; parsing a
@@ -51,26 +58,6 @@ _ST_MAX_HEADER = 8 * 1024 * 1024
 _ST_DTYPE_BYTES = {"BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1, "I16": 2,
                    "U16": 2, "F16": 2, "BF16": 2, "I32": 4, "U32": 4, "F32": 4, "I64": 8,
                    "U64": 8, "F64": 8}
-
-
-class StorageError(Exception):
-    """Base class for registry storage errors."""
-
-
-class AdapterNotFound(StorageError):
-    pass
-
-
-class KindMismatch(StorageError):
-    """A name's versions all share one AdapterKind; a save tried to change it."""
-
-
-class InvalidAdapterName(StorageError):
-    """Name fails the path-safe pattern — a client error, never a 500."""
-
-
-class VersionExists(StorageError):
-    """Refused to overwrite an existing immutable version (D9)."""
 
 
 def _validate_name(name: str) -> str:
