@@ -41,6 +41,7 @@ from contracts import (
     utcnow_iso,
 )
 
+from .config import data_root
 from .durable import fsync_path as _fsync
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -123,8 +124,7 @@ class RegistryStore:
     """Filesystem-backed adapter store rooted at a persistent directory."""
 
     def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
-        root = root or os.environ.get("CLASP_REGISTRY_DATA", "/data/registry")
-        self.root = Path(root)
+        self.root = data_root(root)
         self.adapters_dir = self.root / "adapters"
         self.adapters_dir.mkdir(parents=True, exist_ok=True)
 

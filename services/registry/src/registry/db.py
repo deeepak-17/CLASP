@@ -8,7 +8,6 @@ later is a matter of setting ``CLASP_REGISTRY_DB`` to another URL.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from sqlalchemy import (
     CheckConstraint,
@@ -26,6 +25,8 @@ from sqlalchemy import (
     create_engine,
     event,
 )
+
+from registry.config import data_root
 
 DB_ENV = "CLASP_REGISTRY_DB"
 
@@ -64,7 +65,7 @@ composite_parts = Table(
     "composite_parts",
     metadata,
     Column("composite_version_id", Integer, ForeignKey("versions.id"), primary_key=True),
-    Column("part_version_id", Integer, ForeignKey("versions.id")),
+    Column("part_version_id", Integer, ForeignKey("versions.id"), nullable=False),
     Column("role", String, primary_key=True),
     Column("weight", Float),
     CheckConstraint("role IN ('cluster','client')", name="ck_composite_parts_role"),
@@ -75,7 +76,7 @@ promotion_decisions = Table(
     "promotion_decisions",
     metadata,
     Column("id", Integer, primary_key=True),
-    Column("adapter_id", Integer, ForeignKey("adapters.id")),
+    Column("adapter_id", Integer, ForeignKey("adapters.id"), nullable=False),
     Column("version", Integer, nullable=False),
     Column("action", String, nullable=False),
     Column("active_version_after", Integer, nullable=False),
@@ -89,12 +90,12 @@ cluster_sync = Table(
     "cluster_sync",
     metadata,
     Column("id", Integer, primary_key=True),
-    Column("decision_id", Integer, ForeignKey("promotion_decisions.id"), unique=True),
+    Column("decision_id", Integer, ForeignKey("promotion_decisions.id"), nullable=False, unique=True),
     Column("cluster_id", String, nullable=False),
     Column("sha256", String, nullable=False),
-    Column("action", String),
-    Column("status", String, server_default="pending"),
-    Column("attempts", Integer, server_default="0"),
+    Column("action", String, nullable=False),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("attempts", Integer, nullable=False, server_default="0"),
     Column("last_error", Text),
     Column("updated_at", String),
     CheckConstraint("action IN ('promote','reject')", name="ck_cluster_sync_action"),
@@ -107,9 +108,7 @@ def default_url() -> str:
     explicit = os.environ.get(DB_ENV)
     if explicit:
         return explicit
-    # Same resolution as RegistryStore.
-    root = Path(os.environ.get("CLASP_REGISTRY_DATA", "/data/registry"))
-    return f"sqlite:///{(root / 'registry.db').as_posix()}"
+    return f"sqlite:///{(data_root() / 'registry.db').as_posix()}"
 
 
 def make_engine(url: str) -> Engine:
