@@ -83,8 +83,11 @@ code win.
   PROMOTE makes it active; REJECT records the decision and leaves `active`
   where it was. The cluster holds its aggregate as a candidate and serves it
   to the edges only after `candidate/promote`; `candidate/reject` drops it.
-  An operator restore (`/restore`) can return to an earlier version that was
-  live, never to a rejected one.
+  An operator restore never returns to a refused version (a REJECT, or a
+  D5 `rollback` recorded before the candidate flow): the registry's
+  `/restore` answers 409, and so does the cluster's
+  `/clusters/{id}/adapters/active/restore` (`rejected_version`), which checks
+  the registry's `rejected` list before fetching the version.
 - **Reason:** with auto-activation every edge could pull a merge in the
   window between upload and the D5 decision, so a candidate that later failed
   was briefly served and trained on.

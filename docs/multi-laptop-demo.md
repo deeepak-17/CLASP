@@ -132,9 +132,11 @@ is P5's `noise_report.json` (0.0, deterministic decoding).
 
 Evaluate and Promote are enabled while a cluster has a candidate. The first candidate is
 compared against the bare base model; later ones against the version the registry
-serves. A rejected candidate is never served, and an operator restore (registry
-`/restore`, cluster `/clusters/{id}/adapters/active/restore`) only returns to a version
-that was live.
+serves. A rejected candidate is never served, and an operator restore never returns to
+a refused version (a REJECT, or a D5 `rollback` recorded before the candidate flow): the
+registry's `/restore` answers 409, and the cluster's
+`/clusters/{id}/adapters/active/restore` reads the registry's `rejected` list first and
+answers 409 `rejected_version` without fetching anything.
 
 ## Verified (2026-10-09, one Windows laptop with an RTX 2050, LAN address 10.214.204.34)
 

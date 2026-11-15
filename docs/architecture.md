@@ -44,7 +44,7 @@ overwritten in place.
 ## 3. Data flow (one federated round)
 
 ```
-                 (per client, local)                    (per cluster)                 (offline, at promotion)
+                 (per client, local)                    (per cluster)                 (composed on the edge, U1)
   ┌────────┐  AdapterUpload   ┌─────────┐  ClusterSnapshot  ┌──────────┐  EvalResult   ┌────────────┐
   │  Edge  │ ───────────────► │ Cluster │ ────────────────► │ Registry │ ◄──────────── │ Evaluation │
   │ (P1)   │  dWclient +      │  (P2)   │  dWcluster (SVD-  │  (P4)    │  in-project + │   (P5)     │
@@ -87,11 +87,12 @@ overwritten in place.
 
 ### 3a. Status of the four seams (Integration Sprint, Panel Review 2)
 
-All four hops above are now implemented and run as one loop on branch
-`integration/panel`. **`docs/integration-sprint.md` is the record**: what
-changed, the PEFT ⇄ cluster key translation, registry materialization, the
-evaluation metric, the HumanEval guard decision, fallback status, the exact
-commands, and the debt log.
+All four hops above are implemented and run as one loop. (Historical: they
+were first joined on branch `integration/panel`; **`docs/integration-sprint.md`
+is the record of that sprint**: what changed, the PEFT ⇄ cluster key
+translation, registry materialization, the evaluation metric, the HumanEval
+guard decision since replaced by the line-completion guard, fallback status,
+the exact commands, and the debt log.)
 
 | Seam | Call | Status |
 |---|---|---|
@@ -138,7 +139,10 @@ request are removed.
 
 **Orphan sweep.** A crash between writing files and committing leaves a version
 directory with no row. `retention.sweep_orphans` removes such unregistered
-directories; it runs before every non-dry-run GC, never on a dry run.
+directories. It runs once when the registry constructs its store (app
+startup, the first request) and at the start of every non-dry-run GC, never on
+a dry run. A sweep that fails at startup is logged and the registry keeps
+serving; the next non-dry-run GC sweeps again.
 
 **Cluster sync and retry.** The cluster service must also switch to a promoted
 candidate or drop a rejected one, and that crosses services, so it cannot be
@@ -173,7 +177,8 @@ The endpoint contract is the route list in the module docstring of
 - CI (`.github/workflows/ci.yml`): ruff over the whole repo + pytest across the
   6-package matrix (contracts, security, edge, cluster, registry, evaluation) —
   a required check.
-- Contracts v1.0 frozen (W2); changes need a semver bump + all-hands sign-off.
+- Contracts frozen at v1.0 (W2), now 1.2.0: changes are semver-versioned and
+  additive, and need a semver bump + all-hands sign-off.
 - Registry has a named docker volume; safetensors never overwritten in place.
 - Every experiment: config in `experiments/`, seed + manifest recorded, GPU-hrs
   estimated before running (D8).
