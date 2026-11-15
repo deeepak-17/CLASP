@@ -61,6 +61,40 @@ code win.
   each client"; no mechanism change. Client-level DP was rejected for this
   project.
 
+## D7 — the privacy budget (user decision U3)
+
+- **As written:** epsilon at most 8 (delta = 1e-5) per run.
+- **As built until 2026-11-16:** every round was calibrated to epsilon 8 on its
+  own, and the cluster added a round's epsilon to the adapter it built on, so a
+  two-round run was recorded at about 16.
+- **As built now:** epsilon at most 8 at delta = 1e-5 over the **whole run of 2
+  rounds, per client, example-level**. The rounds are composed with the Opacus
+  (PRV) accountant, never added up. The budget is charged when an adapter is
+  **uploaded**, and it is enforced in two places and recorded in a third:
+  - the **edge** keeps a ledger per client and run
+    (`security.dp.ledger.BudgetLedger`, under
+    `services/edge/artifacts/privacy_ledger/<client>/<run>.json`) and refuses,
+    before any network call, an upload that would be a third round or would take
+    the run past 8;
+  - the **cluster** refuses (422) a differentially private upload that does not
+    report the run's cumulative epsilon, reports more than 8, or reports more
+    than 2 rounds; its own epsilon for a merge is the largest cumulative epsilon
+    among the clients in it;
+  - the **registry** records each client's cumulative epsilon with the version
+    that contains its round (`GET /privacy/ledger`), and the demo panel shows it.
+- **How the noise is set:** both rounds train with the same noise multiplier,
+  the smallest for which two rounds of that size compose to at most 8
+  (`security.dp.ledger.calibrate_run_sigma`). One round alone therefore spends
+  less than 8.
+- **Consequence, stated plainly:** an uploaded round whose merge is later
+  **rejected** has still spent its share of the budget, because the update left
+  the laptop. Training that is never uploaded costs nothing. A new run
+  (`--run-id`) starts a new budget.
+- **Not yet measured:** whether the adapter still learns at the noise two rounds
+  within epsilon 8 require. That needs a GPU round and is recorded in
+  `experiments/d3-round2-dp/RESULTS.md` when it has been run.
+- **Reason:** U3 and calls C8, C9 in the design spec.
+
 ## D5 — promotion guard
 
 - **As written:** the guard is HumanEval pass@1: promote only if the drop is

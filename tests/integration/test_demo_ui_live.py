@@ -660,3 +660,88 @@ def test_a_promote_behind_an_already_done_later_row_is_superseded(stack, monkeyp
     calls = _script_cluster(monkeypatch, [409])
     assert ui.get("/api/live/state").json()["cluster_sync"] == []
     assert [step for step, _ in calls] == ["promote"] and _registry_pending(registry_url) == []
+
+
+# --------------------------------------------------------------------------- #
+# D7: each client's privacy spend, edge ledger -> cluster -> registry -> panel
+# --------------------------------------------------------------------------- #
+def test_the_edges_cumulative_epsilon_reaches_the_registry_ledger_and_the_panel(stack, tmp_path):
+    import requests
+
+    ui, cluster_url, registry_url = stack
+    assert ui.post("/api/live/register").status_code == 200
+    sent = {}
+    for i, client in enumerate(CLIENTS):
+        out = upload.upload_adapter(_adapter(tmp_path / "r0", client, 1 + i), cluster_url=cluster_url,
+                                    log=lambda *_: None)
+        sent[client] = out["privacy"]["epsilon_cumulative"]
+        assert sent[client] is not None and out["privacy"]["rounds_accounted"] == 1
+    # nothing is on the registry's ledger until the merge is published
+    assert requests.get(f"{registry_url}/privacy/ledger", timeout=10).json()["rows"] == []
+    before = ui.get("/api/live/state").json()["clusters"]["web"]["privacy"]
+    assert before == {"budget": 8.0, "rounds_total": 2, "clients": [], "error": None}
+
+    assert ui.post("/api/live/aggregate/web").status_code == 200
+    assert ui.post("/api/live/publish/web").status_code == 200
+    ledger = requests.get(f"{registry_url}/privacy/ledger", params={"cluster_id": "web"},
+                          timeout=10).json()
+    assert ledger["budget"] == 8.0 and ledger["rounds_total"] == 2
+    recorded = {r["client_id"]: r for r in ledger["rows"]}
+    assert set(recorded) == set(CLIENTS)
+    for client in CLIENTS:
+        # the number the edge's own ledger composed, unchanged end to end
+        assert recorded[client]["epsilon_cumulative"] == sent[client]
+        assert recorded[client]["rounds_accounted"] == 1
+        assert recorded[client]["adapter"] == "cluster-web" and recorded[client]["version"] == 1
+
+    shown = ui.get("/api/live/state").json()["clusters"]["web"]["privacy"]
+    assert shown["budget"] == 8.0 and shown["rounds_total"] == 2 and shown["error"] is None
+    assert shown["clients"] == [
+        {"client_id": c, "epsilon_cumulative": sent[c], "rounds_accounted": 1} for c in CLIENTS]
+
+
+def test_the_panel_shows_each_clients_latest_spend(stack, tmp_path, monkeypatch):
+    ui, cluster_url, registry_url = stack
+    v1, pulled = _first_round_promoted(ui, cluster_url, tmp_path, monkeypatch)
+    # round 2 in the same run for both clients: the cumulative grows, the row count per client is 1
+    for i, client in enumerate(CLIENTS):
+        d3 = {"alpha": 0.5, "cluster_adapter": pulled["path"], "cluster_pull": pulled}
+        adapter = _adapter(tmp_path / "r0b", client, 21 + i, d3)
+        manifest = adapter.parent / "manifest.json"
+        doc = json.loads(manifest.read_text(encoding="utf-8"))
+        doc["privacy"]["run_id"] = "run-r0"      # the run round 0 was charged to
+        manifest.write_text(json.dumps(doc), encoding="utf-8")
+        out = upload.upload_adapter(adapter, cluster_url=cluster_url, log=lambda *_: None)
+        assert out["privacy"]["rounds_accounted"] == 2
+    assert ui.post("/api/live/aggregate/web").status_code == 200
+    assert ui.post("/api/live/publish/web").status_code == 200
+    shown = ui.get("/api/live/state").json()["clusters"]["web"]["privacy"]["clients"]
+    assert [c["client_id"] for c in shown] == list(CLIENTS)
+    assert all(c["rounds_accounted"] == 2 and 2.0 < c["epsilon_cumulative"] <= 8.0 for c in shown)
+
+
+def test_the_panel_state_survives_a_registry_without_the_ledger_route(stack, monkeypatch):
+    """An older registry (404 on /privacy/ledger) costs the privacy lines, not the page."""
+    ui, _, _ = stack
+    assert ui.post("/api/live/register").status_code == 200
+    real = panel._send
+
+    async def no_ledger(client, method, url, **kw):
+        if "/privacy/ledger" in url:
+            import httpx
+
+            return httpx.Response(404, json={"detail": "Not Found"})
+        return await real(client, method, url, **kw)
+
+    monkeypatch.setattr(panel, "_send", no_ledger)
+    state = ui.get("/api/live/state")
+    assert state.status_code == 200
+    privacy = state.json()["clusters"]["web"]["privacy"]
+    assert privacy["clients"] == [] and "404" in privacy["error"]
+
+
+def test_the_page_lists_the_privacy_spend():
+    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    assert "function privacyLines" in html and "rounds_accounted" in html
+    # the merge card no longer describes the cluster epsilon as a sum
+    assert "plus the adapter it builds on" not in html

@@ -122,6 +122,7 @@ main { padding: 24px 40px 40px; display: grid; gap: 22px; }
 }
 .parcel .who { font-weight: 700; font-size: 16px; overflow-wrap: anywhere; }
 .parcel .state { font-size: 14px; color: var(--ink-2); }
+.parcel .spend { font-size: 14px; color: var(--ink-2); margin-top: 2px; }
 .parcel.in { border: 1.5px solid var(--lane); background: color-mix(in srgb, var(--lane) 11%, var(--sheet)); }
 .parcel.in .state { color: var(--lane); font-weight: 700; }
 
