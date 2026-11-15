@@ -172,7 +172,7 @@ function render(state) {
       <div class="lane-head"><h2>${esc(cid)}</h2>
         ${c.registered ? `<span class="round">round <b>${st.round_id}</b></span>` : `<span class="unregistered">Not registered on the cluster yet</span>`}</div>
       <div class="route">${edgesStop(c)}${mergeStop(cid, c)}${registryStop(cid, c)}${decisionStop(cid, c)}</div>
-      ${(c.cluster_sync || []).map(p => `<div class="lane-error">Cluster not yet updated, will retry: ${esc(p.action)} of v${esc(String(p.version))} (attempt ${esc(String(p.attempts))}). ${esc(p.last_error || "")}</div>`).join("")}
+      ${(c.cluster_sync || []).map(p => `<div class="lane-error">Cluster not yet updated, will retry: ${esc(p.action)} of ${esc(p.adapter)} v${esc(String(p.version))} (attempt ${esc(String(p.attempts))}). ${esc(p.last_error || "")}</div>`).join("")}
       ${errors[cid] ? `<div class="lane-error">${esc(errors[cid])}</div>` : ""}
     </section>`;
   }).join("");

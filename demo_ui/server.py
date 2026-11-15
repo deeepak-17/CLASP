@@ -221,21 +221,13 @@ async def _registry_summary(client: httpx.AsyncClient, cluster_id: str) -> dict:
     if r.status_code != 200:
         return {"name": name, "active": None, "candidate": None, "versions": []}
     body = r.json()
-    active = body.get("active")
-    p = await _send(client, "GET", f"{REGISTRY_BASE}/adapters/{name}/promotions")
-    decisions = p.json().get("decisions", []) if p.status_code == 200 else []
-    # A version D5 already judged is not a candidate any more (the registry
-    # answers 409 "already decided"); a rejected one is never served.
-    decided = {d["adapter"]["version"] for d in decisions
-               if d.get("action") in ("promote", "reject")}
-    rejected = {d["adapter"]["version"] for d in decisions if d.get("action") == "reject"}
-    above = [v["ref"]["version"] for v in body.get("versions", [])
-             if v["ref"]["version"] > (active or 0) and v["ref"]["version"] not in decided]
+    # The registry owns the rules: ``candidate`` is the newest undecided version
+    # above the active one (what Evaluate and Promote judge), ``rejected`` every
+    # version it refused (a REJECT, or a D5 ROLLBACK from an older volume).
+    rejected = set(body.get("rejected") or ())
     return {
-        "name": name, "active": active,
-        # The newest undecided version above the active one: what Evaluate and
-        # Promote judge.
-        "candidate": max(above) if above else None,
+        "name": name, "active": body.get("active"),
+        "candidate": body.get("candidate"),
         "versions": [{
             "version": v["ref"]["version"], "round": v.get("round"),
             "aggregation": v.get("aggregation"), "source_clients": v.get("source_clients", []),
@@ -493,7 +485,13 @@ async def live_aggregate(cluster_id: str) -> dict:
         r = await _send(client, "POST", f"{CLUSTER_BASE}/clusters/{cid}/aggregate",
                         json={"aggregation": "svd", "include_manifest": True})
         if r.status_code != 200:
-            raise HTTPException(r.status_code, f"aggregate {cid}: {_detail(r)}")
+            detail = _detail(r)
+            if isinstance(detail, dict) and detail.get("error") == "candidate_pending":
+                raise HTTPException(409, (
+                    f"{cid} already has a merge waiting for the registry's decision "
+                    f"({str(detail.get('sha256') or '?')[:12]}); publish and decide it "
+                    "(promote or reject) before merging again."))
+            raise HTTPException(r.status_code, f"aggregate {cid}: {detail}")
         m = await _send(client, "GET", f"{CLUSTER_BASE}/clusters/{cid}/aggregate/manifest")
     manifest = m.json()
     _live[cid] = {"aggregate": manifest}  # a new round: older publish/promote no longer apply

@@ -258,8 +258,49 @@ def test_promote_without_a_candidate_is_refused(stack, tmp_path, monkeypatch):
     assert refused.status_code == 409 and "no candidate" in refused.text
 
 
+def test_a_version_an_old_d5_rollback_refused_is_shown_rejected_and_never_offered(
+        stack, tmp_path, monkeypatch):
+    """A volume from before the candidate flow: D5 recorded ``rollback`` naming
+    the refused version. The panel, the registry and the cluster all treat it
+    as refused."""
+    import registry.app as registry_app
+    import requests
+    from contracts import AdapterKind, AdapterRef, PromotionAction, PromotionDecision
+
+    ui, cluster_url, registry_url = stack
+    _, v2 = _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch)
+    registry_app.get_store().record_promotion("cluster-web", PromotionDecision(
+        adapter=AdapterRef("cluster-web", 2, AdapterKind.CLUSTER, cluster_id="web"),
+        action=PromotionAction.ROLLBACK, active_version_after=1,
+        reason="rolled back: edit_similarity delta 0.0000 does not clear noise band 0.0200"))
+    reg = ui.get("/api/live/state").json()["clusters"]["web"]["registry"]
+    assert reg["candidate"] is None and reg["active"] == 1
+    assert [v["rejected"] for v in reg["versions"]] == [False, True]
+    refused = ui.post("/api/live/promote/web")
+    assert refused.status_code == 409 and "no candidate" in refused.text
+    r = requests.post(f"{registry_url}/adapters/cluster-web/restore",
+                      json={"reason": "drill", "to_version": 2}, timeout=10)
+    assert r.status_code == 409 and "rejected" in r.text
+    r = requests.post(f"{cluster_url}/clusters/web/adapters/active/restore",
+                      json={"version": 2, "adapter_name": "cluster-web",
+                            "registry_url": registry_url}, timeout=30)
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "rejected_version"
+    assert _cluster_web(cluster_url)["active_sha256"] != v2["sha256"]
+
+
+def test_a_second_merge_while_a_candidate_waits_is_explained_in_a_sentence(
+        stack, tmp_path, monkeypatch):
+    ui, cluster_url, _ = stack
+    _, v2 = _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch)
+    r = ui.post("/api/live/aggregate/web")
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert isinstance(detail, str) and v2["sha256"][:12] in detail
+    assert "{" not in detail and "candidate_pending" not in detail
+
+
 @pytest.mark.parametrize("method,path", [
-    ("POST", "/api/demo/send-to-cluster/web"),        # uploaded synthetic tensors
+    ("POST", "/api/demo/send-to-cluster/web"),      # uploaded synthetic tensors
     ("POST", "/api/demo/promote/cluster-web"),        # sent hardcoded metrics
     ("POST", "/api/demo/demonstrate-rollback/cluster-web"),  # posted a made-up candidate
     ("POST", "/api/demo/publish-to-registry/web"),

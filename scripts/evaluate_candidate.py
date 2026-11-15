@@ -59,10 +59,17 @@ def pick_versions(listing: Dict, active_version: int | None) -> Tuple[Dict, Dict
     active one; the baseline is the active version's metadata, or ``None`` when
     nothing is active (the candidate is then compared with the bare base
     model). A rejected version in between is never the baseline: it was never
-    active."""
+    active.
+
+    A listing that carries ``candidate`` (the registry's own rule: newest
+    undecided above active, never a refused version) is followed as is; an
+    older registry's listing falls back to the newest version above active."""
     versions = sorted(listing["versions"], key=lambda v: v["ref"]["version"])
     floor = active_version if active_version is not None else 0
-    pending = [v for v in versions if v["ref"]["version"] > floor]
+    if "candidate" in listing:
+        pending = [v for v in versions if v["ref"]["version"] == listing["candidate"]]
+    else:
+        pending = [v for v in versions if v["ref"]["version"] > floor]
     if not pending:
         raise SystemExit("the registry has no candidate above the active version for this "
                          "cluster: aggregate and publish first")

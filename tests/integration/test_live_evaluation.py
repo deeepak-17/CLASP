@@ -74,6 +74,18 @@ def test_without_a_pending_candidate_there_is_nothing_to_evaluate():
         mod.pick_versions({"active": None, "versions": []}, None)
 
 
+def test_the_registrys_candidate_field_wins_over_the_newest_version():
+    mod = _script()
+    # v3 was refused (REJECT, or an old D5 rollback): the registry names v2 the candidate
+    listing = {"active": 1, "candidate": 2, "rejected": [3],
+               "versions": [_v(1, "a" * 64), _v(2, "b" * 64), _v(3, "c" * 64)]}
+    cand, base = mod.pick_versions(listing, 1)
+    assert cand["ref"]["version"] == 2 and base["ref"]["version"] == 1
+    # the registry says nothing is pending: nothing to evaluate, even with v3 above active
+    with pytest.raises(SystemExit, match="no candidate"):
+        mod.pick_versions({**listing, "candidate": None}, 1)
+
+
 def _write(tmp_path, mod, version=2, sha="b" * 64):
     doc = mod.evidence_document("web", _v(version, sha), _v(version - 1, "a" * 64),
                                 SCORES["candidate"], SCORES["baseline"],
