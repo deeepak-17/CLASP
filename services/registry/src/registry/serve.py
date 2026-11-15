@@ -14,6 +14,10 @@ With all three set, every connection must present a client certificate signed
 by ``CLASP_TLS_CA`` and negotiate TLS 1.3 — the same policy as the security
 library's ``create_server_ssl_context``. A partial or unreadable TLS config is
 a startup error, never a silent fallback to plain HTTP.
+
+Under TLS the server runs ``security.mtls.peer.PeerCertH11Protocol``, which
+puts the verified client certificate's CN in every request's scope, so the
+routes can tell which service is calling (the cluster does the same).
 """
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import uvicorn
+from security.mtls.peer import PeerCertH11Protocol
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8004
@@ -84,6 +89,8 @@ def build_config(env: Mapping[str, str]) -> uvicorn.Config:
             "ssl_keyfile": str(tls.key),
             "ssl_ca_certs": str(tls.ca),
             "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            # the verified client CN, in every request's scope
+            "http": PeerCertH11Protocol,
         }
     config = uvicorn.Config(
         "registry.app:app",

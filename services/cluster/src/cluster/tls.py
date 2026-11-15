@@ -13,7 +13,9 @@ Known limits (kept here so nobody over-reads this module):
     expose the peer certificate to the ASGI app. Binding a verified certificate
     to ``client_id`` therefore needs either a terminating proxy that relays the
     verified subject (read through ``server.configure_identity``) or a different
-    server. ``common_name_from_peercert`` is for the latter case.
+    server. ``common_name_from_peercert`` is for the latter case; it now lives
+    in ``security.mtls.peer`` (with the uvicorn protocol that uses it) and is
+    re-exported here.
   * ``flower_certificates`` only builds the tuple Flower's ``start_server`` /
     ``start_client`` accept; a Flower gRPC mTLS round has not been run here.
 """
@@ -25,6 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Mapping
 from typing import Any
+
+from security.mtls.peer import common_name_from_peercert
+
+__all__ = ["MTLSFiles", "TLSConfigError", "client_ssl_context", "common_name_from_peercert",
+           "flower_certificates", "outbound_ssl_context", "uvicorn_ssl_kwargs"]
 
 
 class TLSConfigError(ValueError):
@@ -76,17 +83,6 @@ def flower_certificates(files: MTLSFiles) -> tuple[bytes, bytes, bytes]:
     ``certificates=`` argument takes them."""
     files.checked()
     return (files.ca_cert.read_bytes(), files.cert.read_bytes(), files.key.read_bytes())
-
-
-def common_name_from_peercert(peercert: dict[str, Any] | None) -> str | None:
-    """Subject CN from the dict ``ssl.SSLSocket.getpeercert()`` returns."""
-    if not peercert:
-        return None
-    for rdn in peercert.get("subject", ()):
-        for key, value in rdn:
-            if key == "commonName":
-                return str(value)
-    return None
 
 
 def outbound_ssl_context(env: Mapping[str, str]) -> ssl.SSLContext | None:

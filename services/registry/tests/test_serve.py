@@ -158,3 +158,36 @@ def test_healthcheck_reports_down(pki):
     from registry.healthcheck import check
 
     assert check({"CLASP_REGISTRY_PORT": str(free_port())}) is False
+
+
+# --------------------------------------------------------------------------- #
+# who is calling: the verified peer name (security.mtls.peer)
+# --------------------------------------------------------------------------- #
+def test_tls_config_serves_with_the_peer_certificate_protocol(pki):
+    from security.mtls.peer import PeerCertH11Protocol
+
+    config = build_config({
+        "CLASP_TLS_CERT": str(pki["server_cert"]), "CLASP_TLS_KEY": str(pki["server_key"]),
+        "CLASP_TLS_CA": str(pki["ca"]), "CLASP_REGISTRY_PORT": str(free_port()),
+    })
+    assert config.http_protocol_class is PeerCertH11Protocol
+
+
+def test_plain_config_keeps_uvicorns_own_protocol():
+    from security.mtls.peer import PeerCertH11Protocol
+
+    config = build_config({"CLASP_REGISTRY_PORT": str(free_port())})
+    assert config.ssl is None
+    assert config.http_protocol_class is not PeerCertH11Protocol
+    assert not issubclass(config.http_protocol_class, PeerCertH11Protocol)
+
+
+def test_the_registrys_run_budget_is_the_security_librarys():
+    """registry.config repeats three numbers so reading them does not import the
+    DP stack; they must be the ones the edge and the cluster enforce."""
+    from security.dp import ledger
+
+    from registry import config
+
+    assert (config.RUN_EPSILON_BUDGET, config.RUN_DELTA, config.RUN_ROUNDS) == (
+        ledger.RUN_EPSILON_BUDGET, ledger.RUN_DELTA, ledger.RUN_ROUNDS)

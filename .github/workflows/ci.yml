@@ -53,9 +53,11 @@ jobs:
           # services/edge depends on clasp-evaluation for the B5 in-project
           # completion metric, so the shared packages go in before the matrix one.
           pip install -e services/evaluation
-          # The cluster screens uploads with P3's library (clasp-security), which
-          # is not on PyPI: install it from the checkout first.
-          if [ "${{ matrix.package.name }}" = "cluster" ]; then pip install -e security; fi
+          # The cluster screens uploads with P3's library (clasp-security) and
+          # the registry reads the verified peer name through it. It is not on
+          # PyPI: install it from the checkout first. (The security job itself
+          # installs its [test] extra, which carries opacus for the DP tests.)
+          case "${{ matrix.package.name }}" in cluster|registry) pip install -e security ;; esac
           # A missing [test] extra only warns, so install errors are no longer hidden.
           pip install -e "${{ matrix.package.path }}[test]"
           pip install pytest pytest-cov httpx
@@ -112,7 +114,8 @@ jobs:
           pip install -e contracts -e services/evaluation -e security
           pip install -e services/cluster -e services/registry
           pip install --no-deps -e services/edge
-          pip install peft safetensors requests pytest httpx
+          # opacus: the edge's privacy ledger composes rounds with its accountant
+          pip install peft safetensors requests pytest httpx opacus
       - name: Run the four-seam test
         # Tiny synthetic adapters, in-process TestClients: no GPU, no model
         # download, no services to start, no HumanEval. See the module docstring
@@ -127,7 +130,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e contracts -e services/registry
+      # the registry depends on clasp-security, which is not on PyPI
+      - run: pip install -e contracts -e security -e services/registry
       # Every experiments/*/config.yaml must state a seed, a per-run GPU-hours
       # estimate, stay in the D8 caps (or justify an override) and fit its budget.
       - run: python -m registry.runs check experiments
