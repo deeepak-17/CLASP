@@ -307,3 +307,20 @@ def test_upload_payload_carries_the_base_it_was_trained_on():
                                                      "sha256": "a" * 64, "alpha": 0.5})
     assert based["base_cluster_id"] == "web" and based["base_round_id"] == 0
     assert based["base_sha256"] == "a" * 64 and based["composition_alpha"] == 0.5
+
+
+def test_privacy_block_carries_the_run_accounting_when_present():
+    sent = wire.privacy_block({
+        "epsilon": 3.2, "delta": 1e-5, "noise_multiplier": 0.6, "max_grad_norm": 1.0,
+        "epsilon_cumulative": 3.7, "rounds_accounted": 2, "sample_rate": 0.00625, "steps": 160,
+        "run_id": "run-1", "rounds_total": 2})
+    assert sent["epsilon_cumulative"] == 3.7 and sent["rounds_accounted"] == 2
+    assert sent["sample_rate"] == 0.00625 and sent["steps"] == 160
+    # the run's name and length stay on the laptop: the cluster does not use them
+    assert "run_id" not in sent and "rounds_total" not in sent
+
+
+def test_privacy_block_without_run_accounting_is_the_contract_block():
+    sent = wire.privacy_block({"epsilon": 3.2, "delta": 1e-5})
+    assert "sample_rate" not in sent and "steps" not in sent
+    assert sent["epsilon_cumulative"] is None and sent["rounds_accounted"] is None

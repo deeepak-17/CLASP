@@ -23,7 +23,8 @@ uvicorn = pytest.importorskip("uvicorn")
 
 
 def _adapter(root: Path, client: str, *, seed: int, cluster: str = "web",
-             epsilon=None, n_chunks: int = 12) -> Path:
+             epsilon=None, n_chunks: int = 12, sigma: float = 0.6,
+             run_id: str = "run-1") -> Path:
     rng = np.random.default_rng(seed)
     r, d = 4, 8
     sd = {}
@@ -33,7 +34,11 @@ def _adapter(root: Path, client: str, *, seed: int, cluster: str = "web",
             sd[wire.peft_key(layer, m, "lora_B")] = rng.normal(size=(d, r)).astype(np.float32)
     adapter = wire.save_peft_dir(root / client / "adapter", sd,
                                  {"r": r, "lora_alpha": r, "target_modules": list(wire.TARGET_MODULES)})
-    privacy = {"epsilon": epsilon, "delta": 1e-5} if epsilon is not None else None
+    # a DP adapter as edge.train_client records it: the round's epsilon plus what
+    # the run's ledger composes it from (sigma, sample rate, steps)
+    privacy = {"epsilon": epsilon, "delta": 1e-5, "noise_multiplier": sigma,
+               "max_grad_norm": 1.0, "sample_rate": 1 / 160, "steps": 160,
+               "run_id": run_id, "rounds_total": 2} if epsilon is not None else None
     (root / client / "manifest.json").write_text(json.dumps({
         "client_id": f"{cluster}/{client}", "seed": 0, "privacy": privacy,
         "data": {"train": {"n_chunks": n_chunks}}}), encoding="utf-8")
@@ -259,3 +264,182 @@ def test_a_bare_base_adapter_after_a_merge_is_not_sent(cluster_url, tmp_path):
     out = upload.upload_adapter(late, cluster_url=cluster_url, allow_reset=True,
                                 log=lambda *_: None)
     assert out["base"] is None
+
+
+# --------------------------------------------------------------------------- #
+# D7: the run's privacy budget is charged at upload (U3, C8)
+# --------------------------------------------------------------------------- #
+class _Resp:
+    def __init__(self, status, body):
+        self.status_code, self._body, self.text = status, body, json.dumps(body)
+
+    def json(self):
+        return self._body
+
+
+class FakeCluster:
+    """A requests-shaped session that records every call and answers like the cluster."""
+
+    def __init__(self):
+        self.requests = []
+        self.upload_status = 201
+        self.clusters = {"web": {"round_id": 1, "members": ["client-flask"],
+                                 "active_sha256": None}}
+
+    def get(self, url, timeout=None):
+        self.requests.append(("GET", url, None))
+        return _Resp(200, {"clusters": self.clusters})
+
+    def post(self, url, json=None, timeout=None):
+        self.requests.append(("POST", url, json))
+        if self.upload_status == 201:
+            return _Resp(201, {"pending_uploads": 1, "round_id": json["round_id"]})
+        return _Resp(self.upload_status, {"detail": "round_id mismatch: stale round"})
+
+    @property
+    def uploads(self):
+        return [body for method, _, body in self.requests if method == "POST"]
+
+
+@pytest.fixture
+def fake_cluster():
+    return FakeCluster()
+
+
+# sigma 0.6 at q = 1/160 over 160 steps: 3.2254 for one round, 3.7198 for two (PRV)
+ONE_ROUND, TWO_ROUNDS = 3.2254, 3.7198
+
+
+def _send(adapter, fake, root, **kw):
+    return upload.upload_adapter(adapter, cluster_url="http://cluster", http=fake,
+                                 ledger_root=root / "ledger", log=lambda _m: None, **kw)
+
+
+def _ledger(root, client="client-flask", run="run-1"):
+    path = root / "ledger" / client / f"{run}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def test_upload_sends_cumulative_epsilon_and_charges_after_201(tmp_path, fake_cluster):
+    a1 = _adapter(tmp_path / "r1", "client-flask", seed=1, epsilon=ONE_ROUND)
+    out = _send(a1, fake_cluster, tmp_path)
+    sent = fake_cluster.uploads[0]["privacy"]
+    assert sent["epsilon"] == ONE_ROUND and sent["rounds_accounted"] == 1
+    assert sent["epsilon_cumulative"] == pytest.approx(ONE_ROUND, abs=1e-3)
+    assert sent["sample_rate"] == 1 / 160 and sent["steps"] == 160
+    assert out["privacy"]["epsilon_cumulative"] == sent["epsilon_cumulative"]
+    doc = _ledger(tmp_path)
+    assert doc["client_id"] == "client-flask" and doc["run_id"] == "run-1"
+    assert [r["round"] for r in doc["records"]] == [1]
+    assert doc["records"][0]["adapter_sha256"] == upload.adapter_sha256(a1)
+
+    a2 = _adapter(tmp_path / "r2", "client-flask", seed=2, epsilon=ONE_ROUND)
+    _send(a2, fake_cluster, tmp_path)
+    sent = fake_cluster.uploads[1]["privacy"]
+    assert sent["rounds_accounted"] == 2
+    # composed by the accountant, not added up
+    assert sent["epsilon_cumulative"] == pytest.approx(TWO_ROUNDS, abs=1e-3)
+    assert [r["round"] for r in _ledger(tmp_path)["records"]] == [1, 2]
+
+
+def test_upload_refused_by_the_cluster_does_not_charge(tmp_path, fake_cluster):
+    a1 = _adapter(tmp_path / "r1", "client-flask", seed=1, epsilon=ONE_ROUND)
+    fake_cluster.upload_status = 409
+    with pytest.raises(upload.UploadError) as exc:
+        _send(a1, fake_cluster, tmp_path)
+    assert exc.value.status == 409
+    assert len(fake_cluster.uploads) == 1
+    assert _ledger(tmp_path) is None
+
+
+def test_retrying_the_same_adapter_does_not_charge_twice(tmp_path, fake_cluster):
+    a1 = _adapter(tmp_path / "r1", "client-flask", seed=1, epsilon=ONE_ROUND)
+    _send(a1, fake_cluster, tmp_path)
+    _send(a1, fake_cluster, tmp_path)
+    first, again = (u["privacy"] for u in fake_cluster.uploads)
+    assert again == first and again["rounds_accounted"] == 1
+    assert len(_ledger(tmp_path)["records"]) == 1
+
+
+def test_third_upload_in_a_run_fails_before_any_request(tmp_path, fake_cluster):
+    for seed in (1, 2):
+        _send(_adapter(tmp_path / f"r{seed}", "client-flask", seed=seed, epsilon=ONE_ROUND),
+              fake_cluster, tmp_path)
+    before = _ledger(tmp_path)
+    fake_cluster.requests.clear()
+    a3 = _adapter(tmp_path / "r3", "client-flask", seed=3, epsilon=ONE_ROUND)
+    with pytest.raises(upload.UploadError) as exc:
+        _send(a3, fake_cluster, tmp_path)
+    assert fake_cluster.requests == []
+    text = str(exc.value)
+    assert "run-1" in text and "of 8" in text and "--run-id" in text
+    assert f"{TWO_ROUNDS:.2f}" in text  # the epsilon already spent
+    assert _ledger(tmp_path) == before
+
+
+def test_a_round_that_would_pass_the_budget_fails_before_any_request(tmp_path, fake_cluster):
+    # sigma 0.4726 fits two rounds; a second round at sigma 0.3 does not
+    _send(_adapter(tmp_path / "r1", "client-flask", seed=1, epsilon=6.67, sigma=0.4726),
+          fake_cluster, tmp_path)
+    fake_cluster.requests.clear()
+    loud = _adapter(tmp_path / "r2", "client-flask", seed=2, epsilon=20.0, sigma=0.3)
+    with pytest.raises(upload.UploadError, match="over the budget of 8"):
+        _send(loud, fake_cluster, tmp_path)
+    assert fake_cluster.requests == []
+    assert len(_ledger(tmp_path)["records"]) == 1
+
+
+def test_a_new_run_id_is_a_new_ledger(tmp_path, fake_cluster):
+    for seed in (1, 2):
+        _send(_adapter(tmp_path / f"r{seed}", "client-flask", seed=seed, epsilon=ONE_ROUND),
+              fake_cluster, tmp_path)
+    fresh = _adapter(tmp_path / "r3", "client-flask", seed=3, epsilon=ONE_ROUND, run_id="run-2")
+    _send(fresh, fake_cluster, tmp_path)
+    assert fake_cluster.uploads[-1]["privacy"]["rounds_accounted"] == 1
+    assert len(_ledger(tmp_path, run="run-2")["records"]) == 1
+
+
+def test_non_dp_adapter_is_untouched_by_the_ledger(tmp_path, fake_cluster):
+    plain = _adapter(tmp_path / "r1", "client-flask", seed=1)
+    _send(plain, fake_cluster, tmp_path)
+    sent = fake_cluster.uploads[0]["privacy"]
+    assert sent["epsilon"] is None and sent["epsilon_cumulative"] is None
+    assert not (tmp_path / "ledger").exists()
+
+
+def test_dp_adapter_trained_before_the_run_budget_is_not_sent(tmp_path, fake_cluster):
+    old = _adapter(tmp_path / "r1", "client-flask", seed=1, epsilon=7.99)
+    manifest = old.parent / "manifest.json"
+    doc = json.loads(manifest.read_text(encoding="utf-8"))
+    doc["privacy"] = {"epsilon": 7.99, "delta": 1e-5}
+    manifest.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(upload.UploadError, match="train it again"):
+        _send(old, fake_cluster, tmp_path)
+    assert fake_cluster.requests == []
+
+
+def test_a_corrupt_ledger_stops_the_upload(tmp_path, fake_cluster):
+    path = tmp_path / "ledger" / "client-flask" / "run-1.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+    a1 = _adapter(tmp_path / "r1", "client-flask", seed=1, epsilon=ONE_ROUND)
+    with pytest.raises(upload.UploadError, match="unreadable"):
+        _send(a1, fake_cluster, tmp_path)
+    assert fake_cluster.requests == [] and path.read_text(encoding="utf-8") == "{not json"
+
+
+def test_an_adapter_trained_before_this_change_is_accounted_from_its_results(tmp_path, fake_cluster):
+    """Older manifests keep the sample rate and steps under ``results``: such an
+    adapter is still a known DP round, so it is composed, not turned away."""
+    old = _adapter(tmp_path / "r1", "client-flask", seed=1, epsilon=ONE_ROUND)
+    manifest = old.parent / "manifest.json"
+    doc = json.loads(manifest.read_text(encoding="utf-8"))
+    doc["privacy"] = {"epsilon": ONE_ROUND, "delta": 1e-5, "noise_multiplier": 0.6,
+                      "max_grad_norm": 1.0}
+    doc["results"] = {"optimizer_steps": 160, "dp": {"sample_rate": 1 / 160}}
+    manifest.write_text(json.dumps(doc), encoding="utf-8")
+    _send(old, fake_cluster, tmp_path)
+    sent = fake_cluster.uploads[0]["privacy"]
+    assert sent["epsilon_cumulative"] == pytest.approx(ONE_ROUND, abs=1e-3)
+    assert sent["sample_rate"] == 1 / 160 and sent["steps"] == 160 and sent["rounds_accounted"] == 1
+    assert _ledger(tmp_path)["records"][0]["steps"] == 160

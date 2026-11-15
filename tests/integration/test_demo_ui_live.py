@@ -81,7 +81,12 @@ def _adapter(root: Path, client: str, seed: int, d3: dict | None = None) -> Path
     adapter = wire.save_peft_dir(root / client / "adapter", sd,
                                  {"r": 4, "lora_alpha": 4, "target_modules": list(wire.TARGET_MODULES)})
     (root / client / "manifest.json").write_text(json.dumps({
-        "client_id": f"web/{client}", "seed": 0, "privacy": {"epsilon": 2.0, "delta": 1e-5},
+        "client_id": f"web/{client}", "seed": 0,
+        # a DP round as edge.train_client records it. These tests are about the
+        # promote flow, not the budget, so every round directory is its own run.
+        "privacy": {"epsilon": 2.0, "delta": 1e-5, "noise_multiplier": 0.7,
+                    "max_grad_norm": 1.0, "sample_rate": 1 / 160, "steps": 160,
+                    "run_id": f"run-{root.name}", "rounds_total": 2},
         "data": {"train": {"n_chunks": 10}}, "d3": d3}), encoding="utf-8")
     return adapter
 

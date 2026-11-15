@@ -166,8 +166,10 @@ def test_dp_without_p3s_library_fails_with_a_clear_message():
 def _gpu_skip_reason():
     if not torch.cuda.is_available():
         return "needs a CUDA GPU; CI runners are CPU-only"
-    if not (CLUSTER_WEB / "adapter_config.json").exists():
-        return "registry-pulled cluster adapter not on disk (gitignored)"
+    # the config is tracked; the weights are gitignored, and without them PEFT
+    # takes the directory path for a Hub repo id
+    if not (CLUSTER_WEB / "adapter_model.safetensors").exists():
+        return "registry-pulled cluster adapter weights not on disk (gitignored)"
     return None
 
 
@@ -232,3 +234,80 @@ def test_saving_writes_the_client_adapter_only(stacked, tmp_path):
 
     keys = load_file(str(tmp_path / "adapter_model.safetensors")).keys()
     assert len(keys) == 192 and not any("cluster" in k for k in keys)
+
+
+# --------------------------------------------------------------------------- #
+# D7: one budget for the whole run of two rounds (U3, C9)
+# --------------------------------------------------------------------------- #
+def _tiny_dp_run(**kw):
+    torch.manual_seed(0)
+    gen = torch.Generator().manual_seed(0)
+    chunks = torch.randint(0, _TinyLM.VOCAB, (40, 6), generator=gen).tolist()
+    return train_client.train_dp(_TinyLM(), chunks, lr=1e-2, warmup_ratio=0.1, log_every=1,
+                                 epochs=2, batch_size=8, target_epsilon=8.0,
+                                 delta=1e-5, max_grad_norm=1.0, **kw)
+
+
+def test_train_dp_asks_for_the_two_round_sigma(monkeypatch):
+    pytest.importorskip("opacus")
+    from security.dp import ledger
+
+    calls = []
+    real = ledger.calibrate_run_sigma
+
+    def spy(**kw):
+        calls.append(kw)
+        return real(**kw)
+
+    monkeypatch.setattr(ledger, "calibrate_run_sigma", spy)
+    result = _tiny_dp_run()
+    # 40 blocks in logical batches of 8: 5 steps an epoch, 2 epochs
+    assert calls == [{"steps_per_round": 10, "sample_rate": pytest.approx(0.2),
+                      "rounds_total": 2, "budget": 8.0, "delta": 1e-5}]
+    privacy, dp = result["privacy"], result["dp"]
+    assert privacy["noise_multiplier"] == pytest.approx(real(**calls[0]), abs=1e-6)
+    assert privacy["rounds_total"] == 2 and dp["rounds_total"] == 2
+    # one round spends its share, and two such rounds stay within the run's 8
+    assert 0 < privacy["epsilon"] <= dp["round_epsilon_budget"] + 1e-3 < 8.0
+    assert dp["within_d7_budget"] is True
+    two = ledger._compose([(privacy["noise_multiplier"], privacy["sample_rate"],
+                            2 * privacy["steps"])], 1e-5, "prv")
+    assert two <= 8.0 + 1e-3
+
+
+def test_train_dp_for_a_one_round_run_uses_less_noise():
+    pytest.importorskip("opacus")
+    two = _tiny_dp_run()["privacy"]["noise_multiplier"]
+    one = _tiny_dp_run(rounds_total=1)["privacy"]["noise_multiplier"]
+    assert one < two
+
+
+def test_manifest_records_sample_rate_steps_and_run_id(tmp_path):
+    pytest.importorskip("opacus")
+    from edge import wire
+
+    result = _tiny_dp_run()
+    recorded = train_client.manifest_privacy(result["privacy"], run_id="check-1", delta=1e-5)
+    assert recorded["run_id"] == "check-1" and recorded["rounds_total"] == 2
+    assert recorded["sample_rate"] == pytest.approx(0.2)
+    assert recorded["steps"] == result["optimizer_steps"] > 0
+    # the manifest's block is still readable as the upload's privacy block
+    adapter = tmp_path / "client-x" / "adapter"
+    adapter.mkdir(parents=True)
+    (tmp_path / "client-x" / "manifest.json").write_text(
+        json.dumps({"privacy": recorded}), encoding="utf-8")
+    sent = wire.privacy_from_training_manifest(adapter)
+    assert sent["epsilon"] == recorded["epsilon"] and sent["steps"] == recorded["steps"]
+    assert "run_id" not in sent
+
+    off = train_client.manifest_privacy(None, run_id="check-1", delta=1e-5)
+    assert off == {"epsilon": None, "delta": 1e-5, "noise_multiplier": None,
+                   "max_grad_norm": None}
+
+
+def test_run_flags_default_to_run_1_of_two_rounds():
+    args = train_client.build_parser().parse_args(["--client", "web/client-flask"])
+    assert args.run_id == "run-1" and args.rounds_total == 2
+    args = train_client.build_parser().parse_args(
+        ["--client", "web/client-flask", "--run-id", "check-1", "--rounds-total", "1"])
+    assert args.run_id == "check-1" and args.rounds_total == 1

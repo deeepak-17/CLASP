@@ -43,6 +43,10 @@ h2 { margin: 0 0 4px; font-size: 23.4px; font-weight: 800; }
 .parcel .meta { font-size: 15px; color: var(--ink-2); }
 .parcel .seal { display: inline-block; margin-top: 6px; font-size: 14px; font-weight: 700; color: var(--lane); }
 .parcel .seal.off { color: var(--ink-2); font-weight: 400; }
+.parcel .seal.stop { color: var(--alert); }
+.budget { margin: 0 0 14px; font-size: 16px; color: var(--ink-2); }
+.budget b { color: var(--ink); }
+.budget.spent b { color: var(--alert); }
 .parcel:has(input:checked) { border: 1.5px solid var(--lane); background: color-mix(in srgb, var(--lane) 10%, var(--sheet)); }
 .empty { background: var(--sheet); border-radius: 10px; padding: 16px; color: var(--ink-2); }
 
@@ -102,6 +106,7 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
   <section>
     <h2>Send an adapter</h2>
     <p class="sub">Your source code never leaves this laptop. What travels is the adapter trained on it: a few million numbers that describe how to steer the shared model. <span id="dponly">Only adapters trained with differential privacy are listed.</span></p>
+    <p class="budget" id="budget" hidden></p>
     <div id="adapters" class="parcels"><div class="empty">Looking for trained adapters…</div></div>
     <div class="send">
       <button id="upload" disabled>Send adapter to cluster</button>
@@ -118,12 +123,12 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
 
   <details class="train">
     <summary>Train a new adapter here first</summary>
-    <p>Runs a short fine-tune on this laptop's own repository, with differential privacy (ε at most 8). It needs an NVIDIA GPU. Each run adds a new adapter above and selects it, ready to send.</p>
+    <p>Runs a short fine-tune on this laptop's own repository, with differential privacy (ε at most 8 over the run's two rounds together). It needs an NVIDIA GPU. Each run adds a new adapter above and selects it, ready to send. Training costs nothing from the budget; sending does.</p>
     <div class="fields">
       <label>Repository<input type="text" id="t-client" placeholder="web/client-flask" /></label>
       <label>Training steps<input type="number" id="t-steps" value="50" min="1" max="2000" /></label>
       <label class="check"><input type="checkbox" id="t-base" disabled /> <span id="t-base-text">Start from the merged cluster adapter (none on this laptop yet)</span></label>
-      <label class="check" id="t-dp-row" hidden><input type="checkbox" id="t-dp" checked /> Train with differential privacy (ε at most 8)</label>
+      <label class="check" id="t-dp-row" hidden><input type="checkbox" id="t-dp" checked /> Train with differential privacy (ε at most 8 over the run)</label>
     </div>
     <button class="quiet" id="train">Start training</button>
   </details>
@@ -176,9 +181,28 @@ async function refreshStatus() {
   const tc = document.getElementById("t-client");
   if (!tc.value && me && myCluster()) tc.value = `${myCluster()}/${me}`;
   paintIdentity();
+  paintBudget(s.privacy);
   renderTrack(s);
   paintBase(s);
   autoPull(s);
+}
+
+// D7: this laptop's spend in the run, from its own ledger. It is charged when
+// an adapter is sent and accepted, never by training.
+let lastBudget = "";
+function paintBudget(p) {
+  const el = document.getElementById("budget");
+  el.hidden = !p;
+  if (!p) return;
+  if (p.error) { el.className = "budget spent"; el.textContent = `Privacy budget: ${p.error}`; return; }
+  const full = p.rounds_used >= p.rounds_total;
+  el.className = "budget" + (full ? " spent" : "");
+  el.innerHTML = `Privacy budget: <b>ε ${Number(p.epsilon_spent).toFixed(1)} of ${p.budget}</b> · `
+    + (p.rounds_used ? `round ${p.rounds_used} of ${p.rounds_total} sent` : `no round of ${p.rounds_total} sent yet`)
+    + ` (run ${esc(p.run_id)})` + (full ? ". This run is complete: nothing more can be sent in it." : "");
+  const key = `${p.run_id}/${p.rounds_used}/${p.epsilon_spent}`;
+  if (lastBudget && key !== lastBudget) loadAdapters();   // what may be sent has changed
+  lastBudget = key;
 }
 
 // Laptop A serves a merged adapter this laptop does not have (compared by its
@@ -306,7 +330,9 @@ async function loadAdapters(select) {
       <div class="origin ${a.trained_here && i === 0 ? "new" : ""}">${a.trained_here ? (i === 0 ? "Latest, trained on this laptop" : "Trained on this laptop") : `From the setup bundle (${esc(a.set)})`}</div>
       <div class="meta">${esc(a.client_id)}, ${a.size_mb} MB${a.steps != null ? `, ${a.steps} training step${a.steps === 1 ? "" : "s"}` : ""}${a.base_round != null ? `, on top of round ${a.base_round}'s merged adapter (α ${a.d3_alpha})` : ", on the bare base"}${a.fedprox_mu ? `, FedProx μ ${a.fedprox_mu}` : ""}</div>
       ${a.base_sha256 && activeSha(lastStatus) && a.base_sha256 !== activeSha(lastStatus) ? `<div class="seal off">Trained on an older merged adapter: laptop A would refuse it. Train again on the current one.</div>` : ""}
-      <div class="seal ${a.epsilon == null ? "off" : ""}">${a.epsilon == null ? "Trained without differential privacy" : `Differentially private, ε ${a.epsilon.toFixed(2)}`}</div>
+      <div class="seal ${a.epsilon == null ? "off" : ""}">${a.epsilon == null ? "Trained without differential privacy" : `Differentially private, ε ${a.epsilon.toFixed(2)} for this round`}</div>
+      ${a.uploaded ? `<div class="seal off">Already sent in this run: sending it again costs nothing.</div>` : ""}
+      ${a.budget_ok === false ? `<div class="seal stop">Cannot be sent: ${esc(a.budget_reason.split("\n")[0])}</div>` : ""}
     </label>`).join("");
   box.querySelectorAll("input[name=adapter]").forEach(i => i.onchange = () => { picked = i.value; paintIdentity(); syncButtons(); if (lastStatus) renderTrack(lastStatus); });
   paintIdentity(); syncButtons();
@@ -314,7 +340,9 @@ async function loadAdapters(select) {
 }
 
 function syncButtons() {
-  document.getElementById("upload").disabled = jobRunning || !picked;
+  const chosen = adapterList.find(a => a.id === picked);
+  // the ledger would refuse it: do not offer to send
+  document.getElementById("upload").disabled = jobRunning || !picked || !!(chosen && chosen.budget_ok === false);
   document.getElementById("train").disabled = jobRunning;
 }
 

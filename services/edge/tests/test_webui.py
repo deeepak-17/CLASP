@@ -151,7 +151,11 @@ def _contract_adapter(root, client, *, seed, epsilon=8.0):
     wire.save_peft_dir(root / client / "adapter", sd,
                        {"r": 16, "lora_alpha": 16, "target_modules": list(wire.TARGET_MODULES)})
     (root / client / "manifest.json").write_text(json.dumps({
-        "client_id": f"web/{client}", "seed": 0, "privacy": {"epsilon": epsilon, "delta": 1e-5},
+        "client_id": f"web/{client}", "seed": 0,
+        # a DP round as edge.train_client records it (see tests.test_upload._adapter)
+        "privacy": {"epsilon": epsilon, "delta": 1e-5, "noise_multiplier": 0.6,
+                    "max_grad_norm": 1.0, "sample_rate": 1 / 160, "steps": 160,
+                    "run_id": "run-1", "rounds_total": 2},
         "data": {"train": {"n_chunks": 10}}}), encoding="utf-8")
     return root / client / "adapter"
 
@@ -408,3 +412,49 @@ def test_a_candidate_is_never_pulled_and_a_reject_keeps_the_pulled_adapter(
     assert status["merge"]["label"] == "Rejected, previous adapter kept"
     assert status["pulled"]["sha256"] == first["sha256"] and status["pulled"]["current"] is True
     assert page.latest_pulled("web", second["sha256"]) is None
+
+
+# --------------------------------------------------------------------------- #
+# D7: the page shows the run's privacy budget
+# --------------------------------------------------------------------------- #
+def test_page_status_reports_the_budget_and_disables_upload_when_exhausted(tmp_path):
+    from edge import upload
+    from tests.test_upload import ONE_ROUND, TWO_ROUNDS, FakeCluster
+
+    fake = FakeCluster()
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=fake)
+    adapters = [_adapter(tmp_path / f"live-{i}", "client-flask", seed=i, epsilon=ONE_ROUND)
+                for i in (1, 2, 3)]
+    assert page.status()["privacy"] == {"run_id": "run-1", "epsilon_spent": 0.0, "budget": 8.0,
+                                        "rounds_used": 0, "rounds_total": 2}
+    assert all(a["budget_ok"] and not a["uploaded"] for a in page.adapters())
+
+    for adapter in adapters[:2]:
+        upload.upload_adapter(adapter, cluster_url="http://cluster", http=fake,
+                              ledger_root=page.ledger_root, log=lambda _m: None)
+    spent = page.status()["privacy"]
+    assert spent["rounds_used"] == 2 and spent["rounds_total"] == 2
+    assert spent["epsilon_spent"] == pytest.approx(TWO_ROUNDS, abs=1e-3)
+    by_id = {a["id"]: a for a in page.adapters()}
+    # the two that were sent may be re-sent (a retry charges nothing); the third may not
+    assert by_id["live-1/client-flask"]["uploaded"] and by_id["live-1/client-flask"]["budget_ok"]
+    assert by_id["live-2/client-flask"]["uploaded"] and by_id["live-2/client-flask"]["budget_ok"]
+    third = by_id["live-3/client-flask"]
+    assert third["budget_ok"] is False and "run-1" in third["budget_reason"]
+    with pytest.raises(ValueError, match="run-1"):
+        page.start_upload("live-3/client-flask")
+    assert page.job.snapshot()["running"] is False
+
+
+def test_the_page_trains_for_its_run(tmp_path):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path,
+                          python="py", run_id="check-1")
+    cmd = page.train_command(client="web/client-flask", max_steps=40, dp=True, cluster_adapter=None)
+    assert cmd[cmd.index("--run-id") + 1] == "check-1"
+    assert page.ledger_root == tmp_path / "privacy_ledger"
+
+
+def test_the_page_shows_the_budget_line():
+    html = webui.PAGE.read_text(encoding="utf-8")
+    assert 'id="budget"' in html and "Privacy budget" in html

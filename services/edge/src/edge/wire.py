@@ -319,6 +319,12 @@ def decode_tensor(payload: Dict) -> np.ndarray:
     return np.frombuffer(raw, dtype=dtype).reshape(tuple(payload["shape"])).copy()
 
 
+#: One round of the accountant's history, sent beside the contract's fields.
+RUN_ACCOUNTING_FIELDS = ("sample_rate", "steps")
+#: Recorded in the training manifest for this laptop's ledger; never sent.
+RUN_LOCAL_FIELDS = ("run_id", "rounds_total")
+
+
 def privacy_block(privacy: Optional[Dict]) -> Dict:
     """A ``contracts.PrivacySpec`` as a JSON dict — the D7 field of the envelope.
 
@@ -328,12 +334,24 @@ def privacy_block(privacy: Optional[Dict]) -> Dict:
     or extra field fails here rather than vanishing on the far side.
     ``None`` -> DP was off: ``epsilon`` is None, which is the contract's own
     encoding of the no-DP ablation.
+
+    Beside the contract's fields the block carries what the run's accounting is
+    composed from, when the training manifest recorded it: ``sample_rate`` and
+    ``steps`` (with ``noise_multiplier``, one round of the accountant's
+    history). ``run_id`` and ``rounds_total`` name the run on this laptop's
+    ledger and are not sent.
     """
     from dataclasses import asdict
 
     from contracts import PrivacySpec
 
-    return asdict(PrivacySpec(**(privacy or {})))
+    given = dict(privacy or {})
+    accounting = {k: given.pop(k) for k in RUN_ACCOUNTING_FIELDS if k in given}
+    for local in RUN_LOCAL_FIELDS:
+        given.pop(local, None)
+    block = asdict(PrivacySpec(**given))
+    block.update({k: v for k, v in accounting.items() if v is not None})
+    return block
 
 
 def privacy_from_training_manifest(adapter_dir: Path | str) -> Dict:
