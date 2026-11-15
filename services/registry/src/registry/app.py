@@ -21,11 +21,18 @@ Endpoints:
     POST /sync/{id}/done                           report one: {"ok": bool, "error"?: str}
 
 ``POST /adapters/{name}/promote`` answers with the decision plus ``cluster_sync_id``,
-the id of the ``cluster_sync`` row written in its transaction (null when the
-version has no ``cluster_id``). Each ``/sync/pending`` row carries ``id``,
+the id of the ``cluster_sync`` row written in its transaction (null unless the
+version is a ``cluster`` adapter: client adapters carry their cluster's
+``cluster_id`` too, but their decisions are not cluster steps). Each ``/sync/pending`` row carries ``id``,
 ``adapter``, ``version``, ``cluster_id``, ``sha256``, ``action``, ``attempts``,
 ``last_error`` (why the last attempt failed) and ``superseded_by`` (the id of a
 later row of the same cluster that is already done, else null).
+
+``GET /adapters/{name}/versions`` answers ``name``, ``active``, ``versions``
+and two derived fields: ``candidate`` (the newest version above ``active``
+with no decision yet, else null) and ``rejected`` (the sorted versions that
+were refused: a REJECT, or a D5 ROLLBACK recorded before the candidate flow).
+A refused version is never a candidate and never a restore target.
 
 A decision on a cluster adapter also has to reach the cluster service (switch
 to the candidate, or drop it), which cannot share the registry's database
@@ -81,7 +88,7 @@ from .composition import (
 from .lineage import build_lineage
 from .promotion import (
     GUARD_MISSING_REASON,
-    RESTORE_REASON_PREFIX,
+    candidate_version,
     decide,
     guard_present,
     live_versions,
@@ -126,7 +133,10 @@ def get_store() -> RegistryStore:
     """Lazily construct the store so CLASP_REGISTRY_DATA (and CLASP_REGISTRY_DB)
     are read at request time. The first construction against an empty database
     imports a file-based volume (``registry.migrate``); every construction then
-    sweeps files no row accounts for (``retention.sweep_orphans``)."""
+    sweeps files no row accounts for (``retention.sweep_orphans``).
+
+    A failing sweep is logged and the store is served anyway: orphans are
+    never served, and the next non-dry-run GC sweeps again."""
     global _store
     if _store is None:
         with _WRITE_LOCK:
@@ -134,9 +144,8 @@ def get_store() -> RegistryStore:
                 store = RegistryStore()
                 try:
                     sweep_orphans(store)
-                except BaseException:
-                    store.close()
-                    raise
+                except Exception:
+                    _log.exception("orphan sweep failed at startup; the next GC retries it")
                 _store = store
     return _store
 
@@ -246,9 +255,12 @@ def save_version(
 def list_versions(name: str) -> dict:
     store = get_store()
     versions = store.list_versions(name)
+    active = store.get_active(name)
     return {
         "name": name,
-        "active": store.get_active(name),
+        "active": active,
+        "candidate": candidate_version(versions, active, store.repo.decided_versions(name)),
+        "rejected": sorted(rejected_versions(store.list_promotions(name))),
         "versions": [_metadata_to_dict(store.get_metadata(name, v)) for v in versions],
     }
 
@@ -422,8 +434,7 @@ def _promote(name: str, body: dict) -> dict:
     active_before = store.get_active(name)
     if active_before is not None and version <= active_before:
         raise HTTPException(409, f"v{version} is not a candidate: active is v{active_before}")
-    if any(d.adapter.version == version and not d.reason.startswith(RESTORE_REASON_PREFIX)
-           for d in store.list_promotions(name)):
+    if version in store.repo.decided_versions(name):
         raise HTTPException(409, f"v{version} was already decided")
 
     decision = decide(eval_result, baseline_guard=baseline_guard,
@@ -446,8 +457,9 @@ def _promote(name: str, body: dict) -> dict:
         if promoted:
             store.set_active(name, decision.active_version_after)
         decision_id = store.record_promotion(name, decision)
-        if candidate.ref.cluster_id:
-            # the cluster must switch to this candidate (promote) or drop it (reject)
+        if candidate.ref.kind is AdapterKind.CLUSTER:
+            # the cluster must switch to this candidate (promote) or drop it (reject);
+            # client adapters carry their cluster's id too, but are not cluster steps
             sync_id = store.repo.add_cluster_sync(decision_id, candidate.ref.cluster_id, candidate.sha256,
                                         "promote" if promoted else "reject")
 

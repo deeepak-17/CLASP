@@ -176,3 +176,47 @@ def test_db_url_comes_from_the_environment_when_set(tmp_path, monkeypatch, safet
         store.close()
     assert (tmp_path / "elsewhere.db").exists()
     assert not (tmp_path / "root" / "registry.db").exists()
+
+
+@pytest.fixture
+def legacy_rollback_client(volume, monkeypatch):
+    """The legacy volume plus flask v3, refused by a pre-candidate-flow D5 ROLLBACK.
+
+    Before the candidate flow an upload went live and a failing D5 recorded
+    ``rollback`` naming the refused candidate, with the pointer back on v2.
+    """
+    from fastapi.testclient import TestClient
+
+    import registry.app as appmod
+
+    flask = volume / "adapters" / "flask"
+    shutil.copytree(flask / "v2", flask / "v3")
+    meta = json.loads((flask / "v3" / "metadata.json").read_text())
+    meta["ref"]["version"] = 3
+    (flask / "v3" / "metadata.json").write_text(json.dumps(meta))
+    with (flask / "promotions.jsonl").open("a") as f:
+        f.write(json.dumps({
+            "adapter": {"name": "flask", "version": 3, "kind": "client", "cluster_id": "web"},
+            "action": "rollback", "active_version_after": 2,
+            "reason": "rolled back: edit_similarity delta 0.0010 does not clear noise band 0.0200; "
+                      "LineCompletion edit similarity drop 0.0000 within 0.02 tolerance",
+            "timestamp": "2026-11-01T00:00:00+00:00",
+        }) + "\n")
+    monkeypatch.setenv("CLASP_REGISTRY_DATA", str(volume))
+    if appmod._store is not None:
+        appmod._store.close()
+    appmod._store = None
+    yield TestClient(appmod.app)
+    if appmod._store is not None:
+        appmod._store.close()
+    appmod._store = None
+
+
+def test_a_legacy_d5_rollback_is_a_refusal_after_import(legacy_rollback_client):
+    client = legacy_rollback_client
+    listing = client.get("/adapters/flask/versions").json()
+    assert listing["active"] == 2
+    assert listing["rejected"] == [3]
+    assert listing["candidate"] is None  # v3 is above active but was refused
+    r = client.post("/adapters/flask/restore", json={"reason": "try it", "to_version": 3})
+    assert r.status_code == 409 and "rejected" in r.json()["detail"]

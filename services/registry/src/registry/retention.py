@@ -17,8 +17,9 @@ monotonic: a deleted number is never handed out again.
 ``sweep_orphans`` removes files no database row accounts for: a ``vN``
 directory without its ``versions`` row (a write whose transaction never
 committed, or a delete that dropped the row and then crashed) and staging or
-trash directories left by an interrupted save or delete. It runs when the
-app creates its store and at the start of every GC call, dry runs included.
+trash directories left by an interrupted save or delete. It runs once when
+the app creates its store and at the start of every non-dry-run GC call; a
+dry run changes nothing, orphans included.
 """
 from __future__ import annotations
 

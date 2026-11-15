@@ -181,3 +181,19 @@ def test_restore_nfr_under_10_seconds_on_a_real_sized_adapter(client):
 
     assert payload == good
     assert elapsed < RESTORE_NFR_SECONDS, f"restore took {elapsed:.2f}s"
+
+
+def test_versions_listing_names_the_candidate_and_the_refused(client):
+    listing = lambda: client.get("/adapters/flask/versions").json()  # noqa: E731
+    _upload(client, "flask", active=False)
+    assert listing()["candidate"] == 1 and listing()["rejected"] == []
+    _promote(client, "flask", 1)
+    assert listing()["candidate"] is None
+    _upload(client, "flask", active=False)
+    _upload(client, "flask", active=False)
+    assert listing()["candidate"] == 3  # the newest undecided above active
+    _promote(client, "flask", 3, good=False)
+    body = listing()
+    assert body["candidate"] == 2 and body["rejected"] == [3]
+    _promote(client, "flask", 2, good=False)
+    assert listing()["candidate"] is None and listing()["rejected"] == [2, 3]

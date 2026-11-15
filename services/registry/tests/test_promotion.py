@@ -8,9 +8,33 @@ from contracts import (
     GuardMetrics,
     InProjectMetrics,
     PromotionAction,
+    PromotionDecision,
 )
 
-from registry.promotion import GUARD_BENCHMARK, GUARD_EDIT_SIMILARITY_TOLERANCE, decide
+from registry.promotion import (
+    GUARD_BENCHMARK,
+    GUARD_EDIT_SIMILARITY_TOLERANCE,
+    decide,
+    rejected_versions,
+)
+
+
+def _decision(version, action, reason, after=1):
+    return PromotionDecision(adapter=_ref(version), action=action,
+                             active_version_after=after, reason=reason)
+
+
+def test_refused_versions_are_rejects_and_old_d5_rollbacks():
+    decisions = [
+        _decision(2, PromotionAction.REJECT, "rejected: ..."),
+        # a D5 rollback from before the candidate flow refused the candidate it names
+        _decision(3, PromotionAction.ROLLBACK, "rolled back: ...; ..."),
+        # an operator restore away from v4 and its composite cascade refuse nothing
+        _decision(4, PromotionAction.ROLLBACK, "operator restore v4 -> v1: drill"),
+        _decision(5, PromotionAction.ROLLBACK, "cascade v5 -> v1: flask operator restore ..."),
+        _decision(6, PromotionAction.PROMOTE, "promoted: ...", after=6),
+    ]
+    assert rejected_versions(decisions) == {2, 3}
 
 
 def _ref(version=2):

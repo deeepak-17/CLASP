@@ -37,6 +37,7 @@ from .composition import (
     register_composite,
     write_composite_files,
 )
+from .promotion import CASCADE_REASON_PREFIX
 from .storage import RegistryStore
 
 
@@ -127,7 +128,7 @@ def apply_cascade(store: RegistryStore, steps: list[CascadeStep], *,
         candidate = store.get_metadata(step.composite, step.from_version).ref
         store.record_promotion(step.composite, PromotionDecision(
             adapter=candidate, action=action, active_version_after=version,
-            reason=f"cascade v{step.from_version} -> v{version}: {reason}",
+            reason=f"{CASCADE_REASON_PREFIX}v{step.from_version} -> v{version}: {reason}",
         ))
         moved.append({"name": step.composite, "from_version": step.from_version,
                       "to_version": version, "rebuilt": rebuilt,

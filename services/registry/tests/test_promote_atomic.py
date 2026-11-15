@@ -53,18 +53,31 @@ def _fail_for(name, real):
     return wrapped
 
 
+def _cluster_candidate(client):
+    """cluster-web v2, an inactive cluster candidate (its decision is a cluster step)."""
+    _save(client, "cluster-web", make_adapter(3), kind="cluster", aggregation="svd_exact",
+          cluster_id="web", round=2, source_clients=["flask", "requests"], set_active=False)
+
+
+def _cluster_body(*, good=True):
+    body = _promote_body("cluster-web", 2, good=good)
+    body["eval"]["adapter"].update(kind="cluster", cluster_id="web")
+    return body
+
+
 def _composite_body():
-    body = _promote_body("flask", 2, good=True)
+    body = _cluster_body()
     body["composite"] = {"name": COMPOSITE, "cluster": "cluster-web", "client": "flask",
                          "alpha": 0.5, "beta": 1.0}
     return body
 
 
-def _state(store):
+def _state(store, name="cluster-web"):
+    """What a failed call must leave untouched; ``name`` is the adapter it decides."""
     return {
-        "flask_active": store.get_active("flask"),
+        "subject_active": store.get_active(name),
         "composite_active": store.get_active(COMPOSITE),
-        "flask_decisions": len(store.list_promotions("flask")),
+        "subject_decisions": len(store.list_promotions(name)),
         "composite_decisions": len(store.list_promotions(COMPOSITE)),
         "composite_versions": store.list_versions(COMPOSITE),
         "sync": store.repo.pending_cluster_sync(),
@@ -80,11 +93,11 @@ def test_failure_inside_the_transaction_leaves_no_trace(client, store, monkeypat
 
     _seed(client)
     assert _compose(client).status_code == 201  # composite-flask v1 serves flask v1
-    _save(client, "flask", make_adapter(3), kind="client", cluster_id="web", set_active=False)
+    _cluster_candidate(client)
     before = _state(store)
 
     monkeypatch.setattr(store.repo, fail_at, _boom)
-    r = client.post("/adapters/flask/promote", json=_composite_body())
+    r = client.post("/adapters/cluster-web/promote", json=_composite_body())
     assert r.status_code == 500
     monkeypatch.undo()
 
@@ -95,7 +108,7 @@ def test_failure_inside_the_transaction_leaves_no_trace(client, store, monkeypat
     assert sweep_orphans(store) == []
 
     # and the same promotion now goes through, under the same version number
-    r = client.post("/adapters/flask/promote", json=_composite_body())
+    r = client.post("/adapters/cluster-web/promote", json=_composite_body())
     assert r.status_code == 200, r.text
     assert r.json()["composite"]["ref"]["version"] == 2
 
@@ -105,13 +118,13 @@ def test_a_failed_promote_with_a_composite_can_be_retried_at_once(client, store,
     removed the composite directory, so the retry is not a 409."""
     _seed(client)
     assert _compose(client).status_code == 201
-    _save(client, "flask", make_adapter(3), kind="client", cluster_id="web", set_active=False)
+    _cluster_candidate(client)
 
     monkeypatch.setattr(store.repo, "add_cluster_sync", _boom)
-    assert client.post("/adapters/flask/promote", json=_composite_body()).status_code == 500
+    assert client.post("/adapters/cluster-web/promote", json=_composite_body()).status_code == 500
     monkeypatch.undo()
 
-    r = client.post("/adapters/flask/promote", json=_composite_body())
+    r = client.post("/adapters/cluster-web/promote", json=_composite_body())
     assert r.status_code == 200, r.text
     assert store.list_versions(COMPOSITE) == [1, 2]  # the composite exists exactly once
     assert sorted(p.name for p in (store.adapters_dir / COMPOSITE).iterdir()) == ["v1", "v2"]
@@ -129,12 +142,13 @@ def test_the_failure_path_never_removes_a_registered_version(store, safetensors_
 @pytest.mark.parametrize("good,action", [(True, "promote"), (False, "reject")])
 def test_a_decision_queues_a_cluster_sync_row_with_it(client, store, good, action):
     _seed(client)
-    _save(client, "flask", make_adapter(3), kind="client", cluster_id="web", set_active=False)
-    r = client.post("/adapters/flask/promote", json=_promote_body("flask", 2, good=good))
+    _cluster_candidate(client)
+    r = client.post("/adapters/cluster-web/promote", json=_cluster_body(good=good))
     assert r.status_code == 200 and r.json()["action"] == action
     [row] = store.repo.pending_cluster_sync()
     assert (row["cluster_id"], row["sha256"], row["action"]) == (
-        "web", store.get_metadata("flask", 2).sha256, action)
+        "web", store.get_metadata("cluster-web", 2).sha256, action)
+    assert r.json()["cluster_sync_id"] == row["id"]
 
 
 def test_an_adapter_without_a_cluster_queues_no_sync(client, store):
@@ -258,6 +272,29 @@ def test_the_sweep_runs_when_the_store_is_created_and_at_every_gc(client, safete
         assert not (root / "v5").exists(), route
 
 
+def test_a_failing_startup_sweep_is_logged_and_the_registry_keeps_serving(
+        client, safetensors_blob, monkeypatch, caplog):
+    import registry.app as appmod
+
+    from .conftest import _drop_app_store
+
+    _save(client, "flask", safetensors_blob, kind="client")
+    root = Path(os.environ["CLASP_REGISTRY_DATA"]) / "adapters" / "flask"
+    (root / "v5").mkdir()
+    _drop_app_store(appmod)
+    real_sweep = appmod.sweep_orphans
+    monkeypatch.setattr(appmod, "sweep_orphans", _boom)
+    with caplog.at_level("ERROR", logger="registry.app"):
+        assert client.get("/adapters/flask/versions").status_code == 200  # store created here
+        assert client.get("/adapters/flask/versions/1/file").content == safetensors_blob
+    assert "orphan sweep failed" in caplog.text
+    assert (root / "v5").is_dir()  # nothing swept yet
+
+    monkeypatch.setattr(appmod, "sweep_orphans", real_sweep)
+    assert client.post("/gc", json={"dry_run": False}).status_code == 200  # the next GC retries
+    assert not (root / "v5").exists()
+
+
 @pytest.mark.parametrize("route", ["/adapters/flask/gc", "/gc"])
 def test_a_dry_run_gc_leaves_orphans_and_a_real_gc_removes_them(client, safetensors_blob, route):
     _save(client, "flask", safetensors_blob, kind="client")
@@ -293,7 +330,7 @@ def test_restore_moves_pointer_decision_and_cascade_together(client, store, monk
         assert _compose(client).json()["composed_from"]["client_version"] == 2
     else:  # composite v1 (flask v1) exists and is reused
         _promote_v2_with_composite(client)
-    before = _state(store)
+    before = _state(store, "flask")
 
     real = store.repo.record_decision
     monkeypatch.setattr(store.repo, "record_decision", _fail_for(COMPOSITE, real))
@@ -301,7 +338,7 @@ def test_restore_moves_pointer_decision_and_cascade_together(client, store, monk
     assert r.status_code == 500
     monkeypatch.undo()
 
-    assert _state(store) == before  # flask pointer + decision rolled back with the cascade
+    assert _state(store, "flask") == before  # flask pointer + decision rolled back with the cascade
     # a rebuild wrote composite v2's files; the failure path removed them
     if rebuild:
         assert not (store.adapters_dir / COMPOSITE / "v2").exists()
@@ -312,7 +349,7 @@ def test_restore_moves_pointer_decision_and_cascade_together(client, store, monk
     assert store.get_active("flask") == 1
     served = client.get(f"/adapters/{COMPOSITE}/active").json()
     assert served["composed_from"]["client_version"] == 1
-    assert len(store.list_promotions("flask")) == before["flask_decisions"] + 1
+    assert len(store.list_promotions("flask")) == before["subject_decisions"] + 1
     assert len(store.list_promotions(COMPOSITE)) == before["composite_decisions"] + 1
 
 
@@ -341,6 +378,7 @@ def test_legacy_volume_reads_back_identically_over_the_api(tmp_path, monkeypatch
             active = expected["active"][name]
             assert api.get(f"/adapters/{name}/versions").json() == {
                 "name": name, "active": active,
+                "candidate": None, "rejected": [],  # every legacy version was live
                 "versions": [metas[str(v)] for v in expected["versions"][name]],
             }
             for v in expected["versions"][name]:

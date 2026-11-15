@@ -51,6 +51,17 @@ def test_an_adapter_without_a_cluster_id_creates_no_row(client):
     assert _pending(client) == []
 
 
+def test_a_client_adapter_with_a_cluster_id_creates_no_row(client):
+    # client adapters routinely carry their cluster's id (demo seed: flask -> web);
+    # only a cluster adapter's decision is a cluster step
+    _save(client, "flask", make_adapter(1), kind="client", cluster_id="web", set_active=False)
+    decided = _decide(client, "flask", kind="client")
+    assert decided["action"] == "promote" and decided["cluster_sync_id"] is None
+    _save(client, "flask", make_adapter(2), kind="client", cluster_id="web", set_active=False)
+    assert _decide(client, "flask", kind="client", version=2, good=False)["cluster_sync_id"] is None
+    assert _pending(client) == []
+
+
 def test_done_ok_empties_the_list(client):
     _candidate(client)
     _decide(client)

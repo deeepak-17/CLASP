@@ -137,6 +137,33 @@ def live_versions(decisions: list[PromotionDecision]) -> set[int]:
     return live
 
 
+#: A restore's composite moves are recorded with this prefix (``cascade.apply_cascade``).
+CASCADE_REASON_PREFIX = "cascade "
+
+
+def is_refusal(decision: PromotionDecision) -> bool:
+    """Whether ``decision`` refused the version it names — the one refusal rule.
+
+    A REJECT refuses its candidate. So did a D5 ROLLBACK from before the
+    candidate flow (uploads went live, a failing rule rolled the pointer back
+    and recorded ``rollback`` naming the refused candidate). A ROLLBACK that is
+    an operator restore, or a composite following one (cascade), refuses nothing.
+    """
+    if decision.action == PromotionAction.REJECT:
+        return True
+    return decision.action == PromotionAction.ROLLBACK and not decision.reason.startswith(
+        (RESTORE_REASON_PREFIX, CASCADE_REASON_PREFIX))
+
+
 def rejected_versions(decisions: list[PromotionDecision]) -> set[int]:
-    """Versions that failed D5 and were recorded as REJECT."""
-    return {d.adapter.version for d in decisions if d.action == PromotionAction.REJECT}
+    """Versions refused by the rule above: never a candidate, never a restore target."""
+    return {d.adapter.version for d in decisions if is_refusal(d)}
+
+
+def candidate_version(
+    versions: list[int], active: int | None, decided: set[int]
+) -> int | None:
+    """The newest version above ``active`` that has no decision yet, else None."""
+    floor = active if active is not None else 0
+    pending = [v for v in versions if v > floor and v not in decided]
+    return max(pending) if pending else None
