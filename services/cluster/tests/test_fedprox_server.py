@@ -29,6 +29,7 @@ from cluster.aggregation import accumulate_svd_lowrank, aggregate_svd_lowrank
 from tests.conftest import trained_adapter
 from tests.http_helpers import (
     create_cluster,
+    dp,
     promote,
     reset_server_state,
     restore_server_state,
@@ -204,27 +205,29 @@ def test_residual_rounds_only_take_the_cumulative_path(override):
 
 
 def test_epsilon_composes_across_the_rounds_it_builds_on():
-    """The new adapter is a function of the one under it: by basic sequential
-    composition its epsilon is that adapter's plus this round's (D7)."""
+    """The new adapter is a function of the one under it. Each client's own
+    accountant composes its rounds and reports the run's cumulative epsilon;
+    the cluster takes the largest and adds nothing (D7)."""
     create_cluster(client, "web", members={"web": ["a", "b"]})
     for c, eps, seed in (("a", 2.0, 10), ("b", 3.0, 11)):
-        body = upload_body(c, trained_adapter(seed), privacy={"epsilon": eps})
+        body = upload_body(c, trained_adapter(seed), privacy=dp(eps))
         assert client.post("/clusters/web/uploads", json=body).status_code == 201
     active = client.post("/clusters/web/aggregate", json={}).json()
     promote(client, "web", active)
     assert active["epsilon"] == 3.0
-    for c, eps, seed in (("a", 4.0, 20), ("b", 1.0, 21)):
-        body = _based(c, trained_adapter(seed), active, privacy={"epsilon": eps})
+    for c, eps, cumulative, seed in (("a", 4.0, 5.5, 20), ("b", 1.0, 3.6, 21)):
+        body = _based(c, trained_adapter(seed), active,
+                      privacy=dp(eps, cumulative=cumulative, rounds=2))
         assert client.post("/clusters/web/uploads", json=body).status_code == 201
     merged = client.post("/clusters/web/aggregate", json={}).json()
-    assert merged["epsilon"] == pytest.approx(7.0)
+    assert merged["epsilon"] == pytest.approx(5.5)  # not 3.0 + 4.0
     manifest = client.get("/clusters/web/aggregate/manifest").json()
     assert manifest["epsilon_this_round"] == 4.0
 
 
 def test_epsilon_is_unknown_when_the_base_had_none():
     active = _round0()  # no epsilon reported in round 0
-    body = _based("a", trained_adapter(20), active, privacy={"epsilon": 1.0})
+    body = _based("a", trained_adapter(20), active, privacy=dp(1.0))
     assert client.post("/clusters/web/uploads", json=body).status_code == 201
     assert client.post("/clusters/web/aggregate", json={}).json()["epsilon"] is None
 

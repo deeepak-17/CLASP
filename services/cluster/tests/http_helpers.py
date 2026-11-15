@@ -64,3 +64,12 @@ def promote(client, cluster_id: str, broadcast: dict | None = None) -> dict:
     r = client.post(f"/clusters/{cluster_id}/adapters/candidate/promote", json={"sha256": sha})
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def dp(epsilon: float, cumulative: float | None = None, rounds: int = 1) -> dict:
+    """The ``privacy`` block of a differentially private upload, as the edge sends
+    it: this round's epsilon and the run's cumulative epsilon from the client's
+    ledger (D7). A first round's cumulative is the round's own epsilon."""
+    return {"epsilon": epsilon, "delta": 1e-05, "noise_multiplier": None, "max_grad_norm": None,
+            "epsilon_cumulative": epsilon if cumulative is None else cumulative,
+            "rounds_accounted": rounds}
