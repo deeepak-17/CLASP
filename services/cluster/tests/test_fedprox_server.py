@@ -233,13 +233,14 @@ def test_epsilon_is_unknown_when_the_base_had_none():
 # a D5 rollback reaches the cluster, and so the edges
 # --------------------------------------------------------------------------- #
 class _MemoryRegistry:
-    """The registry's save / metadata / file routes, in memory, behind httpx."""
+    """The registry's save / listing / metadata / file routes, in memory, behind httpx."""
 
     def __init__(self, monkeypatch):
         import httpx
 
         self.versions: dict[tuple[str, int], dict] = {}
         self.blobs: dict[tuple[str, int], bytes] = {}
+        self.rejected: dict[str, set[int]] = {}  # what the listing reports as refused
         outer = self
 
         class _Resp:
@@ -276,6 +277,14 @@ class _MemoryRegistry:
 
             def get(self, url, **kw):
                 parts = url.rstrip("/").split("/")
+                if parts[-1] == "versions":  # GET /adapters/{name}/versions
+                    name = parts[-2]
+                    mine = sorted(v for (n, v) in outer.versions if n == name)
+                    if not mine:
+                        return _Resp(404, {"detail": "not found"})
+                    return _Resp(200, {"name": name, "active": None, "candidate": None,
+                                       "rejected": sorted(outer.rejected.get(name, ())),
+                                       "versions": [outer.versions[(name, v)] for v in mine]})
                 is_file = parts[-1] == "file"
                 name, v = (parts[-4], int(parts[-2])) if is_file else (parts[-3], int(parts[-1]))
                 if (name, v) not in outer.versions:
@@ -357,6 +366,30 @@ def test_restore_refuses_another_clusters_version(monkeypatch):
     missing = client.post("/clusters/web/adapters/active/restore",
                           json={"adapter_name": "cluster-web", "version": 9})
     assert missing.status_code == 502 and "404" in missing.text
+
+
+def test_restore_refuses_a_version_the_registry_refused(monkeypatch):
+    """A restore never serves a refused version: 409 before any version is fetched."""
+    import httpx
+
+    registry, _, active1 = _two_rounds(monkeypatch)
+    registry.rejected["cluster-web"] = {1}
+    fetched = []
+    real_get = httpx.Client.get
+    monkeypatch.setattr(httpx.Client, "get", lambda self, url, **kw: (
+        fetched.append(url), real_get(self, url, **kw))[1])
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1})
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["error"] == "rejected_version"
+    assert r.json()["detail"]["version"] == 1
+    assert [u.rsplit("/", 1)[-1] for u in fetched] == ["versions"]  # listing only
+    assert server._clusters["web"].active.sha256 == active1["sha256"]
+    # a version that was not refused is still restored
+    registry.rejected["cluster-web"] = set()
+    ok = client.post("/clusters/web/adapters/active/restore",
+                     json={"adapter_name": "cluster-web", "version": 1})
+    assert ok.status_code == 200, ok.text
 
 
 def test_restore_only_talks_to_the_configured_registry(monkeypatch):

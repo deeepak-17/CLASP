@@ -175,7 +175,11 @@ def test_a_retained_aggregate_is_an_ablation_not_a_completed_round():
     assert st.round_id == 0 and st.uploads.keys() == {"a1", "a2"}  # buffer + round kept
     assert st.last_round == {} and sink.n == 0  # not evidence, not published
     assert client.get("/adapters/cluster-web/manifest").json()["retained_uploads"] is True
-    promote(client, "cluster-web")  # the retained run's candidate is pending
+    # the retained run's candidate is pending; set it aside (a reject keeps the
+    # buffer: promoting it would drop these bare-base uploads, as none builds on it)
+    sha = client.get("/clusters/cluster-web/adapters/candidate").json()["sha256"]
+    assert client.post("/clusters/cluster-web/adapters/candidate/reject",
+                       json={"sha256": sha}).status_code == 200
     assert client.post("/aggregate", json={"cluster_id": "cluster-web"}).status_code == 200
     assert st.round_id == 1 and sink.n == 1 and set(st.last_round) == {"a1", "a2"}
 

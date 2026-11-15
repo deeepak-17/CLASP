@@ -226,6 +226,26 @@ def test_promote_drops_uploads_trained_on_the_replaced_adapter_and_the_next_aggr
     assert client.post("/clusters/web/aggregate", json={}).status_code == 200
 
 
+def test_promoting_the_first_candidate_drops_full_uploads_buffered_while_it_waited():
+    cand = _round0(promoted=False)
+    rnd = server._clusters["web"].round_id
+    # nothing is served yet, so a bare-base (full) adapter is accepted and buffered
+    assert client.post("/clusters/web/uploads",
+                       json=upload_body("a", trained_adapter(80), round_id=rnd)).status_code == 201
+    r = _decide("promote", cand["sha256"])
+    assert r.status_code == 200, r.text
+    assert r.json()["dropped_uploads"] == ["a"]
+    assert server._clusters["web"].uploads == {}
+    # round 2 builds on the promoted adapter, as a cumulative round
+    for c, seed in (("a", 81), ("b", 82)):
+        assert client.post("/clusters/web/uploads", json=_based(
+            c, trained_adapter(seed), cand, round_id=rnd)).status_code == 201
+    agg = client.post("/clusters/web/aggregate", json={})
+    assert agg.status_code == 200, agg.text
+    assert agg.json()["update_rule"] == "fedprox_cumulative"
+    assert agg.json()["base_sha256"] == cand["sha256"]
+
+
 def test_reject_keeps_uploads_buffered_during_the_candidate_and_the_next_aggregate_uses_them():
     promoted = _round0()
     for c in ("a", "b"):

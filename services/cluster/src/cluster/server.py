@@ -1449,11 +1449,13 @@ def get_cluster_candidate_adapter(cluster_id: str, request: Request) -> ClusterA
 
 
 def _drop_uploads_not_based_on(state: _ClusterState, digest: str) -> list[str]:
-    """Drop buffered residuals whose declared base is not ``digest`` (the adapter
-    about to become active); uploads declaring no base are kept. Returns the
-    dropped client ids. The caller holds ``state.lock``."""
-    dropped = sorted(c for c, u in state.uploads.items()
-                     if u.base_sha256 is not None and u.base_sha256 != digest)
+    """Drop every buffered upload not built on ``digest`` (the adapter about to
+    become active): residuals on another adapter, and full adapters (no base),
+    which were trained on the bare base while nothing was served and would
+    otherwise turn the next round into a plain average that discards
+    ``digest``, or 422 every residual built on it. Returns the dropped client
+    ids. The caller holds ``state.lock``."""
+    dropped = sorted(c for c, u in state.uploads.items() if u.base_sha256 != digest)
     for c in dropped:
         del state.uploads[c]
     return dropped
@@ -1463,9 +1465,9 @@ def _drop_uploads_not_based_on(state: _ClusterState, digest: str) -> list[str]:
 def promote_candidate(cluster_id: str, body: CandidateDecision) -> dict[str, object]:
     """Make the pending candidate the served (active) adapter. ``sha256`` must
     name it, else 409. Uploads buffered while the candidate was pending were
-    trained on the previous active adapter; residuals among them would make the
-    next aggregate fail as stale, so they are dropped (as ``restore`` does) and
-    named in ``dropped_uploads``. Uploads declaring no base are kept."""
+    trained on the previous active adapter (or, before the first promote, on the
+    bare base); none of them builds on the candidate, so they are dropped (as
+    ``restore`` does) and named in ``dropped_uploads``."""
     state = _cluster(cluster_id)
     with state.lock:
         candidate = _pending_candidate(state, body.sha256)
@@ -1563,9 +1565,14 @@ def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, o
     registry restored, checks its bytes against the registry's sha256,
     rebuilds the adapter from them and checks that serving it reproduces those
     exact bytes (so ``active_sha256`` is the registry's digest), then makes it
-    the cluster's active adapter (a pending candidate is left untouched). Residuals buffered on top of the rejected
-    merge are dropped (they would be refused at aggregate time anyway); the
-    round counter is left alone. Network first, cluster lock last.
+    the cluster's active adapter (a pending candidate is left untouched).
+
+    A version the registry refused (its listing's ``rejected``: a REJECT, or a
+    D5 ROLLBACK from before the candidate flow) is never served: 409
+    ``{"error": "rejected_version", ...}`` before anything else is fetched.
+    Uploads buffered on anything but the restored version are dropped (they
+    would be refused or misread at aggregate time); the round counter is left
+    alone. Network first, cluster lock last.
     """
     import httpx
 
@@ -1582,6 +1589,13 @@ def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, o
     base = f"{body.registry_url.rstrip('/')}/adapters/{name}/versions/{body.version}"
     tls = outbound_ssl_context(_os.environ) if body.registry_url.startswith("https") else None
     with httpx.Client(timeout=body.timeout_s, verify=tls if tls is not None else True) as http:
+        listing = _registry_get(http, f"{body.registry_url.rstrip('/')}/adapters/{name}/versions",
+                                f"{name}'s versions").json()
+        if body.version in (listing.get("rejected") or ()):
+            raise HTTPException(status_code=409, detail={
+                "error": "rejected_version", "adapter_name": name, "version": body.version,
+                "message": f"{name} v{body.version} was refused by the registry; "
+                           "a restore never serves a refused version"})
         meta = _registry_get(http, base, f"{name} v{body.version}").json()
         blob = _registry_get(http, f"{base}/file", f"{name} v{body.version}'s payload").content
     if meta.get("cluster_id") not in (None, cluster_id):
