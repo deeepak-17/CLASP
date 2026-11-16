@@ -127,6 +127,36 @@ def _eval(name: str, version: int, sim: float, guard_sim: float) -> dict:
     }
 
 
+EVAL_SECRET_ENV = "CLASP_EVAL_HMAC_SECRET"
+
+
+def eval_secret() -> str | None:
+    """The evaluation-signing key (``CLASP_EVAL_HMAC_SECRET`` or the file
+    ``CLASP_EVAL_HMAC_SECRET_FILE`` names), the one the registry verifies with;
+    ``None`` when neither is set."""
+    from security.auth.hmac_signer import secret_from_env
+
+    return secret_from_env(EVAL_SECRET_ENV)
+
+
+def _promote(reg: Registry, name: str, version: int, body: dict) -> tuple[int, dict]:
+    """POST a promote the way the evaluator does (U4): it names the sha256 of
+    the version it measured and, when the job has the key, is signed. A
+    registry with the key refuses anything else with 401."""
+    status, meta = reg.get(f"/adapters/{name}/versions/{version}")
+    _expect(f"read v{version} before promoting", status, 200, meta)
+    body = {**body, "candidate_sha256": meta["sha256"]}
+    secret = eval_secret()
+    if secret:
+        from security.auth.hmac_signer import sign_evaluation
+
+        body["eval_signature"] = sign_evaluation(
+            adapter=name, version=version, candidate_sha256=meta["sha256"],
+            eval_result=body["eval"], baseline_guard=body.get("baseline_guard", []),
+            secret=secret)
+    return reg.post_json(f"/adapters/{name}/promote", body)
+
+
 def _restore_drill(reg: Registry, run_id: str, hp: dict, *, layers: int, hidden: int,
                    log) -> float:
     """D11, timed on what the edge serves: restore a client, read back its composite.
@@ -196,7 +226,7 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     if status != 404:
         raise DemoFailure(f"save client v1: an upload must not be active, got HTTP {status}")
 
-    status, body = reg.post_json(f"/adapters/{client}/promote", _eval(client, 1, 0.70, 0.60))
+    status, body = _promote(reg, client, 1, _eval(client, 1, 0.70, 0.60))
     _expect("promote v1", status, 200, body)
     if body["action"] != "promote" or body["active_version_after"] != 1:
         raise DemoFailure(f"promote v1: unexpected decision {body}")
@@ -214,7 +244,7 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     promote = _eval(client, 2, sim=0.70, guard_sim=0.60)
     promote["composite"] = {"name": composite, "cluster": cluster, "client": client,
                             "alpha": 0.5, "beta": 1.0}
-    status, body = reg.post_json(f"/adapters/{client}/promote", promote)
+    status, body = _promote(reg, client, 2, promote)
     _expect("promote v2", status, 200, body)
     if body["action"] != "promote" or body["composite"]["composed_from"]["client_version"] != 2:
         raise DemoFailure(f"promote v2: unexpected decision {body}")
@@ -223,7 +253,7 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     status, body = reg.save(client, make_adapter(4, layers=layers, hidden=hidden),
                             {"kind": "client", "hparams": hp, "round": 3, "cluster_id": "web"})
     _expect("save client v3", status, 201, body)
-    status, body = reg.post_json(f"/adapters/{client}/promote", _eval(client, 3, 0.61, 0.40))
+    status, body = _promote(reg, client, 3, _eval(client, 3, 0.61, 0.40))
     _expect("promote v3", status, 200, body)
     if body["action"] != "reject" or body["active_version_after"] != 2:
         raise DemoFailure(f"promote v3: expected reject with v2 still active, got {body}")

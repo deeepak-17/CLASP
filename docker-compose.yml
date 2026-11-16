@@ -115,14 +115,18 @@ services:
     command: ["python", "-m", "registry.demo", "--url", "https://registry:8004",
               "--report", "/reports/registry-demo.json"]
     # It saves, promotes, restores and garbage-collects, so it presents the
-    # operator's certificate (clasp-admin, role admin).
+    # operator's certificate (clasp-admin, role admin). It also stands in for
+    # the evaluator, so it signs its promotes with the evaluation key the
+    # registry verifies with.
     environment:
       CLASP_TLS_CLIENT_CERT: /certs/admin.pem
       CLASP_TLS_CLIENT_KEY: /certs/admin.key
       CLASP_TLS_CA: /certs/ca.pem
+      CLASP_EVAL_HMAC_SECRET_FILE: /secrets/eval_hmac.key
     volumes:
       - demo-reports:/reports
       - ./.runtime/certs/admin:/certs:ro
+      - ./.runtime/certs/secrets/eval_hmac.key:/secrets/eval_hmac.key:ro
     restart: "no"
 
   demo-ui:

@@ -27,6 +27,8 @@ services:
   demo-seed:
     command: ["python", "-m", "registry.demo", "--url", "http://registry:8004",
               "--report", "/reports/registry-demo.json"]
+    environment:
+      CLASP_EVAL_HMAC_SECRET_FILE: ""
 
   demo-ui:
     environment:
