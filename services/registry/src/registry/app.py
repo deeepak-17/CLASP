@@ -19,6 +19,14 @@ Endpoints:
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
     GET  /sync/pending                             cluster steps of decisions not yet applied
     POST /sync/{id}/done                           report one: {"ok": bool, "error"?: str}
+    GET  /privacy/ledger                           each client's privacy spend (D7)
+    GET  /access-log                               who called what (admin only)
+
+In front of every route, in the order a request meets them: security headers,
+a body-size limit (the upload cap plus 1 MiB), a rate limit (600 requests a
+minute per caller in bursts of 60, ``CLASP_RATE_LIMIT_PER_MIN``; the caller is
+the verified certificate name, else the remote address; ``/healthz`` is
+exempt), and the access/audit recorder (``registry.audit``).
 
 ``POST /adapters/{name}/promote`` answers with the decision plus ``cluster_sync_id``,
 the id of the ``cluster_sync`` row written in its transaction (null unless the
@@ -83,11 +91,20 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import JSONResponse
+from security.audit import SecurityEvent
 from security.auth.hmac_signer import SecretConfigError, secret_from_env, verify_evaluation
+from security.middleware import (
+    RateLimiter,
+    RateLimitMiddleware,
+    RequestValidationMiddleware,
+    SecurityHeadersMiddleware,
+    rate_limit_from_env,
+)
 from security.auth.roles import ROLE_ADMIN, ROLE_CLUSTER, ROLE_EVALUATION, require_roles
 from security.mtls.peer import peer_identity
 
 from . import __version__
+from . import audit as registry_audit
 from .cascade import apply_cascade, plan_cascade, write_cascade_files
 from .config import RUN_DELTA, RUN_EPSILON_BUDGET, RUN_ROUNDS
 from .composition import (
@@ -305,6 +322,31 @@ def _caller(request: Request) -> str | None:
     return (_identity_provider or peer_identity)(request)
 
 
+def _record_access(row: dict) -> None:
+    get_store().repo.add_access(row)
+
+
+def _max_body_bytes() -> int:
+    try:
+        cap = int(os.environ.get(MAX_UPLOAD_ENV, DEFAULT_MAX_UPLOAD))
+    except ValueError:
+        cap = DEFAULT_MAX_UPLOAD
+    return cap + 1024 * 1024
+
+
+#: A request body may be the largest allowed upload plus its multipart envelope.
+MAX_BODY_BYTES = _max_body_bytes()
+#: 600 requests a minute per caller, bursts of 60 (CLASP_RATE_LIMIT_PER_MIN; 0 = off).
+rate_limiter = RateLimiter(rate_limit_from_env())
+
+# Added innermost first. A request meets: security headers, the body limit, the
+# rate limit, then the access/audit recorder, then the route.
+registry_audit.install(app, identity=_caller, record=_record_access)
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, key_func=_caller,
+                   exempt_paths=("/healthz",))
+app.add_middleware(RequestValidationMiddleware, max_body_bytes=MAX_BODY_BYTES)
+app.add_middleware(SecurityHeadersMiddleware)
+
 READERS = require_roles(ROLE_CLUSTER, ROLE_EVALUATION, ROLE_ADMIN, identity=_caller)
 PUBLISHERS = require_roles(ROLE_CLUSTER, ROLE_ADMIN, identity=_caller)
 DECIDERS = require_roles(ROLE_EVALUATION, ROLE_ADMIN, identity=_caller)
@@ -337,6 +379,11 @@ def save_version(
         raise
     except StorageError as e:  # bad payload / inconsistent envelope: client error
         raise HTTPException(422, str(e)) from e
+    for row in kwargs.get("client_privacy") or ():
+        if row.get("epsilon_cumulative") is not None:  # D7: a spend went on the ledger
+            registry_audit.audit_logger().log_privacy_event(
+                SecurityEvent.PRIVACY_BUDGET_RECORDED, row["client_id"],
+                row["epsilon_cumulative"], RUN_EPSILON_BUDGET)
     return _metadata_to_dict(written)
 
 
@@ -758,6 +805,17 @@ def privacy_ledger(cluster_id: str | None = None) -> dict:
     """
     return {"budget": RUN_EPSILON_BUDGET, "delta": RUN_DELTA, "rounds_total": RUN_ROUNDS,
             "rows": get_store().repo.privacy_ledger(cluster_id)}
+
+
+@app.get("/access-log", dependencies=[Depends(ADMINS)])
+def access_log(limit: int = 200, identity: str | None = None) -> dict:
+    """U4: who called what, newest first. ``?limit=`` (1 to 1000, default 200)
+    and ``?identity=`` (one certificate name). Each row: ``at``, ``identity``
+    (null over plain HTTP), ``role``, ``method``, ``path``, ``adapter``,
+    ``version``, ``status``. For the ``admin`` role."""
+    if not 1 <= limit <= 1000:
+        raise HTTPException(422, f"limit must be between 1 and 1000, got {limit}")
+    return {"rows": get_store().repo.access_log(limit=limit, identity=identity)}
 
 
 @app.get("/sync/pending", dependencies=[Depends(READERS)])

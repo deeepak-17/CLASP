@@ -23,6 +23,14 @@ signed with ``CLASP_JWT_SECRET`` (or the file ``CLASP_JWT_SECRET_FILE`` names;
 with neither, a key made for this process). With no users file the panel runs
 open, and says so when it starts (the fall-back, C11).
 
+In front of every route (U4), in the order a request meets them: security
+headers (a Content-Security-Policy that allows this origin and the page's
+typeface, nothing inline), a 1 MiB body limit, a rate limit (600 requests a
+minute per address in bursts of 60, ``CLASP_RATE_LIMIT_PER_MIN``;
+``/api/health`` is exempt) and the audit recorder: every refused login or call
+and every accepted action is a line in the audit trail (``CLASP_AUDIT_LOG``;
+the console when it is not set), under the logged-in person's name.
+
 The edge laptops upload their own trained adapters (``edge.webui``); nothing
 here makes up tensors or metrics. The panel pages that did (synthetic
 uploads, hardcoded promote metrics, a staged regression) were removed.
@@ -50,6 +58,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from security.audit import AccessAuditMiddleware, ServiceAudit
 from security.auth.hmac_signer import SecretConfigError
 from security.auth.jwt_handler import JWTConfig, TokenError, verify_token
 from security.auth.users import (
@@ -59,6 +68,14 @@ from security.auth.users import (
     bearer_claims,
     issue_token,
     jwt_config_from_env,
+)
+from security.middleware import (
+    RateLimiter,
+    RateLimitMiddleware,
+    RequestValidationMiddleware,
+    SecurityHeadersConfig,
+    SecurityHeadersMiddleware,
+    rate_limit_from_env,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -158,6 +175,43 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="CLASP Panel Demo UI", lifespan=_lifespan)
 
 
+# --------------------------------------------------------------------------- #
+# In front of every route (U4)
+# --------------------------------------------------------------------------- #
+#: The panel takes small JSON bodies only (a login); nothing is uploaded here.
+MAX_BODY_BYTES = 1024 * 1024
+rate_limiter = RateLimiter(rate_limit_from_env())
+audit_trail = ServiceAudit("demo-ui")
+#: The library's headers, with a policy this page can live with: everything
+#: from this origin, plus the typeface it loads from Google Fonts. No inline
+#: script or style is allowed, and the page has none (static/live.js).
+PAGE_HEADERS = SecurityHeadersConfig(content_security_policy=(
+    "default-src 'self'; style-src 'self' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'"))
+
+
+def _person(request: Request) -> dict | None:
+    """The claims of the caller's login token, or ``None`` (no login configured,
+    no token, or a token that does not verify)."""
+    try:
+        settings = _login_settings()
+        return bearer_claims(request.headers.get("authorization"), settings[1]) \
+            if settings else None
+    except (TokenError, UserStoreError, SecretConfigError):
+        return None
+
+
+def _audit_identity(request: Request) -> str | None:
+    return (_person(request) or {}).get("sub")
+
+
+def _audit_role(request: Request, _name: str | None) -> str:
+    claims = _person(request)
+    if claims:
+        return str(claims.get("role"))
+    return "anonymous" if os.environ.get(USERS_ENV) else "open"
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     """Every ``/api/*`` call except health and login needs an operator's token."""
@@ -179,6 +233,16 @@ async def require_login(request: Request, call_next):
             {"detail": f"this panel is for the operator role; {claims.get('sub')!r} is "
                        f"{claims.get('role')!r}"}, status_code=403)
     return await call_next(request)
+
+
+# Added innermost first (after require_login above, which therefore runs last):
+# a request meets the security headers, the body limit, the rate limit, the
+# audit recorder, then the login check and the route.
+app.add_middleware(AccessAuditMiddleware, audit=audit_trail.logger, identity=_audit_identity,
+                   role=_audit_role, service="demo-ui", exempt_paths=("/api/health",))
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, exempt_paths=("/api/health",))
+app.add_middleware(RequestValidationMiddleware, max_body_bytes=MAX_BODY_BYTES)
+app.add_middleware(SecurityHeadersMiddleware, config=PAGE_HEADERS)
 
 
 @app.post("/api/login")

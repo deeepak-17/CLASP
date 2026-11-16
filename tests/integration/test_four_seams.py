@@ -695,3 +695,95 @@ def test_all_four_seams_in_one_pass(cluster_client, registry_client, edge_regist
     assert served["sha256"] == published["sha256"]
     pulled = edge_registry.materialize(REGISTRY_NAME, tmp_path / "pulled")
     assert pulled["version"] == 1 and pulled["sha256_verified"] == published["sha256"]
+
+# --------------------------------------------------------------------------- #
+# Review Focus 5: a normal round of six clients, real-size uploads (192 tensors
+# each), through the security middleware of the real apps at its real limits
+# --------------------------------------------------------------------------- #
+SIX_CLIENTS = {
+    "web": {"client-flask": 80, "client-requests": 52, "client-werkzeug": 170},
+    "scientific": {"client-numpy": 292, "client-pandas": 335, "client-scikit-learn": 335},
+}
+
+
+def _full_size_adapter(seed: int, dim: int = 64):
+    """The layout of a real client adapter: 24 layers x q/k/v/o x (A, B) = 192
+    tensors at rank 16. The hidden width is 64 instead of 2048: the middleware
+    counts requests and bytes, not numbers, and the real byte size is checked
+    against the limit separately."""
+    rng = np.random.default_rng(seed)
+    sd = {}
+    for layer in range(24):
+        for module in wire.TARGET_MODULES:
+            sd[wire.peft_key(layer, module, "lora_A")] = (
+                rng.standard_normal((16, dim)) * 0.05).astype(np.float32)
+            sd[wire.peft_key(layer, module, "lora_B")] = (
+                rng.standard_normal((dim, 16)) * 0.05).astype(np.float32)
+    return sd, {"r": 16, "lora_alpha": 16, "target_modules": list(wire.TARGET_MODULES)}
+
+
+def test_a_six_client_round_of_192_tensor_uploads_passes_the_middleware(
+        cluster_client, registry_client, monkeypatch):
+    import cluster.server as cluster_server
+    import registry.app as registry_app
+    from security.middleware import RateLimitConfig, rate_limit_from_env
+
+    assert len(wire.TARGET_MODULES) == 4
+    limits = rate_limit_from_env({})
+    assert (limits.requests_per_minute, limits.burst_size) == (600, 60)
+    cluster_server.rate_limiter.reconfigure(limits)      # the real, default limits
+    registry_app.rate_limiter.reconfigure(rate_limit_from_env({}))
+    statuses = []
+    try:
+        for cluster_id, members in SIX_CLIENTS.items():
+            r = cluster_client.put(f"/clusters/{cluster_id}/members",
+                                   json={"client_ids": list(members)})
+            statuses.append(r.status_code)
+            assert r.status_code == 200, r.text
+        seed = 0
+        for cluster_id, members in SIX_CLIENTS.items():
+            for client_id, examples in members.items():
+                seed += 1
+                sd, cfg = _full_size_adapter(seed)
+                payload = wire.upload_payload(sd, cfg, client_id=client_id, cluster_id=cluster_id,
+                                              round_id=0, num_examples=examples, seed=0)
+                assert len(payload["tensors"]) == 192
+                r = cluster_client.post(f"/clusters/{cluster_id}/uploads", json=payload)
+                statuses.append(r.status_code)
+                assert r.status_code == 201, (client_id, r.status_code, r.text[:300])
+                # what the laptops' pages do meanwhile: poll the cluster
+                statuses += [cluster_client.get("/clusters").status_code for _ in range(3)]
+        for cluster_id in SIX_CLIENTS:
+            r = cluster_client.post(f"/clusters/{cluster_id}/aggregate",
+                                    json={"aggregation": "svd", "include_manifest": True})
+            statuses.append(r.status_code)
+            assert r.status_code == 200, r.text[:300]
+            assert r.json()["num_clients"] == 3
+            with publish_over_http(registry_client, monkeypatch):
+                r = cluster_client.post(
+                    f"/adapters/{cluster_id}/publish",
+                    json={"registry_url": "http://registry:8004",
+                          "adapter_name": f"cluster-{cluster_id}"})
+            statuses.append(r.status_code)
+            assert r.status_code == 201, r.text[:300]
+            # the panel's poll of the registry
+            for path in (f"/adapters/cluster-{cluster_id}/versions", "/sync/pending",
+                         "/privacy/ledger"):
+                statuses.append(registry_client.get(path).status_code)
+    finally:
+        cluster_server.rate_limiter.reconfigure(RateLimitConfig(enabled=False))
+        registry_app.rate_limiter.reconfigure(RateLimitConfig(enabled=False))
+    assert 413 not in statuses and 429 not in statuses
+    assert set(statuses) <= {200, 201}
+    assert registry_client.get("/adapters").json()["adapters"] == ["cluster-scientific",
+                                                                    "cluster-web"]
+
+
+def test_a_real_size_upload_is_far_below_every_body_limit():
+    import cluster.server as cluster_server
+    import registry.app as registry_app
+
+    as_json = 192 * 16 * 2048 * 4 * 4 // 3 + 192 * 200     # 192 fp32 tensors, base64, in JSON
+    as_safetensors = 192 * 16 * 2048 * 4 + 64 * 1024       # what the cluster publishes
+    assert as_json < cluster_server.MAX_BODY_BYTES / 10
+    assert as_safetensors < registry_app.MAX_BODY_BYTES / 10

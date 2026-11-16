@@ -40,9 +40,17 @@ from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
+from security.audit import AccessAuditMiddleware, SecurityEvent, ServiceAudit
 from security.auth.hmac_signer import verify_adapter_upload
 from security.auth.roles import ROLE_ADMIN, ROLE_EVALUATION, require_roles
 from security.dp.ledger import BUDGET_TOLERANCE, RUN_EPSILON_BUDGET, RUN_ROUNDS
+from security.middleware import (
+    RateLimiter,
+    RateLimitMiddleware,
+    RequestValidationMiddleware,
+    SecurityHeadersMiddleware,
+    rate_limit_from_env,
+)
 from security.mtls.peer import peer_identity
 from security.validation import detect_poisoning, validate_adapter_integrity
 
@@ -496,6 +504,34 @@ app = FastAPI(
 )
 
 
+# ---- in front of every route (U4) ----------------------------------------------
+#
+# In the order a request meets them: security headers, a body-size limit, a rate
+# limit (600 requests a minute per caller in bursts of 60,
+# CLASP_RATE_LIMIT_PER_MIN, 0 = off; the caller is the verified certificate name,
+# else the remote address; /healthz is exempt), and the audit recorder: every
+# refused authorisation and every accepted mutating call is a line in the audit
+# trail (CLASP_AUDIT_LOG; the console when it is not set). Budget refusals are
+# written where they happen (``_check_budget``).
+#: An upload is ~34 MB of JSON for a rank-16 adapter on the 1.3B model.
+MAX_BODY_BYTES = 512 * 1024 * 1024
+rate_limiter = RateLimiter(rate_limit_from_env())
+audit_trail = ServiceAudit("cluster")
+
+
+def _audit_identity(request: Request) -> str | None:
+    return _role_identity(request)
+
+
+# added innermost first
+app.add_middleware(AccessAuditMiddleware, audit=audit_trail.logger, identity=_audit_identity,
+                   service="cluster", exempt_paths=("/healthz",))
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, key_func=_audit_identity,
+                   exempt_paths=("/healthz",))
+app.add_middleware(RequestValidationMiddleware, max_body_bytes=MAX_BODY_BYTES)
+app.add_middleware(SecurityHeadersMiddleware)
+
+
 class AggregateRequest(_BaseModel):
     #: Which cluster ``POST /aggregate`` runs over. Ignored by
     #: ``POST /clusters/{id}/aggregate``, where the path names the cluster (an
@@ -855,30 +891,32 @@ def _check_budget(upload: AdapterUpload) -> None:
         return
     privacy = upload.privacy
     cumulative = privacy.epsilon_cumulative if privacy is not None else None
+    rounds = privacy.rounds_accounted if privacy is not None else None
+
+    def refuse(error: str, hint: str) -> HTTPException:
+        # every budget refusal goes on the audit trail (U4)
+        audit_trail.logger().log(
+            SecurityEvent.PRIVACY_BUDGET_EXHAUSTED, upload.client_id, "privacy_budget",
+            detail=f"upload refused: {error}", success=False,
+            metadata={"error": error, "epsilon_cumulative": cumulative,
+                      "rounds_accounted": rounds, "budget": RUN_EPSILON_BUDGET})
+        return HTTPException(status_code=422, detail={"error": error, "hint": hint})
+
     if cumulative is None:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_unreported",
-            "hint": "update the edge: uploads must report the run's cumulative epsilon",
-        })
+        raise refuse("privacy_budget_unreported",
+                     "update the edge: uploads must report the run's cumulative epsilon")
     if cumulative > RUN_EPSILON_BUDGET + BUDGET_TOLERANCE:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_exceeded",
-            "hint": (f"client {upload.client_id!r} reports a cumulative epsilon of "
-                     f"{cumulative:g} for its run; the budget is {RUN_EPSILON_BUDGET:g}"),
-        })
-    rounds = privacy.rounds_accounted
+        raise refuse("privacy_budget_exceeded",
+                     f"client {upload.client_id!r} reports a cumulative epsilon of "
+                     f"{cumulative:g} for its run; the budget is {RUN_EPSILON_BUDGET:g}")
     if rounds is not None and rounds > RUN_ROUNDS:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_exceeded",
-            "hint": (f"client {upload.client_id!r} reports round {rounds} of its run; "
-                     f"a run is {RUN_ROUNDS} rounds"),
-        })
+        raise refuse("privacy_budget_exceeded",
+                     f"client {upload.client_id!r} reports round {rounds} of its run; "
+                     f"a run is {RUN_ROUNDS} rounds")
     if cumulative < upload.epsilon - BUDGET_TOLERANCE:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_inconsistent",
-            "hint": (f"cumulative epsilon {cumulative:g} is below this round's epsilon "
-                     f"{upload.epsilon:g}"),
-        })
+        raise refuse("privacy_budget_inconsistent",
+                     f"cumulative epsilon {cumulative:g} is below this round's epsilon "
+                     f"{upload.epsilon:g}")
 
 
 def _check_base(state: _ClusterState, upload: AdapterUpload) -> None:

@@ -124,6 +124,25 @@ privacy_ledger = Table(
 )
 
 
+# U4: who called what. One row per request except /healthz, written by
+# security.audit.AccessAuditMiddleware (see registry.audit). ``identity`` is the
+# verified certificate name, NULL over plain HTTP (role "open").
+access_log = Table(
+    "access_log",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("at", String, nullable=False),
+    Column("identity", String),
+    Column("role", String, nullable=False),
+    Column("method", String, nullable=False),
+    Column("path", String, nullable=False),
+    Column("adapter", String),
+    Column("version", Integer),
+    Column("status", Integer, nullable=False),
+    Index("ix_access_log_identity_at", "identity", "at"),
+)
+
+
 def default_url() -> str:
     """``CLASP_REGISTRY_DB`` if set, else SQLite under the registry data root."""
     explicit = os.environ.get(DB_ENV)

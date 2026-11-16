@@ -741,7 +741,8 @@ def test_the_panel_state_survives_a_registry_without_the_ledger_route(stack, mon
 
 
 def test_the_page_lists_the_privacy_spend():
-    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    html = ((panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+            + (panel.STATIC_DIR / "live.js").read_text(encoding="utf-8"))
     assert "function privacyLines" in html and "rounds_accounted" in html
     # the merge card no longer describes the cluster epsilon as a sum
     assert "plus the adapter it builds on" not in html
@@ -1023,3 +1024,79 @@ def test_the_page_has_a_login_form_and_keeps_the_token_for_the_session():
     assert 'id="login"' in html and 'type="password"' in html
     assert "sessionStorage" in js and "Authorization" in js and "401" in js
     assert "localStorage" not in js and "localStorage" not in html
+
+# --------------------------------------------------------------------------- #
+# U4: the panel behind security headers, a body limit, a rate limit, an audit trail
+# --------------------------------------------------------------------------- #
+def test_the_panels_responses_carry_security_headers_its_page_can_live_with(stack):
+    ui = stack[0]
+    for response in (ui.get("/"), ui.get("/static/live.js"), ui.get("/api/health"),
+                     ui.get("/api/live/plan"), ui.post("/api/live/aggregate/nope")):
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["referrer-policy"]
+    csp = ui.get("/").headers["content-security-policy"]
+    # scripts only from this origin: the page has no inline script to allow
+    assert "default-src 'self'" in csp and "unsafe-inline" not in csp and "unsafe-eval" not in csp
+    # the page's one outside dependency is its typeface
+    assert "style-src 'self' https://fonts.googleapis.com" in csp
+    assert "font-src https://fonts.gstatic.com" in csp
+
+
+def test_the_page_has_no_inline_script_or_style():
+    import re
+
+    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    assert re.findall(r"<script(?![^>]*\bsrc=)[^>]*>", html) == []
+    assert "<style" not in html and " style=" not in html and "onclick=" not in html
+    assert '<script src="/static/live.js"></script>' in html
+    js = (panel.STATIC_DIR / "live.js").read_text(encoding="utf-8")
+    assert "function privacyLines" in js and " style=" not in js
+
+
+def test_a_body_over_one_mebibyte_is_413(stack):
+    ui = stack[0]
+    assert panel.MAX_BODY_BYTES == 1024 * 1024
+    over = ui.post("/api/login", content=b"{}", headers={
+        "content-length": str(panel.MAX_BODY_BYTES + 1), "content-type": "application/json"})
+    assert over.status_code == 413
+    assert over.headers["x-content-type-options"] == "nosniff"
+
+
+def test_the_panel_rate_limits_a_burst_but_not_health(stack, monkeypatch):
+    from security.middleware import RateLimitConfig, rate_limit_from_env, rate_limiter
+
+    ui = stack[0]
+    monkeypatch.setattr(rate_limiter.time, "monotonic", lambda: 1000.0)
+    panel.rate_limiter.reconfigure(rate_limit_from_env({}))
+    try:
+        codes = [ui.get("/api/live/plan").status_code for _ in range(61)]
+        assert codes[:60] == [200] * 60 and codes[60] == 429
+        assert all(ui.get("/api/health").status_code == 200 for _ in range(100))
+    finally:
+        panel.rate_limiter.reconfigure(RateLimitConfig(enabled=False))
+
+
+def test_the_panels_audit_trail_names_the_operator_and_never_a_password(logins, tmp_path,
+                                                                        monkeypatch):
+    ui = logins[0]
+    trail = tmp_path / "panel-audit.jsonl"
+    monkeypatch.setenv("CLASP_AUDIT_LOG", str(trail))
+    assert _login(ui, password="a wrong pass phrase").status_code == 401
+    headers = _bearer(ui)
+    assert ui.post("/api/live/register", headers=headers).status_code == 200
+    assert ui.get("/api/live/plan", headers=headers).status_code == 200      # a read: no line
+    assert ui.post("/api/live/register").status_code == 401                 # no token
+    panel.audit_trail.close()
+    text = trail.read_text(encoding="utf-8")
+    lines = [json.loads(x) for x in text.splitlines() if '"demo-ui"' in x or "AUTH_FAILURE" in x]
+    events = [(x["event"], x["actor"]) for x in lines]
+    assert ("AUTH_FAILURE", "anonymous") in events
+    assert ("TOKEN_ISSUED", "anonymous") in events        # the login call itself carries no token
+    assert ("ADAPTER_VALIDATED", "operator") in events
+    registered = next(x for x in lines if x["actor"] == "operator")
+    assert registered["metadata"]["role"] == "operator"
+    assert registered["metadata"]["path"] == "/api/live/register"
+    for secret in (PANEL_PASSWORD, "a wrong pass phrase", headers["Authorization"].split()[1],
+                   JWT_SECRET):
+        assert secret not in text

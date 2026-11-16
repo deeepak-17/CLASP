@@ -33,6 +33,7 @@ POLICY = [
     ("GET", "/adapters/{name}/promotions", "/adapters/x/promotions", READERS),
     ("GET", "/privacy/ledger", "/privacy/ledger", READERS),
     ("GET", "/sync/pending", "/sync/pending", READERS),
+    ("GET", "/access-log", "/access-log", {"admin"}),
     ("POST", "/adapters/{name}/versions", "/adapters/x/versions", {"svc:cluster", "admin"}),
     ("POST", "/adapters/{name}/promote", "/adapters/x/promote", {"svc:evaluation", "admin"}),
     ("POST", "/adapters/{name}/compose", "/adapters/x/compose", {"svc:evaluation", "admin"}),

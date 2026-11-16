@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -23,6 +25,7 @@ class SecurityEvent(str, Enum):
     AGGREGATION_STARTED = "AGGREGATION_STARTED"
     AGGREGATION_COMPLETED = "AGGREGATION_COMPLETED"
     RATE_LIMIT_HIT = "RATE_LIMIT_HIT"
+    PRIVACY_BUDGET_RECORDED = "PRIVACY_BUDGET_RECORDED"
     PRIVACY_BUDGET_WARNING = "PRIVACY_BUDGET_WARNING"
     PRIVACY_BUDGET_EXHAUSTED = "PRIVACY_BUDGET_EXHAUSTED"
     SUSPICIOUS_ACTIVITY = "SUSPICIOUS_ACTIVITY"
@@ -45,14 +48,21 @@ class AuditEntry:
 class AuditLogger:
     """Structured security audit logging for CLASP."""
 
-    def __init__(self, name: str = 'clasp.security.audit', log_file: str | Path | None = None) -> None:
+    def __init__(self, name: str = 'clasp.security.audit', log_file: str | Path | None = None,
+                 stream: bool = True) -> None:
         """
         Initialize the audit logger.
 
         Args:
             name: The logger name.
-            log_file: Optional path to a file to output logs to.
+            log_file: Optional path to a file to output logs to (its directory is created).
+            stream: Also write each entry to the console. With ``False`` the
+                logger writes to ``log_file`` only and is private to this
+                instance, so two services (or two tests) never share handlers;
+                :meth:`close` releases the file.
         """
+        if not stream:
+            name = f"{name}.{id(self):x}"
         self.logger = logging.getLogger(name)
         # Avoid adding handlers multiple times if the logger already has them
         if not self.logger.handlers:
@@ -69,14 +79,22 @@ class AuditLogger:
             formatter = JsonFormatter()
 
             # Default stream handler
-            stream_handler = logging.StreamHandler()
-            stream_handler.setFormatter(formatter)
-            self.logger.addHandler(stream_handler)
+            if stream:
+                stream_handler = logging.StreamHandler()
+                stream_handler.setFormatter(formatter)
+                self.logger.addHandler(stream_handler)
 
             if log_file:
-                file_handler = logging.FileHandler(log_file)
+                Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+                file_handler = logging.FileHandler(log_file, encoding="utf-8")
                 file_handler.setFormatter(formatter)
                 self.logger.addHandler(file_handler)
+
+    def close(self) -> None:
+        """Flush and release this logger's handlers (and its log file)."""
+        for handler in list(self.logger.handlers):
+            self.logger.removeHandler(handler)
+            handler.close()
 
     def log(
         self,
@@ -158,6 +176,51 @@ class AuditLogger:
             success=True,
             metadata={"epsilon_spent": epsilon_spent, "epsilon_target": epsilon_target}
         )
+
+AUDIT_LOG_ENV = "CLASP_AUDIT_LOG"
+
+
+class ServiceAudit:
+    """One service's audit logger, following its configured file.
+
+    The file is ``CLASP_AUDIT_LOG`` when set, else ``default_path()`` (a
+    service with a data directory passes ``<data dir>/audit.jsonl``), else none:
+    the entries then go to the console, where the process's logs go. The path
+    is read on each use, and the file is reopened when it changes.
+    """
+
+    def __init__(self, service: str, default_path=None) -> None:
+        self.service = service
+        self._default_path = default_path
+        self._lock = threading.Lock()
+        self._path: Path | None = None
+        self._logger: AuditLogger | None = None
+
+    def path(self) -> Path | None:
+        configured = os.environ.get(AUDIT_LOG_ENV)
+        if configured:
+            return Path(configured)
+        return Path(self._default_path()) if self._default_path is not None else None
+
+    def logger(self) -> AuditLogger:
+        path = self.path()
+        with self._lock:
+            if self._logger is None or self._path != path:
+                if self._logger is not None:
+                    self._logger.close()
+                name = f"clasp.audit.{self.service}"
+                self._logger = (AuditLogger(name=name, log_file=path, stream=False)
+                                if path is not None else AuditLogger(name=name))
+                self._path = path
+            return self._logger
+
+    def close(self) -> None:
+        """Flush and release the audit file."""
+        with self._lock:
+            if self._logger is not None:
+                self._logger.close()
+            self._logger, self._path = None, None
+
 
 _audit_logger_instance: AuditLogger | None = None
 
