@@ -36,6 +36,17 @@
 
 <main id="lanes" aria-live="polite"></main>
 
+<section class="regroup" id="regroup">
+  <div class="regroup-head">
+    <div>
+      <h2>Grouping</h2>
+      <p>Rounds 1 and 2 use the project grouping. After round 2 the cluster can compare the laptops' updates and say which grouping it would choose.</p>
+    </div>
+    <button id="recluster" disabled>Re-cluster (dry run)</button>
+  </div>
+  <div id="recluster-result" aria-live="polite"></div>
+</section>
+
 <section class="journal">
   <h2>Activity</h2>
   <div class="log" id="log">Nothing yet. Register the edge laptops to open the round.</div>

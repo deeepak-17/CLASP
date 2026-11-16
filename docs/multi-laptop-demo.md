@@ -93,11 +93,12 @@ Open `https://localhost:8010` (import `.runtime/certs/ca.pem` into the browser
 once, or accept its warning), log in as the operator, and press
 **Register edge laptops**.
 
-Laptops B and C: `.\start_edge_<client>.ps1`, open `http://127.0.0.1:8020`.
+Laptops B and C: `.\start_edge_<client>.ps1`, open `https://127.0.0.1:8020` and log in.
 
 One round, end to end (2026-10-14 build):
 
-1. **Train** on B and C ("Train a new adapter here first"): DP-SGD (ε ≤ 8) with the
+1. **Train** on B and C ("Train a new adapter here first"): DP-SGD (ε ≤ 8 over the run's
+   two rounds together) with the
    FedProx proximal term (μ 0.01, `--fedprox-mu`), 512-token blocks. In round 0 there
    is no merged adapter yet, so it trains on the bare base.
 2. **Send**. Laptop A's panel shows each laptop arrive. Every upload passes P3's
@@ -107,7 +108,8 @@ One round, end to end (2026-10-14 build):
    on, each upload names the merged adapter it trained on (sha256) and the cluster adds
    the round's updates onto it — FedProx's server step,
    `C_{N+1} = C_N + (1/α)·Σ w_k R_k` — refusing anything trained on another adapter
-   (409 stale_adapter). The panel says which rule ran and how ε composes.
+   (409 stale_adapter). The panel says which rule ran and the merge's ε: the largest
+   cumulative ε any laptop in it has spent over its run.
    The merge is the cluster's **candidate**: the edges keep pulling the adapter the
    cluster already serves, and the next merge waits until this one is decided. The edge
    page's step 4 reads "Awaiting evaluation".
@@ -130,8 +132,19 @@ One round, end to end (2026-10-14 build):
    it; step 4 reads "Merged and promoted". After a reject nothing is pulled: the edges
    keep the adapter they have, step 4 reads "Rejected, previous adapter kept", and the
    next round trains on it.
+8. **After round 2: Re-cluster (dry run)**. Once both clusters have merged round 2 the
+   panel's "Re-cluster (dry run)" button is enabled. It shows the grouping the cluster
+   would choose from round 2's updates beside the current one, the laptops that would
+   move, and the similarity matrix. Nothing is moved: applying a new grouping starts a
+   new run with a new privacy budget. Save the response as
+   `experiments/clustering-ablation/results/live-dry-run-<date>.json` (the browser's
+   network tab, or `POST /api/live/recluster` with the operator's token).
 
-The results are on the dashboard at `http://<A>:8005`.
+A run is two rounds per laptop: the privacy budget (ε ≤ 8 over the run) is charged when
+an adapter is sent, and a third send in the same run is refused on the laptop. The edge
+page shows what has been spent; a new run is a new `--run-id`.
+
+The results are on the dashboard at `https://<A>:8005`.
 
 ## Promote: what the guide will see
 

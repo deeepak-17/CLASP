@@ -192,6 +192,67 @@ document.getElementById("login-form").onsubmit = async (e) => {
   showLogin(false); plan(); refresh();
 };
 
+// D4 (U7): the grouping the cluster would choose after round 2. A dry run: the
+// server asks the cluster to report and never to move anyone.
+const RECLUSTER_CAPTION = "Computed from round 2's updates. Nothing has been moved: applying a new grouping starts a new run with a new privacy budget.";
+let reclusterBusy = false;
+
+function membersOf(assignment) {
+  const groups = {};
+  for (const [client, cluster] of Object.entries(assignment)) (groups[cluster] ||= []).push(client);
+  return groups;
+}
+
+function similarityTable(matrix, clients) {
+  // the cluster sends an n-by-n matrix whose rows follow clients_clustered
+  if (!Array.isArray(matrix) || !clients || matrix.length !== clients.length) return "";
+  const short = (c) => esc(c.replace(/^client-/, ""));
+  const head = `<tr><th></th>${clients.map(c => `<th scope="col">${short(c)}</th>`).join("")}</tr>`;
+  const body = clients.map((a, i) => `<tr><th scope="row">${short(a)}</th>${matrix[i].map(v => `<td>${fmt(v, 2)}</td>`).join("")}</tr>`).join("");
+  return `<table class="similarity"><caption>Cosine similarity of the laptops' updates</caption>${head}${body}</table>`;
+}
+
+function renderRecluster(r, current) {
+  const proposed = membersOf(r.assignment || {});
+  const moved = r.moved || {};
+  const side = (title, groups) => `<div class="grouping"><h3>${title}</h3>${Object.keys(groups).sort().map(cid =>
+    `<p><b>${esc(cid)}</b> ${groups[cid].slice().sort().map(c => `<span class="${moved[c] ? "moved" : ""}">${esc(c)}</span>`).join(", ") || "nobody"}</p>`).join("")}</div>`;
+  const movedList = Object.entries(moved).map(([c, v]) => `${esc(c)} from ${esc(v[0])} to ${esc(v[1])}`);
+  const verdict = r.method === "static_fallback"
+    ? `<p class="fine warn">The cluster keeps the project grouping: ${esc(r.reason)}</p>`
+    : movedList.length ? `<p class="fine">It would move ${movedList.join("; ")}.</p>`
+    : `<p class="fine">It would move nobody: the updates agree with the project grouping.</p>`;
+  return `<div class="groupings">${side("Now", current)}${side("Proposed", proposed)}</div>${verdict}
+    ${similarityTable(r.similarity, r.clients_clustered)}
+    <p class="fine caption">${RECLUSTER_CAPTION}</p>`;
+}
+
+function syncRecluster(state) {
+  const button = document.getElementById("recluster");
+  button.disabled = reclusterBusy || !state.recluster_ready;
+  button.title = state.recluster_ready ? "" : "Available once every cluster has merged round 2";
+}
+
+document.getElementById("recluster").onclick = async () => {
+  const out = document.getElementById("recluster-result");
+  reclusterBusy = true; document.getElementById("recluster").disabled = true;
+  note("Asking the cluster which grouping it would choose…");
+  const [r, state] = await Promise.all([apiPost("/api/live/recluster"), apiGet("/api/live/state")]);
+  reclusterBusy = false;
+  if (!r.ok) {
+    // the cluster's own sentence (nothing merged yet, one cluster only), not an error page
+    out.innerHTML = `<p class="fine warn">${esc(errText(r.body))}</p>`;
+    note(`re-cluster: ${errText(r.body)}`);
+  } else {
+    const current = {};
+    for (const [cid, c] of Object.entries((state.body || {}).clusters || {}))
+      current[cid] = ((c.cluster || {}).members || c.planned_members || []).slice();
+    out.innerHTML = renderRecluster(r.body, current);
+    note(`re-cluster (dry run): ${r.body.method === "static_fallback" ? "keeps the project grouping" : `${Object.keys(r.body.moved || {}).length} laptop(s) would move`}`);
+  }
+  refresh();
+};
+
 async function refresh() {
   if (needLogin) return;
   const r = await apiGet("/api/live/state");
@@ -200,7 +261,7 @@ async function refresh() {
     document.getElementById("lanes").innerHTML = `<div class="problem"><b>Can't read the round.</b><p>${esc(errText(r.body))}</p><p>Check that the cluster and registry are running on this laptop.</p></div>`;
     return;
   }
-  announce(r.body); render(r.body);
+  announce(r.body); render(r.body); syncRecluster(r.body);
 }
 
 const verbs = { aggregate: "Merging", publish: "Publishing", evaluate: "Starting the evaluation", promote: "Asking the registry" };

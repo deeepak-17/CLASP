@@ -172,6 +172,15 @@ Six tables (`registry/db.py`); foreign keys are enforced.
 The endpoint contract is the route list in the module docstring of
 `services/registry/src/registry/app.py` (16 routes).
 
+### Re-clustering, as built (D4)
+
+Rounds 1–2 use the project grouping (D1). After round 2 the panel's "Re-cluster
+(dry run)" button asks the cluster for the grouping it would choose from the
+round's updates (k-means, k = 2, on their cosine similarity) and shows it beside
+the current one, with the similarity matrix. It is a report: the panel always
+sends `apply: false`, and applying a grouping would start a new run with a new
+privacy budget. See `docs/decisions/2026-11-14-amended-decisions.md` (D4).
+
 ### Security, as built (D7)
 
 Full detail: `docs/mtls_setup.md`.
