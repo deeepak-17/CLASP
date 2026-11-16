@@ -61,10 +61,14 @@ issue registry registry serverAuth,clientAuth "DNS:registry,DNS:localhost,IP:127
 issue cluster cluster serverAuth,clientAuth "DNS:cluster,DNS:localhost,IP:127.0.0.1$lan_sans"
 issue client clasp-dev-client clientAuth
 issue demo-ui demo-ui clientAuth            # the panel's calls to cluster + registry
-mkdir -p registry cluster demo-ui
+# The operator's certificate (role "admin": registry GC and restore, every
+# cluster and registry route). It stays on laptop A; no service presents it.
+issue admin clasp-admin clientAuth
+mkdir -p registry cluster demo-ui admin
 cp ca.pem registry.pem registry.key registry/
 cp ca.pem cluster.pem cluster.key cluster/
 cp ca.pem demo-ui.pem demo-ui.key demo-ui/
+cp ca.pem admin.pem admin.key admin/
 
 # One directory per edge laptop: copy edges/<client_id>/ onto that laptop.
 for cid in $EDGE_CLIENTS; do
@@ -75,6 +79,7 @@ done
 
 echo "wrote $(pwd):"
 echo "  registry/  cluster/  demo-ui/   mounted into the containers on laptop A"
+echo "  admin/                          the operator's certificate (CN clasp-admin); keep it on laptop A"
 echo "  edges/<client_id>/              ca.pem client.pem client.key — copy to that edge laptop"
 echo "  SANs: registry, cluster, localhost, 127.0.0.1${lan_sans//,/ }"
 echo "ca-private/ca.key stays on this machine — no container or laptop ever needs the CA key"

@@ -71,8 +71,20 @@ from contracts import (
     PrivacySpec,
     PromotionAction,
 )
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
+from security.auth.roles import ROLE_ADMIN, ROLE_CLUSTER, ROLE_EVALUATION, require_roles
+from security.mtls.peer import peer_identity
 
 from . import __version__
 from .cascade import apply_cascade, plan_cascade, write_cascade_files
@@ -264,17 +276,51 @@ def _parse_save_meta(raw: str) -> dict:
         raise HTTPException(422, f"invalid meta: {e}") from e
 
 
+# ---- who is calling (U5) ------------------------------------------------------
+#
+# Services identify each other by mTLS certificate. Under TLS ``registry.serve``
+# runs ``PeerCertH11Protocol``, which puts the verified certificate's CN in the
+# request scope; the CN maps to a role (``security.auth.roles``) and each route
+# below names the roles allowed to call it. Over plain HTTP there is no
+# certificate name and every route is open, as before (U6).
+#
+#   GET /healthz                                   everyone
+#   every other GET                                svc:cluster, svc:evaluation, admin
+#   POST /adapters/{name}/versions                 svc:cluster, admin
+#   POST .../promote, .../compose, /sync/{id}/done svc:evaluation, admin
+#   POST .../restore                               svc:evaluation, admin
+#   POST .../gc, POST /gc                          admin
+_identity_provider = None
+
+
+def configure_identity(provider) -> None:
+    """Replace how the caller's certificate name is read (tests: a header).
+    ``None`` restores the default, the verified peer name in the request scope."""
+    global _identity_provider
+    _identity_provider = provider
+
+
+def _caller(request: Request) -> str | None:
+    return (_identity_provider or peer_identity)(request)
+
+
+READERS = require_roles(ROLE_CLUSTER, ROLE_EVALUATION, ROLE_ADMIN, identity=_caller)
+PUBLISHERS = require_roles(ROLE_CLUSTER, ROLE_ADMIN, identity=_caller)
+DECIDERS = require_roles(ROLE_EVALUATION, ROLE_ADMIN, identity=_caller)
+ADMINS = require_roles(ROLE_ADMIN, identity=_caller)
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok", "service": "registry", "contracts": CONTRACTS_VERSION}
 
 
-@app.get("/adapters")
+@app.get("/adapters", dependencies=[Depends(READERS)])
 def list_adapters() -> dict:
     return {"adapters": get_store().list_adapters()}
 
 
-@app.post("/adapters/{name}/versions", status_code=201)
+@app.post("/adapters/{name}/versions", status_code=201, dependencies=[Depends(PUBLISHERS)])
 def save_version(
     name: str,
     file: UploadFile = File(..., description="safetensors payload"),
@@ -293,7 +339,7 @@ def save_version(
     return _metadata_to_dict(written)
 
 
-@app.get("/adapters/{name}/versions")
+@app.get("/adapters/{name}/versions", dependencies=[Depends(READERS)])
 def list_versions(name: str) -> dict:
     store = get_store()
     versions = store.list_versions(name)
@@ -307,12 +353,12 @@ def list_versions(name: str) -> dict:
     }
 
 
-@app.get("/adapters/{name}/versions/{version}")
+@app.get("/adapters/{name}/versions/{version}", dependencies=[Depends(READERS)])
 def get_version(name: str, version: int) -> dict:
     return _metadata_to_dict(get_store().get_metadata(name, version))
 
 
-@app.get("/adapters/{name}/versions/{version}/file")
+@app.get("/adapters/{name}/versions/{version}/file", dependencies=[Depends(READERS)])
 def download_version(name: str, version: int) -> Response:
     payload = get_store().load_payload(name, version)
     return Response(
@@ -322,7 +368,7 @@ def download_version(name: str, version: int) -> Response:
     )
 
 
-@app.get("/adapters/{name}/active")
+@app.get("/adapters/{name}/active", dependencies=[Depends(READERS)])
 def get_active(name: str) -> dict:
     store = get_store()
     active = store.get_active(name)
@@ -331,13 +377,13 @@ def get_active(name: str) -> dict:
     return _metadata_to_dict(store.get_metadata(name, active))
 
 
-@app.get("/adapters/{name}/lineage")
+@app.get("/adapters/{name}/lineage", dependencies=[Depends(READERS)])
 def get_lineage(name: str) -> dict:
     """Every version with its parents (clients / cluster+client) and decisions."""
     return build_lineage(get_store(), name)
 
 
-@app.post("/adapters/{name}/compose", status_code=201)
+@app.post("/adapters/{name}/compose", status_code=201, dependencies=[Depends(DECIDERS)])
 def compose(name: str, response: Response, body: dict = Body(...)) -> dict:
     """Store ``alpha*cluster + beta*client`` as one COMPOSITE version of ``name``.
 
@@ -409,7 +455,7 @@ def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...
     return eval_result, baseline_guard
 
 
-@app.post("/adapters/{name}/promote")
+@app.post("/adapters/{name}/promote", dependencies=[Depends(DECIDERS)])
 def promote(name: str, body: dict = Body(...)) -> dict:
     """Apply the D5 two-sided rule to an inactive candidate version.
 
@@ -513,7 +559,7 @@ def _promote(name: str, body: dict) -> dict:
     return result
 
 
-@app.post("/adapters/{name}/restore")
+@app.post("/adapters/{name}/restore", dependencies=[Depends(DECIDERS)])
 def restore(name: str, body: dict = Body(...)) -> dict:
     """Repoint ``active`` by hand — the rollback drill and the D11 restore path.
 
@@ -595,7 +641,7 @@ def _gc_report(name: str, plan: RetentionPlan, dry_run: bool) -> dict:
     }
 
 
-@app.post("/adapters/{name}/gc")
+@app.post("/adapters/{name}/gc", dependencies=[Depends(ADMINS)])
 def gc_one(name: str, body: dict = Body(default={})) -> dict:
     """Retention for one adapter. Body: ``{"keep_last"?: int, "dry_run"?: bool}``.
 
@@ -616,7 +662,7 @@ def _gc_one(name: str, body: dict) -> dict:
     return _gc_report(name, plan, dry_run)
 
 
-@app.post("/gc")
+@app.post("/gc", dependencies=[Depends(ADMINS)])
 def gc_all(body: dict = Body(default={})) -> dict:
     """Retention across every adapter, with one shared composite-reference scan."""
     with _WRITE_LOCK:
@@ -639,7 +685,7 @@ def _gc_all(body: dict) -> dict:
     return {"dry_run": dry_run, "keep_last": keep_last, "adapters": reports}
 
 
-@app.get("/adapters/{name}/promotions")
+@app.get("/adapters/{name}/promotions", dependencies=[Depends(READERS)])
 def list_promotions(name: str) -> dict:
     store = get_store()
     if name not in store.list_adapters():
@@ -650,7 +696,7 @@ def list_promotions(name: str) -> dict:
     }
 
 
-@app.get("/privacy/ledger")
+@app.get("/privacy/ledger", dependencies=[Depends(READERS)])
 def privacy_ledger(cluster_id: str | None = None) -> dict:
     """D7: what each client's run has spent, as recorded with each cluster version.
 
@@ -665,7 +711,7 @@ def privacy_ledger(cluster_id: str | None = None) -> dict:
             "rows": get_store().repo.privacy_ledger(cluster_id)}
 
 
-@app.get("/sync/pending")
+@app.get("/sync/pending", dependencies=[Depends(READERS)])
 def sync_pending() -> dict:
     """Cluster promote/reject steps recorded with a decision and not yet applied."""
     keys = ("id", "adapter", "version", "cluster_id", "sha256", "action", "attempts", "last_error",
@@ -674,7 +720,7 @@ def sync_pending() -> dict:
                         for row in get_store().repo.pending_cluster_sync()]}
 
 
-@app.post("/sync/{sync_id}/done")
+@app.post("/sync/{sync_id}/done", dependencies=[Depends(DECIDERS)])
 def sync_done(sync_id: int, body: dict = Body(...)) -> dict:
     """Report a cluster step. Body: ``{"ok": bool, "error"?: str | null}``.
 

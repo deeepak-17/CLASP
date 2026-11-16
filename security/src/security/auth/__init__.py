@@ -8,14 +8,36 @@ from .hmac_signer import (
     verify_signature,
 )
 from .jwt_handler import JWTConfig, TokenError, create_token, verify_token
+from .roles import (
+    DEFAULT_ROLES,
+    ROLE_ADMIN,
+    ROLE_CLUSTER,
+    ROLE_EDGE,
+    ROLE_EVALUATION,
+    ROLE_OPEN,
+    ROLE_UNKNOWN,
+    load_role_table,
+    require_roles,
+    role_of,
+)
 
 __all__ = [
+    "DEFAULT_ROLES",
+    "ROLE_ADMIN",
+    "ROLE_CLUSTER",
+    "ROLE_EDGE",
+    "ROLE_EVALUATION",
+    "ROLE_OPEN",
+    "ROLE_UNKNOWN",
     "APIKeyStore",
     "JWTConfig",
     "TokenError",
     "create_token",
     "generate_api_key",
     "hash_api_key",
+    "load_role_table",
+    "require_roles",
+    "role_of",
     "sign_adapter_upload",
     "sign_payload",
     "verify_adapter_upload",
