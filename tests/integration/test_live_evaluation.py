@@ -313,3 +313,53 @@ def test_a_humaneval_era_evidence_file_counts_as_not_evaluated(tmp_path, monkeyp
     entry["guard"] = entry["baseline_guard"] = [SCORES["candidate"]["guard"]]
     (tmp_path / "web-v2.json").write_text(json.dumps(old), encoding="utf-8")
     assert evidence.evaluated_version("web", 2, "b" * 64) is False
+
+
+# --------------------------------------------------------------------------- #
+# U4: the evaluator signs what it measured
+# --------------------------------------------------------------------------- #
+EVAL_SECRET = "5e" * 32
+
+
+def test_the_evidence_carries_the_promote_body_signed_by_the_evaluator(tmp_path, monkeypatch):
+    from security.auth.hmac_signer import verify_evaluation
+
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    doc = _write(tmp_path, _script())
+    promote = doc["promote"]
+    assert promote["candidate_sha256"] == "b" * 64
+    assert promote["eval"]["adapter"] == {"name": "cluster-web", "version": 2, "kind": "cluster",
+                                          "cluster_id": "web"}
+    assert promote["eval"]["in_project"] == SCORES["candidate"]["in_project"]
+    assert promote["eval"]["baseline_in_project"] == SCORES["baseline"]["in_project"]
+    assert promote["eval"]["guard"] == [SCORES["candidate"]["guard"]]
+    assert promote["eval"]["baseline_noise_band"] == 0.01 and promote["eval"]["seed"] == 0
+    assert promote["baseline_guard"] == [SCORES["baseline"]["guard"]]
+    assert verify_evaluation("cluster-web", 2, "b" * 64, promote["eval"], promote["baseline_guard"],
+                             promote["eval_signature"], EVAL_SECRET)
+    # the secret is in neither the document nor its file
+    assert EVAL_SECRET not in json.dumps(doc)
+
+
+def test_without_a_secret_the_promote_body_is_there_unsigned(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLASP_EVAL_HMAC_SECRET", raising=False)
+    monkeypatch.delenv("CLASP_EVAL_HMAC_SECRET_FILE", raising=False)
+    promote = _write(tmp_path, _script())["promote"]
+    assert promote["eval_signature"] is None and promote["candidate_sha256"] == "b" * 64
+
+
+def test_the_panel_gets_the_evaluators_promote_body_with_the_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    doc = _write(tmp_path, _script())
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    ev = evidence.evidence_for("web", version=2, sha256="b" * 64)
+    assert ev["promote"] == doc["promote"]
+
+
+def test_evidence_written_before_signing_existed_has_no_promote_body(tmp_path, monkeypatch):
+    mod = _script()
+    doc = _write(tmp_path, mod)
+    del doc["promote"]
+    mod.evidence_path(tmp_path, "web", 2).write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    assert evidence.evidence_for("web", version=2, sha256="b" * 64)["promote"] is None

@@ -3,7 +3,42 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
+
+
+class SecretConfigError(ValueError):
+    """A secret is configured but cannot be used (unreadable or empty)."""
+
+
+def secret_from_env(name: str, env: Mapping[str, str] | None = None) -> str | None:
+    """A shared secret from ``<name>``, else from the file ``<name>_FILE`` names (C3).
+
+    ``None`` when neither is set: the check that needs it is then skipped with
+    a warning (the fall-back, C11). A variable that is set but empty, or a file
+    that is missing or empty, is a :class:`SecretConfigError`: a secret that
+    was meant to be there must not quietly turn the check off. The message
+    names the variable and never the value.
+    """
+    env = os.environ if env is None else env
+    file_var = f"{name}_FILE"
+    if name in env:
+        value = env[name].strip()
+        if not value:
+            raise SecretConfigError(f"{name} is set but empty")
+        return value
+    if env.get(file_var):
+        try:
+            value = Path(env[file_var]).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise SecretConfigError(
+                f"{file_var} names a file that cannot be read ({type(exc).__name__})") from exc
+        if not value:
+            raise SecretConfigError(f"{file_var} names an empty file")
+        return value
+    return None
 
 
 def sign_payload(payload: bytes, secret: str) -> str:
@@ -91,3 +126,34 @@ def verify_adapter_upload(tensors: dict[str, bytes], metadata: dict[str, Any], s
     """
     expected_signature = sign_adapter_upload(tensors, metadata, secret)
     return hmac.compare_digest(expected_signature, signature)
+
+
+def evaluation_message(adapter: str, version: int, candidate_sha256: str,
+                       eval_result: Mapping[str, Any], baseline_guard: Any) -> bytes:
+    """The bytes an evaluation signature covers: which adapter version (by
+    number and by the sha256 of its weights) was measured, and every number
+    measured. Canonical JSON, so key order and transport do not matter."""
+    return json.dumps(
+        {"adapter": adapter, "version": version, "candidate_sha256": candidate_sha256,
+         "eval": eval_result, "baseline_guard": baseline_guard},
+        sort_keys=True, separators=(",", ":")).encode()
+
+
+def sign_evaluation(*, adapter: str, version: int, candidate_sha256: str,
+                    eval_result: Mapping[str, Any], baseline_guard: Any, secret: str) -> str:
+    """Sign an evaluation result for the registry's ``/promote`` (U4)."""
+    return sign_payload(
+        evaluation_message(adapter, version, candidate_sha256, eval_result, baseline_guard), secret)
+
+
+def verify_evaluation(adapter: str, version: int, candidate_sha256: str,
+                      eval_result: Mapping[str, Any], baseline_guard: Any,
+                      signature: Any, secret: str) -> bool:
+    """Whether ``signature`` is the evaluator's over exactly these values."""
+    if not isinstance(signature, str) or not signature:
+        return False
+    try:
+        message = evaluation_message(adapter, version, candidate_sha256, eval_result, baseline_guard)
+    except (TypeError, ValueError):
+        return False
+    return verify_signature(message, signature, secret)

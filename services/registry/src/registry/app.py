@@ -83,6 +83,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import JSONResponse
+from security.auth.hmac_signer import SecretConfigError, secret_from_env, verify_evaluation
 from security.auth.roles import ROLE_ADMIN, ROLE_CLUSTER, ROLE_EVALUATION, require_roles
 from security.mtls.peer import peer_identity
 
@@ -466,10 +467,15 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     the active version (409) and not already be decided (409). Body::
 
         {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...],
+         "candidate_sha256"?: str, "eval_signature"?: str,
          "composite"?: {"name", "cluster", "client", "alpha", "beta"}}
 
     ``baseline_guard`` isn't part of the EvalResult contract — it's an
     API-boundary extension, same pattern as `save`'s ``meta`` envelope.
+    ``candidate_sha256`` names the bytes that were evaluated (409 when they are
+    not this version's) and ``eval_signature`` is the evaluator's HMAC over the
+    result, required when the registry has the shared secret (401 otherwise);
+    see ``_check_evaluation``.
 
     With ``composite`` (D6), a PROMOTE also stores the pre-merged composite
     built from the parts' active versions — i.e. including this candidate.
@@ -481,6 +487,48 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     """
     with _WRITE_LOCK:
         return _promote(name, body)
+
+
+EVAL_SECRET_ENV = "CLASP_EVAL_HMAC_SECRET"
+
+
+def _check_evaluation(name: str, version: int, stored_sha256: str, body: dict) -> None:
+    """The evaluation must be about this version's bytes, and the evaluator's (U4).
+
+    ``candidate_sha256``, when sent, must be the stored version's sha256: an
+    evaluation of other bytes decides nothing about these (409). With the
+    shared secret configured (``CLASP_EVAL_HMAC_SECRET`` or the file
+    ``CLASP_EVAL_HMAC_SECRET_FILE`` names), ``candidate_sha256`` and a valid
+    ``eval_signature`` over ``{adapter, version, candidate_sha256, eval,
+    baseline_guard}`` are required (401). Without a secret the signature is not
+    checked and a warning says so (the fall-back, C11). A secret that is
+    configured but unreadable refuses the promote (500): it is not "no secret".
+    Raised before ``decide``: a refused promote records nothing.
+    """
+    try:
+        secret = secret_from_env(EVAL_SECRET_ENV)
+    except SecretConfigError as e:
+        raise HTTPException(500, f"evaluation signature cannot be checked: {e}") from e
+    sent_sha = body.get("candidate_sha256")
+    if sent_sha is not None and sent_sha != stored_sha256:
+        raise HTTPException(
+            409, f"evaluation was run on different bytes: {name} v{version} is "
+                 f"{stored_sha256[:12]}, the evaluation names {str(sent_sha)[:12]}")
+    if secret is None:
+        _log.warning("%s is not set: the evaluation result for %s v%s is accepted unsigned",
+                     EVAL_SECRET_ENV, name, version)
+        return
+    if sent_sha is None:
+        raise HTTPException(401, "candidate_sha256 is required: evaluation results are signed "
+                                 "together with the sha256 of the version they measured")
+    if not body.get("eval_signature"):
+        raise HTTPException(401, "eval_signature is required: this registry accepts only "
+                                 "evaluation results signed by the evaluator")
+    if not verify_evaluation(name, version, sent_sha, body["eval"],
+                             body.get("baseline_guard", []), body["eval_signature"], secret):
+        raise HTTPException(401, "the evaluation signature does not match the result sent: "
+                                 "it was changed after the evaluator signed it, or signed "
+                                 "with another secret")
 
 
 def _newly_written(store: RegistryStore, metas: list) -> list:
@@ -524,6 +572,7 @@ def _promote(name: str, body: dict) -> dict:
         raise HTTPException(409, f"v{version} is not a candidate: active is v{active_before}")
     if version in store.repo.decided_versions(name):
         raise HTTPException(409, f"v{version} was already decided")
+    _check_evaluation(name, version, candidate.sha256, body)
 
     decision = decide(eval_result, baseline_guard=baseline_guard,
                       active_version_before=active_before)

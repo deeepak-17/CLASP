@@ -77,9 +77,16 @@ for cid in $EDGE_CLIENTS; do
   cp ca.pem "edges/$cid/ca.pem"
 done
 
+# Shared secrets (C3), beside the certificates and never in the repository.
+# eval_hmac.key: the evaluator signs its results with it and the registry
+# verifies them on /promote (CLASP_EVAL_HMAC_SECRET_FILE on both).
+mkdir -p secrets
+[ -s secrets/eval_hmac.key ] || openssl rand -hex 32 > secrets/eval_hmac.key
+
 echo "wrote $(pwd):"
 echo "  registry/  cluster/  demo-ui/   mounted into the containers on laptop A"
 echo "  admin/                          the operator's certificate (CN clasp-admin); keep it on laptop A"
 echo "  edges/<client_id>/              ca.pem client.pem client.key — copy to that edge laptop"
+echo "  secrets/eval_hmac.key           signs evaluation results (evaluator) and verifies them (registry)"
 echo "  SANs: registry, cluster, localhost, 127.0.0.1${lan_sans//,/ }"
 echo "ca-private/ca.key stays on this machine — no container or laptop ever needs the CA key"

@@ -93,16 +93,49 @@ def _guard(metrics: Dict) -> List[Dict]:
              "n_examples": int(metrics["n_examples"])}]
 
 
+def promote_body(cluster_id: str, cand: Dict, cand_scores: Dict, base_scores: Dict,
+                 *, band: Dict) -> Dict:
+    """What ``POST /adapters/{name}/promote`` is sent for this candidate, signed.
+
+    The evaluator is the one that measured, so it is the one that signs (U4):
+    an HMAC over the adapter name, the version, the sha256 of the bytes that
+    were scored, and every number. The panel forwards this block as it is; the
+    registry verifies it, so a metric changed on the way, or a result attached
+    to other bytes, is refused. The secret is ``CLASP_EVAL_HMAC_SECRET`` or the
+    file ``CLASP_EVAL_HMAC_SECRET_FILE`` names; with neither, ``eval_signature``
+    is None and a registry without the secret accepts the result with a warning.
+    """
+    from security.auth.hmac_signer import secret_from_env, sign_evaluation
+
+    name, version, sha = cand["ref"]["name"], cand["ref"]["version"], cand["sha256"]
+    result = {
+        "adapter": {"name": name, "version": version, "kind": "cluster", "cluster_id": cluster_id},
+        "in_project": cand_scores["in_project"],
+        "guard": _guard(cand_scores["guard"]),
+        "baseline_in_project": base_scores["in_project"],
+        "baseline_noise_band": float(band["value"]),
+        "seed": 0,
+    }
+    baseline_guard = _guard(base_scores["guard"])
+    secret = secret_from_env("CLASP_EVAL_HMAC_SECRET")
+    signature = (sign_evaluation(adapter=name, version=version, candidate_sha256=sha,
+                                 eval_result=result, baseline_guard=baseline_guard, secret=secret)
+                 if secret else None)
+    return {"eval": result, "baseline_guard": baseline_guard, "candidate_sha256": sha,
+            "eval_signature": signature}
+
+
 def evidence_document(cluster_id: str, cand: Dict, base: Dict | None, cand_scores: Dict,
                       base_scores: Dict, *, band: Dict, details: Dict) -> Dict:
     """The file demo_ui.evidence reads (the CLASP_EVAL_EVIDENCE shape, plus
-    which exact versions were measured). ``base`` is None when the baseline was
-    the bare base model."""
+    which exact versions were measured, plus the signed promote body). ``base``
+    is None when the baseline was the bare base model."""
     from evaluation.eval_harness.line_guard import paired_noise
 
     guard_noise = float(paired_noise(base_scores["guard_rows"], cand_scores["guard_rows"]))
     guard_sha = cand_scores.get("guard_examples_sha256")
     return {
+        "promote": promote_body(cluster_id, cand, cand_scores, base_scores, band=band),
         "source": (f"scripts/evaluate_candidate.py on {platform.node()}, "
                    f"{datetime.now(timezone.utc).isoformat(timespec='seconds')}"),
         "candidate_version": cand["ref"]["version"], "candidate_sha256": cand["sha256"],

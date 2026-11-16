@@ -573,7 +573,8 @@ def _cluster_outcome(sync: dict, sync_id: int | None) -> dict:
 async def live_promote(cluster_id: str) -> dict:
     """Step 5: D5 on the pending candidate, with evaluation's measured
     in-project metric, line-completion guard and noise band (``evidence.py``)
-    instead of constants. The registry decides PROMOTE or REJECT; the cluster
+    instead of constants, in the body the evaluator signed (U4). The registry
+    verifies the signature and decides PROMOTE or REJECT; the cluster
     then promotes or rejects its candidate (matched by the registry's sha256
     for that version), so the edges pull a merge only once it is promoted."""
     from demo_ui.evidence import EvidenceMissing, evidence_for
@@ -592,18 +593,29 @@ async def live_promote(cluster_id: str) -> dict:
             ev = evidence_for(cid, version=cand, sha256=digest)
         except EvidenceMissing as e:
             raise HTTPException(503, str(e)) from e
-        body = {
-            "eval": {
-                "adapter": {"name": name, "version": cand, "kind": "cluster",
-                            "cluster_id": cid},
-                "in_project": ev["in_project"],
-                "guard": ev["guard"],
-                "baseline_in_project": ev["baseline_in_project"],
-                "baseline_noise_band": ev["noise_band"],
-                "seed": 0,
-            },
-            "baseline_guard": ev["baseline_guard"],
-        }
+        signed = ev.get("promote")
+        if signed:
+            # U4: the evaluator built and signed this body; it goes to the
+            # registry exactly as written, so the signature still matches
+            body = {"eval": signed["eval"], "baseline_guard": signed["baseline_guard"],
+                    "candidate_sha256": signed["candidate_sha256"]}
+            if signed.get("eval_signature"):
+                body["eval_signature"] = signed["eval_signature"]
+        else:
+            body = {
+                "eval": {
+                    "adapter": {"name": name, "version": cand, "kind": "cluster",
+                                "cluster_id": cid},
+                    "in_project": ev["in_project"],
+                    "guard": ev["guard"],
+                    "baseline_in_project": ev["baseline_in_project"],
+                    "baseline_noise_band": ev["noise_band"],
+                    "seed": 0,
+                },
+                "baseline_guard": ev["baseline_guard"],
+                # the bytes this evidence was matched to (version and sha256)
+                "candidate_sha256": digest,
+            }
         r = await _send(client, "POST", f"{REGISTRY_BASE}/adapters/{name}/promote", json=body)
         if r.status_code != 200:
             raise HTTPException(r.status_code, f"promote {name}: {_detail(r)}")

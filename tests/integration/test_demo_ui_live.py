@@ -745,3 +745,95 @@ def test_the_page_lists_the_privacy_spend():
     assert "function privacyLines" in html and "rounds_accounted" in html
     # the merge card no longer describes the cluster epsilon as a sum
     assert "plus the adapter it builds on" not in html
+
+
+# --------------------------------------------------------------------------- #
+# U4: evaluation results are signed by the evaluator and verified by the registry
+# --------------------------------------------------------------------------- #
+EVAL_SECRET = "5e" * 32
+
+
+def _signed_evidence(candidate_es: float, baseline_es: float, *, secret=EVAL_SECRET, tamper=None):
+    """Evidence as scripts/evaluate_candidate.py writes it: the promote body it
+    measured, signed with the evaluator's secret."""
+    from security.auth.hmac_signer import sign_evaluation
+
+    plain = _evidence(candidate_es, baseline_es)
+
+    def fake(cluster_id, version=None, sha256=None, **_kw):
+        ev = plain(cluster_id)
+        result = {"adapter": {"name": f"cluster-{cluster_id}", "version": version,
+                              "kind": "cluster", "cluster_id": cluster_id},
+                  "in_project": ev["in_project"], "guard": ev["guard"],
+                  "baseline_in_project": ev["baseline_in_project"],
+                  "baseline_noise_band": ev["noise_band"], "seed": 0}
+        signature = sign_evaluation(adapter=f"cluster-{cluster_id}", version=version,
+                                    candidate_sha256=sha256, eval_result=result,
+                                    baseline_guard=ev["baseline_guard"], secret=secret)
+        promote = {"eval": result, "baseline_guard": ev["baseline_guard"],
+                   "candidate_sha256": sha256, "eval_signature": signature}
+        if tamper:
+            tamper(promote)
+        return {**ev, "promote": promote}
+    return fake
+
+
+def test_a_signed_evaluation_is_promoted_through_the_panel(stack, tmp_path, monkeypatch):
+    ui, cluster_url, registry_url = stack
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)   # the registry's copy
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    sent = _spy_sends(monkeypatch)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _signed_evidence(0.50, 0.45))
+    r = ui.post("/api/live/promote/web")
+    assert r.status_code == 200, r.text
+    assert r.json()["decision"]["action"] == "promote"
+    body = next(j for m, u, j in sent if u.endswith("/adapters/cluster-web/promote"))
+    assert body["candidate_sha256"] == v1["sha256"] and body["eval_signature"]
+    assert _cluster_web(cluster_url)["active_sha256"] == v1["sha256"]
+
+
+def test_a_result_changed_after_signing_is_refused_and_nothing_is_decided(stack, tmp_path,
+                                                                           monkeypatch):
+    import requests
+
+    ui, cluster_url, registry_url = stack
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    assert ui.post("/api/live/register").status_code == 200
+    _round(ui, cluster_url, tmp_path / "r0", seed=1)
+
+    def inflate(promote):  # the numbers were edited after the evaluator signed them
+        promote["eval"]["in_project"] = {**promote["eval"]["in_project"], "edit_similarity": 0.99}
+
+    monkeypatch.setattr("demo_ui.evidence.evidence_for",
+                        _signed_evidence(0.40, 0.45, tamper=inflate))
+    r = ui.post("/api/live/promote/web")
+    assert r.status_code == 401, r.text
+    assert "signature" in r.json()["detail"]
+    decisions = requests.get(f"{registry_url}/adapters/cluster-web/promotions", timeout=10).json()
+    assert decisions["decisions"] == []
+    web = _cluster_web(cluster_url)
+    assert web["active_sha256"] is None and web["candidate_sha256"]  # still waiting, unserved
+
+
+def test_unsigned_evidence_against_a_registry_with_a_secret_is_refused(stack, tmp_path, monkeypatch):
+    ui, cluster_url, _ = stack
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    assert ui.post("/api/live/register").status_code == 200
+    _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))  # no promote body
+    r = ui.post("/api/live/promote/web")
+    assert r.status_code == 401 and "eval_signature" in r.json()["detail"]
+
+
+def test_the_panel_always_names_the_bytes_it_asks_about(stack, tmp_path, monkeypatch):
+    """Without a secret the body still carries the candidate's sha256, so the
+    registry can refuse an evaluation of other bytes."""
+    ui, cluster_url, _ = stack
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    sent = _spy_sends(monkeypatch)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    assert ui.post("/api/live/promote/web").status_code == 200
+    body = next(j for m, u, j in sent if u.endswith("/adapters/cluster-web/promote"))
+    assert body["candidate_sha256"] == v1["sha256"] and "eval_signature" not in body

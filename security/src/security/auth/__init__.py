@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from .api_key import APIKeyStore, generate_api_key, hash_api_key, verify_api_key
 from .hmac_signer import (
+    SecretConfigError,
+    evaluation_message,
+    secret_from_env,
     sign_adapter_upload,
+    sign_evaluation,
     sign_payload,
     verify_adapter_upload,
+    verify_evaluation,
     verify_signature,
 )
 from .jwt_handler import JWTConfig, TokenError, create_token, verify_token
@@ -31,17 +36,22 @@ __all__ = [
     "ROLE_UNKNOWN",
     "APIKeyStore",
     "JWTConfig",
+    "SecretConfigError",
     "TokenError",
     "create_token",
+    "evaluation_message",
     "generate_api_key",
     "hash_api_key",
     "load_role_table",
     "require_roles",
     "role_of",
+    "secret_from_env",
     "sign_adapter_upload",
+    "sign_evaluation",
     "sign_payload",
     "verify_adapter_upload",
     "verify_api_key",
+    "verify_evaluation",
     "verify_signature",
     "verify_token",
 ]
