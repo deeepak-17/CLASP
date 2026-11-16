@@ -14,8 +14,11 @@ network or ray.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
+import json
+import logging
 import os as _os
 import re
 import threading
@@ -37,6 +40,7 @@ from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
+from security.auth.hmac_signer import verify_adapter_upload
 from security.auth.roles import ROLE_ADMIN, ROLE_EVALUATION, require_roles
 from security.dp.ledger import BUDGET_TOLERANCE, RUN_EPSILON_BUDGET, RUN_ROUNDS
 from security.mtls.peer import peer_identity
@@ -740,6 +744,99 @@ def _upload_locked(
     }
 
 
+# ---- upload signatures (U4) ---------------------------------------------------
+#
+# Each edge signs its upload with its own key; the cluster holds every edge's
+# key in the JSON file ``CLASP_UPLOAD_HMAC_SECRETS`` names ({client id: key},
+# written by scripts/make_dev_certs.sh as cluster/upload_hmac.json). mTLS says
+# which laptop is on the other end of the connection; the signature says the
+# body is the one that laptop built: tensors and sample count unchanged.
+UPLOAD_SECRETS_ENV = "CLASP_UPLOAD_HMAC_SECRETS"
+#: Body keys the signature does not cover: the payload itself (signed as raw
+#: bytes), the signature, and a timestamp a relay may add.
+UNSIGNED_UPLOAD_KEYS = ("tensors", "signature", "timestamp")
+_upload_secrets_cache: dict[str, object] = {}
+_log = logging.getLogger("cluster")
+
+
+def _upload_secrets() -> dict[str, str] | None:
+    """Client id -> key, or ``None`` when no file is configured (the fall-back).
+
+    Re-read when the file changes, so a rotated key needs no restart. A file
+    that is configured but missing or malformed is a 500: every upload is
+    refused rather than waved through unsigned.
+    """
+    path = _os.environ.get(UPLOAD_SECRETS_ENV)
+    if not path:
+        return None
+    try:
+        stat = _os.stat(path)
+        stamp = (path, stat.st_mtime_ns, stat.st_size)
+        if _upload_secrets_cache.get("stamp") != stamp:
+            with open(path, encoding="utf-8") as fh:
+                table = json.load(fh)
+            if not isinstance(table, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str) and v.strip()
+                    for k, v in table.items()):
+                raise ValueError("must be a JSON object mapping client ids to non-empty keys")
+            _upload_secrets_cache.update(
+                stamp=stamp, table={k: v.strip() for k, v in table.items()})
+    except (OSError, ValueError) as exc:
+        _upload_secrets_cache.clear()
+        raise HTTPException(
+            status_code=500,
+            detail=f"{UPLOAD_SECRETS_ENV} cannot be used ({type(exc).__name__}: "
+                   f"{exc if isinstance(exc, ValueError) and 'JSON object' in str(exc) else 'unreadable'}); "
+                   f"uploads are refused until it is fixed",
+        ) from exc
+    return _upload_secrets_cache["table"]  # type: ignore[return-value]
+
+
+async def _raw_upload(request: Request) -> dict:
+    """The upload body exactly as it arrived (FastAPI caches the bytes, so the
+    typed ``AdapterUpload`` parameter is parsed from the same ones)."""
+    try:
+        body = await request.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _check_upload_signature(client_id: str, raw: dict | None) -> None:
+    """Refuse (401) an upload whose signature is missing or wrong, for a client
+    the cluster holds a key for. Called before the upload is buffered.
+
+    A client with no configured key is accepted with a warning (C11); with no
+    secrets file at all nothing is checked.
+    """
+    secrets = _upload_secrets()
+    if secrets is None:
+        return
+    secret = secrets.get(client_id)
+    if secret is None:
+        _log.warning("no upload key configured for client %r: its upload is accepted unsigned",
+                     client_id)
+        return
+    refused = HTTPException(status_code=401, detail={
+        "error": "upload_signature_invalid",
+        "hint": (f"the upload from {client_id!r} is not signed with the key laptop A holds for "
+                 f"it: copy the current edge bundle (edge-certs/{client_id}/hmac.key) to that "
+                 f"laptop, or pass --hmac-key"),
+    })
+    signature = (raw or {}).get("signature")
+    if not isinstance(signature, str) or not signature:
+        raise refused
+    try:
+        tensors = {str(t["name"]): base64.b64decode(t["data_b64"], validate=True)
+                   for t in raw["tensors"]}
+        metadata = {k: v for k, v in raw.items() if k not in UNSIGNED_UPLOAD_KEYS}
+        valid = verify_adapter_upload(tensors, metadata, signature, secret)
+    except (KeyError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise refused
+
+
 def _check_budget(upload: AdapterUpload) -> None:
     """D7 (U3): a differentially private upload must fit its client's run budget.
 
@@ -1250,12 +1347,15 @@ def healthz() -> dict[str, object]:
 
 
 @app.post("/uploads", status_code=201)
-def upload_adapter(upload: AdapterUpload, request: Request) -> dict[str, object]:
+def upload_adapter(upload: AdapterUpload, request: Request,
+                   raw: dict = Depends(_raw_upload)) -> dict[str, object]:
     """Seam A, cluster named by ``upload.cluster_id`` (default cluster when
     omitted). The cluster is created on its first upload here — the sprint demo
     relies on it — bounded by ``MAX_CLUSTERS``; use ``PUT /clusters/{id}/members``
     plus ``POST /clusters/{id}/uploads`` where a mistyped id must be a 404."""
-    return _upload(_cluster(upload.cluster_id, create=True), upload, _caller_identity(request))
+    state = _cluster(upload.cluster_id, create=True)
+    _check_upload_signature(upload.client_id, raw)
+    return _upload(state, upload, _caller_identity(request))
 
 
 @app.post("/aggregate", response_model=ClusterAdapterBroadcast, dependencies=[Depends(OPERATORS)])
@@ -1482,12 +1582,14 @@ def _path_matches_body(cluster_id: str, upload: AdapterUpload) -> None:
 
 @app.post("/clusters/{cluster_id}/uploads", status_code=201)
 def upload_adapter_to_cluster(
-    cluster_id: str, upload: AdapterUpload, request: Request
+    cluster_id: str, upload: AdapterUpload, request: Request,
+    raw: dict = Depends(_raw_upload),
 ) -> dict[str, object]:
     # create=False: only ``PUT /clusters/{id}/members`` registers a cluster, so a
     # mistyped id is a 404 and callers cannot mint unlimited clusters.
     state = _cluster(cluster_id)
     _path_matches_body(cluster_id, upload)
+    _check_upload_signature(upload.client_id, raw)
     return _upload(state, upload, _caller_identity(request))
 
 

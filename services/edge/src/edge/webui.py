@@ -173,7 +173,8 @@ class EdgePage:
                  python: str = sys.executable, allow_non_dp: bool = False,
                  allow_foreign_base: bool = False, fedprox_mu: float = DEFAULT_MU,
                  run_id: str = upload.DEFAULT_RUN_ID,
-                 ledger_root: Optional[Path] = None) -> None:
+                 ledger_root: Optional[Path] = None,
+                 hmac_secret: Optional[str] = None) -> None:
         self.cluster_url = cluster_url
         self.client_id = client_id
         self.adapters_root = Path(adapters_root)
@@ -188,6 +189,8 @@ class EdgePage:
         #: This laptop's privacy ledgers, beside the adapters they account for.
         self.ledger_root = Path(ledger_root) if ledger_root else self.adapters_root / "privacy_ledger"
         self._budget_cache: Dict = {}
+        #: This edge's upload key (U4); never sent to the browser or logged.
+        self._hmac_secret = hmac_secret
         self.job = Job()
         #: The last adapter this page sent: id, cluster and round it went into.
         self.last_sent: Optional[Dict] = None
@@ -378,7 +381,8 @@ class EdgePage:
                     adapter["path"], cluster_url=self.cluster_url,
                     client_id=self.client_id or adapter["client_id"], http=self.http,
                     allow_foreign_base=self.allow_foreign_base,
-                    ledger_root=self.ledger_root, log=self.job.log)
+                    ledger_root=self.ledger_root, hmac_secret=self._hmac_secret,
+                    log=self.job.log)
                 self.last_sent = {"adapter": adapter_id, "cluster_id": res["cluster_id"],
                                   "round_id": res["round_id"], "utc": time.time()}
                 self.job.finish(result={k: v for k, v in res.items() if k != "privacy"}
@@ -562,6 +566,8 @@ def main(argv=None) -> int:
                          "(as full adapters)")
     ap.add_argument("--fedprox-mu", type=float, default=DEFAULT_MU,
                     help="FedProx coefficient for fine-tunes started here (0 = off)")
+    ap.add_argument("--hmac-key", type=Path, default=None,
+                    help="this edge's upload key; default: hmac.key in --mtls-dir when present")
     ap.add_argument("--run-id", default=upload.DEFAULT_RUN_ID,
                     help="the federated run fine-tunes started here belong to: its rounds "
                          "share one privacy budget (a new id starts a new budget)")
@@ -570,13 +576,14 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     try:
         http = upload.session_for(args.mtls_dir, args.server_hostname)
+        hmac_secret = upload.read_hmac_key(args.hmac_key, args.mtls_dir)
     except upload.UploadError as exc:
         print(f"edge.webui: {exc}", file=sys.stderr)
         return 1
     page = EdgePage(cluster_url=args.cluster_url, client_id=args.client_id,
                     adapters_root=args.adapters_root, http=http, corpus_root=args.corpus_root,
                     allow_non_dp=args.allow_non_dp, allow_foreign_base=args.allow_foreign_base,
-                    fedprox_mu=args.fedprox_mu, run_id=args.run_id)
+                    fedprox_mu=args.fedprox_mu, run_id=args.run_id, hmac_secret=hmac_secret)
     httpd = serve(page, args.host, args.port)
     print(f"edge page for {args.client_id or 'all clients'} -> http://{args.host}:{args.port}  "
           f"(cluster {args.cluster_url}); ctrl-c to stop")

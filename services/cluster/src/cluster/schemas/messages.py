@@ -152,6 +152,11 @@ class AdapterUpload(BaseModel):
     base_sha256: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
     composition_alpha: float | None = Field(None, gt=0, allow_inf_nan=False)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Optional (U4): the edge's HMAC-SHA256 over every tensor's raw bytes and
+    # the rest of this body (``security.auth.hmac_signer.sign_adapter_upload``).
+    # Verified by the cluster, against the body as it arrived, when it holds a
+    # key for ``client_id`` (see ``cluster.server._check_upload_signature``).
+    signature: str | None = None
     tensors: list[TensorPayload]
 
     @model_validator(mode="after")

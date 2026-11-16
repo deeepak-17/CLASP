@@ -458,3 +458,21 @@ def test_the_page_trains_for_its_run(tmp_path):
 def test_the_page_shows_the_budget_line():
     html = webui.PAGE.read_text(encoding="utf-8")
     assert 'id="budget"' in html and "Privacy budget" in html
+
+def test_the_page_signs_its_uploads_with_the_edges_key(tmp_path):
+    pytest.importorskip("security.auth.hmac_signer")
+    from tests.test_upload import FakeCluster
+
+    fake = FakeCluster()
+    _adapter(tmp_path / "live-1", "client-flask", seed=1, epsilon=3.2254)
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=fake, hmac_secret="k" * 64)
+    page.start_upload("live-1/client-flask")
+    deadline = time.monotonic() + 30
+    while page.job.snapshot()["running"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+    job = page.job.snapshot()
+    assert job["error"] is None, job
+    assert len(fake.uploads[0]["signature"]) == 64
+    # the key is not in the job log or the status the browser reads
+    assert "k" * 64 not in json.dumps(job) + json.dumps(page.status(), default=str)

@@ -71,11 +71,19 @@ cp ca.pem demo-ui.pem demo-ui.key demo-ui/
 cp ca.pem admin.pem admin.key admin/
 
 # One directory per edge laptop: copy edges/<client_id>/ onto that laptop.
+# hmac.key is that edge's upload key (U4): the edge signs every upload with it,
+# and the cluster verifies with its copy in cluster/upload_hmac.json
+# (CLASP_UPLOAD_HMAC_SECRETS), which maps each client id to its key.
+upload_keys=""
 for cid in $EDGE_CLIENTS; do
   mkdir -p "edges/$cid"
   issue "edges/$cid/client" "$cid" clientAuth
   cp ca.pem "edges/$cid/ca.pem"
+  key="$(openssl rand -hex 32)"
+  printf '%s\n' "$key" > "edges/$cid/hmac.key"
+  upload_keys="$upload_keys${upload_keys:+,}\"$cid\":\"$key\""
 done
+printf '{%s}\n' "$upload_keys" > cluster/upload_hmac.json
 
 # Shared secrets (C3), beside the certificates and never in the repository.
 # eval_hmac.key: the evaluator signs its results with it and the registry
@@ -86,7 +94,8 @@ mkdir -p secrets
 echo "wrote $(pwd):"
 echo "  registry/  cluster/  demo-ui/   mounted into the containers on laptop A"
 echo "  admin/                          the operator's certificate (CN clasp-admin); keep it on laptop A"
-echo "  edges/<client_id>/              ca.pem client.pem client.key — copy to that edge laptop"
+echo "  edges/<client_id>/              ca.pem client.pem client.key hmac.key — copy to that edge laptop"
+echo "  cluster/upload_hmac.json        every edge's upload key, for the cluster to verify uploads"
 echo "  secrets/eval_hmac.key           signs evaluation results (evaluator) and verifies them (registry)"
 echo "  SANs: registry, cluster, localhost, 127.0.0.1${lan_sans//,/ }"
 echo "ca-private/ca.key stays on this machine — no container or laptop ever needs the CA key"

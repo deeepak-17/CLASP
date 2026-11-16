@@ -837,3 +837,32 @@ def test_the_panel_always_names_the_bytes_it_asks_about(stack, tmp_path, monkeyp
     assert ui.post("/api/live/promote/web").status_code == 200
     body = next(j for m, u, j in sent if u.endswith("/adapters/cluster-web/promote"))
     assert body["candidate_sha256"] == v1["sha256"] and "eval_signature" not in body
+
+# --------------------------------------------------------------------------- #
+# U4: edge uploads are signed by the edge and verified by the cluster
+# --------------------------------------------------------------------------- #
+def test_a_signed_edge_upload_is_accepted_and_a_wrong_key_is_refused(stack, tmp_path, monkeypatch):
+    ui, cluster_url, _ = stack
+    keys = {"client-flask": "f1" * 32, "client-requests": "e2" * 32}
+    secrets = tmp_path / "upload_hmac.json"
+    secrets.write_text(json.dumps(keys), encoding="utf-8")
+    monkeypatch.setenv("CLASP_UPLOAD_HMAC_SECRETS", str(secrets))
+    assert ui.post("/api/live/register").status_code == 200
+
+    flask = _adapter(tmp_path / "r0", "client-flask", 1)
+    out = upload.upload_adapter(flask, cluster_url=cluster_url, hmac_secret=keys["client-flask"],
+                                log=lambda *_: None)
+    assert out["response"]["pending_uploads"] == 1 and out["signed"] is True
+
+    requests_adapter = _adapter(tmp_path / "r0", "client-requests", 2)
+    with pytest.raises(upload.UploadError) as wrong:       # signed with another edge's key
+        upload.upload_adapter(requests_adapter, cluster_url=cluster_url,
+                              hmac_secret=keys["client-flask"], log=lambda *_: None)
+    assert wrong.value.status == 401 and "hmac.key" in wrong.value.hint
+    with pytest.raises(upload.UploadError) as unsigned:
+        upload.upload_adapter(requests_adapter, cluster_url=cluster_url, log=lambda *_: None)
+    assert unsigned.value.status == 401
+    assert _cluster_web(cluster_url)["uploaded_clients"] == ["client-flask"]
+    # a refused DP upload was not charged to the laptop's privacy ledger
+    ledger = upload.DEFAULT_LEDGER_ROOT / "client-requests"
+    assert not ledger.exists() or not any(ledger.iterdir())

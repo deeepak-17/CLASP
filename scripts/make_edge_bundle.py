@@ -11,7 +11,8 @@ commands already use, so it unzips straight into the checkout:
     services/edge/artifacts/<set>/<client>/adapter/      the pre-trained adapter(s)
     services/edge/artifacts/<set>/<client>/manifest.json FedAvg weight + DP privacy block
     datasets/materialized/<cluster>/<client>/            (--with-corpus) for a live fine-tune
-    edge-certs/<client>/                                 (--certs) ca.pem client.pem client.key
+    edge-certs/<client>/                                 (--certs) ca.pem client.pem client.key,
+                                                         and hmac.key (this edge's upload key)
     EDGE_<client>.md, start_edge_<client>.ps1            what to run on that laptop
 
 Uploading needs no GPU and no model: ``edge.upload`` only reads the adapter
@@ -64,6 +65,11 @@ which is what the next round needs. The new adapter shows up on the page, ready 
 Only adapters trained with DP on this laptop can be sent; the pre-trained adapters in this
 bundle are there for reference.
 """ if corpus else "")
+    keys_note = (f"""
+
+`edge-certs/{client}/` holds this laptop's certificate and `hmac.key`, its upload key: every
+upload is signed with it, and laptop A refuses one that was changed on the way. Both are
+private to this laptop.""" if certs else "")
     return f"""# Edge laptop: {client} (cluster `{cluster}`)
 
 Laptop A runs the cluster at `{cluster_url}`. This laptop uploads `{client}`'s adapter to it.
@@ -78,7 +84,7 @@ pip install -e contracts -e services/edge --no-deps
 pip install numpy safetensors requests{" -e security" if certs else ""}
 ```
 
-Uploading needs no GPU and no model weights.
+Uploading needs no GPU and no model weights.{keys_note}
 
 ## On the day
 
@@ -144,6 +150,10 @@ def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus
                                  f"CLASP_EDGE_CLIENTS={client} scripts/make_dev_certs.sh first")
             for n in ("ca.pem", "client.pem", "client.key"):
                 add(edge_certs / n, f"edge-certs/{client}/{n}")
+            # U4: this edge's own upload key, and never another edge's. The
+            # upload and the page pick it up from the certificate directory.
+            if (edge_certs / "hmac.key").exists():
+                add(edge_certs / "hmac.key", f"edge-certs/{client}/hmac.key")
         z.writestr(f"EDGE_{client}.md",
                    run_steps(client, cluster, cluster_url, found, bool(certs_dir), with_corpus))
         z.writestr(f"start_edge_{client}.ps1", start_script(client, cluster_url, bool(certs_dir)))
@@ -151,7 +161,8 @@ def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus
     print(f"  client {client}, cluster {cluster}, adapters {found}"
           f"{', corpus' if with_corpus else ''}{', certs' if certs_dir else ''}")
     if certs_dir:
-        print("  contains this edge's private key: hand it over directly, do not post it anywhere")
+        print("  contains this edge's private key and upload key: hand it over directly, "
+              "do not post it anywhere")
     return out
 
 
