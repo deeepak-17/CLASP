@@ -15,6 +15,22 @@ laptop A shows during the multi-laptop demo (docs/multi-laptop-demo.md). It
   4. proxies ``/api/cluster/*`` and ``/api/registry/*`` straight through, for
      inspection.
 
+People log in (U5): with a users file configured (``CLASP_USERS_FILE``, written
+by ``scripts/make_users.py``) every ``/api/*`` route except ``/api/health`` and
+``/api/login`` needs ``Authorization: Bearer <token>`` for a user whose role is
+``operator``. ``POST /api/login`` gives the token; it lasts 8 hours and is
+signed with ``CLASP_JWT_SECRET`` (or the file ``CLASP_JWT_SECRET_FILE`` names;
+with neither, a key made for this process). With no users file the panel runs
+open, and says so when it starts (the fall-back, C11).
+
+In front of every route (U4), in the order a request meets them: security
+headers (a Content-Security-Policy that allows this origin and the page's
+typeface, nothing inline), a 1 MiB body limit, a rate limit (600 requests a
+minute per address in bursts of 60, ``CLASP_RATE_LIMIT_PER_MIN``;
+``/api/health`` is exempt) and the audit recorder: every refused login or call
+and every accepted action is a line in the audit trail (``CLASP_AUDIT_LOG``;
+the console when it is not set), under the logged-in person's name.
+
 The edge laptops upload their own trained adapters (``edge.webui``); nothing
 here makes up tensors or metrics. The panel pages that did (synthetic
 uploads, hardcoded promote metrics, a staged regression) were removed.
@@ -26,7 +42,9 @@ running on :8002/:8004) — or ``python scripts/run_services.py --ui``.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -35,9 +53,30 @@ import time
 from pathlib import Path
 
 import httpx
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from security.audit import AccessAuditMiddleware, ServiceAudit
+from security.auth.hmac_signer import SecretConfigError
+from security.auth.jwt_handler import JWTConfig, TokenError, verify_token
+from security.auth.users import (
+    ROLE_OPERATOR,
+    UserStore,
+    UserStoreError,
+    bearer_claims,
+    issue_token,
+    jwt_config_from_env,
+)
+from security.middleware import (
+    RateLimiter,
+    RateLimitMiddleware,
+    RequestValidationMiddleware,
+    SecurityHeadersConfig,
+    SecurityHeadersMiddleware,
+    rate_limit_from_env,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -48,7 +87,7 @@ REGISTRY_BASE = os.environ.get("CLASP_REGISTRY_URL", "http://localhost:8004")
 
 
 def _tls_verify():
-    """Under mTLS (docker-compose.mtls.yml, run_services.py --mtls-dir) this
+    """Under mTLS (docker-compose.yml and run_services.py by default) this
     panel presents the demo-ui certificate to the cluster and the registry and
     trusts only the CLASP CA; otherwise plain HTTP, as before."""
     import ssl
@@ -80,7 +119,155 @@ CLUSTER_OF = {
     "client-scikit-learn": "scientific",
 }
 
-app = FastAPI(title="CLASP Panel Demo UI")
+_log = logging.getLogger("demo_ui")
+
+# --------------------------------------------------------------------------- #
+# Logins (U5)
+# --------------------------------------------------------------------------- #
+USERS_ENV = "CLASP_USERS_FILE"
+#: ``/api`` routes that need no token: liveness, and the login itself.
+OPEN_API_PATHS = frozenset({"/api/health", "/api/login"})
+_login_cache: dict = {}
+
+
+def _login_settings() -> tuple[UserStore, JWTConfig] | None:
+    """The users and token settings, or ``None`` when no users file is
+    configured (the page then runs open). Raises ``UserStoreError`` /
+    ``SecretConfigError`` when what is configured cannot be used.
+
+    The users file is re-read when it changes; the signing key is kept for as
+    long as its configuration is the same, so tokens survive a users edit.
+    """
+    path = os.environ.get(USERS_ENV)
+    if not path:
+        return None
+    key = (os.environ.get("CLASP_JWT_SECRET"), os.environ.get("CLASP_JWT_SECRET_FILE"))
+    if _login_cache.get("jwt_key") != key:
+        config, generated = jwt_config_from_env()
+        if generated:
+            _log.warning("CLASP_JWT_SECRET is not set: logins are signed with a key made for "
+                         "this process and end when it stops")
+        _login_cache.update(jwt_key=key, jwt=config)
+    try:
+        stat = os.stat(path)
+        stamp = (path, stat.st_mtime_ns, stat.st_size)
+    except OSError as e:
+        raise UserStoreError(f"{USERS_ENV}={path} cannot be read ({type(e).__name__})") from e
+    if _login_cache.get("stamp") != stamp:
+        _login_cache.update(stamp=stamp, users=UserStore(Path(path)))
+    return _login_cache["users"], _login_cache["jwt"]
+
+
+def _unauthorized(detail: str) -> JSONResponse:
+    return JSONResponse({"detail": detail}, status_code=401,
+                        headers={"WWW-Authenticate": "Bearer"})
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    if not os.environ.get(USERS_ENV):
+        _log.warning("%s is not set: the panel runs without a login; anyone who can reach "
+                     "this port can drive the round (scripts/make_users.py writes a users file)",
+                     USERS_ENV)
+    yield
+
+
+app = FastAPI(title="CLASP Panel Demo UI", lifespan=_lifespan)
+
+
+# --------------------------------------------------------------------------- #
+# In front of every route (U4)
+# --------------------------------------------------------------------------- #
+#: The panel takes small JSON bodies only (a login); nothing is uploaded here.
+MAX_BODY_BYTES = 1024 * 1024
+rate_limiter = RateLimiter(rate_limit_from_env())
+audit_trail = ServiceAudit("demo-ui")
+#: The library's headers, with a policy this page can live with: everything
+#: from this origin, plus the typeface it loads from Google Fonts. No inline
+#: script or style is allowed, and the page has none (static/live.js).
+PAGE_HEADERS = SecurityHeadersConfig(content_security_policy=(
+    "default-src 'self'; style-src 'self' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'"))
+
+
+def _person(request: Request) -> dict | None:
+    """The claims of the caller's login token, or ``None`` (no login configured,
+    no token, or a token that does not verify)."""
+    try:
+        settings = _login_settings()
+        return bearer_claims(request.headers.get("authorization"), settings[1]) \
+            if settings else None
+    except (TokenError, UserStoreError, SecretConfigError):
+        return None
+
+
+def _audit_identity(request: Request) -> str | None:
+    return (_person(request) or {}).get("sub")
+
+
+def _audit_role(request: Request, _name: str | None) -> str:
+    claims = _person(request)
+    if claims:
+        return str(claims.get("role"))
+    return "anonymous" if os.environ.get(USERS_ENV) else "open"
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """Every ``/api/*`` call except health and login needs an operator's token."""
+    path = request.url.path
+    if not path.startswith("/api/") or path in OPEN_API_PATHS:
+        return await call_next(request)
+    try:
+        settings = _login_settings()
+    except (UserStoreError, SecretConfigError) as e:
+        return _unauthorized(f"logins are misconfigured: {e}. Write the users file with "
+                             f"scripts/make_users.py --out <file> --add operator:operator")
+    if settings is None:
+        return await call_next(request)
+    try:
+        claims = bearer_claims(request.headers.get("authorization"), settings[1])
+    except TokenError as e:
+        return _unauthorized(str(e))
+    if claims.get("role") != ROLE_OPERATOR:
+        return JSONResponse(
+            {"detail": f"this panel is for the operator role; {claims.get('sub')!r} is "
+                       f"{claims.get('role')!r}"}, status_code=403)
+    return await call_next(request)
+
+
+# Added innermost first (after require_login above, which therefore runs last):
+# a request meets the security headers, the body limit, the rate limit, the
+# audit recorder, then the login check and the route.
+app.add_middleware(AccessAuditMiddleware, audit=audit_trail.logger, identity=_audit_identity,
+                   role=_audit_role, service="demo-ui", exempt_paths=("/api/health",))
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, exempt_paths=("/api/health",))
+app.add_middleware(RequestValidationMiddleware, max_body_bytes=MAX_BODY_BYTES)
+app.add_middleware(SecurityHeadersMiddleware, config=PAGE_HEADERS)
+
+
+@app.post("/api/login")
+async def login(request: Request) -> dict:
+    """``{"username", "password"}`` -> ``{"token", "role", "expires_at"}``, or 401."""
+    try:
+        settings = _login_settings()
+    except (UserStoreError, SecretConfigError) as e:
+        raise HTTPException(500, f"logins are misconfigured: {e}") from e
+    if settings is None:
+        raise HTTPException(404, "logins are not enabled on this page (no users file)")
+    users, config = settings
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    username, password = (body or {}).get("username"), (body or {}).get("password")
+    token = (issue_token(users, username, password, config)
+             if isinstance(username, str) and isinstance(password, str) else None)
+    if token is None:
+        raise HTTPException(401, "wrong username or password")
+    claims = verify_token(token, config)
+    expires = datetime.datetime.fromtimestamp(claims["exp"], datetime.timezone.utc)
+    return {"token": token, "role": claims["role"], "expires_at": expires.isoformat()}
 
 
 # --------------------------------------------------------------------------- #
@@ -133,7 +320,7 @@ async def proxy_registry(path: str, request: Request) -> Response:
 async def health() -> dict:
     """Liveness of the two real backing services, for the pre-demo checklist."""
     out = {"cluster": "unreachable", "registry": "unreachable",
-           "mtls": _VERIFY is not True}
+           "mtls": _VERIFY is not True, "login_required": bool(os.environ.get(USERS_ENV))}
     async with _client(3.0) as client:
         for name, base in (("cluster", CLUSTER_BASE), ("registry", REGISTRY_BASE)):
             try:
@@ -573,7 +760,8 @@ def _cluster_outcome(sync: dict, sync_id: int | None) -> dict:
 async def live_promote(cluster_id: str) -> dict:
     """Step 5: D5 on the pending candidate, with evaluation's measured
     in-project metric, line-completion guard and noise band (``evidence.py``)
-    instead of constants. The registry decides PROMOTE or REJECT; the cluster
+    instead of constants, in the body the evaluator signed (U4). The registry
+    verifies the signature and decides PROMOTE or REJECT; the cluster
     then promotes or rejects its candidate (matched by the registry's sha256
     for that version), so the edges pull a merge only once it is promoted."""
     from demo_ui.evidence import EvidenceMissing, evidence_for
@@ -592,18 +780,29 @@ async def live_promote(cluster_id: str) -> dict:
             ev = evidence_for(cid, version=cand, sha256=digest)
         except EvidenceMissing as e:
             raise HTTPException(503, str(e)) from e
-        body = {
-            "eval": {
-                "adapter": {"name": name, "version": cand, "kind": "cluster",
-                            "cluster_id": cid},
-                "in_project": ev["in_project"],
-                "guard": ev["guard"],
-                "baseline_in_project": ev["baseline_in_project"],
-                "baseline_noise_band": ev["noise_band"],
-                "seed": 0,
-            },
-            "baseline_guard": ev["baseline_guard"],
-        }
+        signed = ev.get("promote")
+        if signed:
+            # U4: the evaluator built and signed this body; it goes to the
+            # registry exactly as written, so the signature still matches
+            body = {"eval": signed["eval"], "baseline_guard": signed["baseline_guard"],
+                    "candidate_sha256": signed["candidate_sha256"]}
+            if signed.get("eval_signature"):
+                body["eval_signature"] = signed["eval_signature"]
+        else:
+            body = {
+                "eval": {
+                    "adapter": {"name": name, "version": cand, "kind": "cluster",
+                                "cluster_id": cid},
+                    "in_project": ev["in_project"],
+                    "guard": ev["guard"],
+                    "baseline_in_project": ev["baseline_in_project"],
+                    "baseline_noise_band": ev["noise_band"],
+                    "seed": 0,
+                },
+                "baseline_guard": ev["baseline_guard"],
+                # the bytes this evidence was matched to (version and sha256)
+                "candidate_sha256": digest,
+            }
         r = await _send(client, "POST", f"{REGISTRY_BASE}/adapters/{name}/promote", json=body)
         if r.status_code != 200:
             raise HTTPException(r.status_code, f"promote {name}: {_detail(r)}")

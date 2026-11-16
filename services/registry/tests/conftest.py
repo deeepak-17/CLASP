@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import struct
 import threading
 import time
 
 import pytest
+
+# The suites fire hundreds of requests a second from one address. The rate
+# limit is switched off for them (before registry.app is imported);
+# test_middleware.py turns the real limits on for its own tests.
+os.environ.setdefault("CLASP_RATE_LIMIT_PER_MIN", "0")
 
 
 def make_safetensors(tensors: dict[str, list[float]] | None = None) -> bytes:
@@ -61,6 +67,9 @@ def store(tmp_path, monkeypatch):
 
 
 def _drop_app_store(appmod) -> None:
+    from registry import audit
+
+    audit.close_audit()  # Windows: release audit.jsonl before tmp_path is removed
     if appmod._store is not None:
         appmod._store.close()
     appmod._store = None

@@ -458,3 +458,188 @@ def test_the_page_trains_for_its_run(tmp_path):
 def test_the_page_shows_the_budget_line():
     html = webui.PAGE.read_text(encoding="utf-8")
     assert 'id="budget"' in html and "Privacy budget" in html
+
+def test_the_page_signs_its_uploads_with_the_edges_key(tmp_path):
+    pytest.importorskip("security.auth.hmac_signer")
+    from tests.test_upload import FakeCluster
+
+    fake = FakeCluster()
+    _adapter(tmp_path / "live-1", "client-flask", seed=1, epsilon=3.2254)
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=fake, hmac_secret="k" * 64)
+    page.start_upload("live-1/client-flask")
+    deadline = time.monotonic() + 30
+    while page.job.snapshot()["running"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+    job = page.job.snapshot()
+    assert job["error"] is None, job
+    assert len(fake.uploads[0]["signature"]) == 64
+    # the key is not in the job log or the status the browser reads
+    assert "k" * 64 not in json.dumps(job) + json.dumps(page.status(), default=str)
+
+# --------------------------------------------------------------------------- #
+# U5: the developer logs in to the edge page (JWT)
+# --------------------------------------------------------------------------- #
+DEV_PASSWORD = "developer pass phrase"
+
+
+def _request(url, method="GET", body=None, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+@pytest.fixture
+def login_page(tmp_path):
+    security_users = pytest.importorskip("security.auth.users")
+    from tests.test_upload import FakeCluster
+
+    users = security_users.UserStore(tmp_path / "users.json")
+    users.add("dev-flask", DEV_PASSWORD, "developer", subject="client-flask")
+    users.add("dev-numpy", DEV_PASSWORD, "developer", subject="client-numpy")
+    users.add("operator", DEV_PASSWORD, "operator")
+    _adapter(tmp_path / "live-1", "client-flask", seed=1, epsilon=3.2254)
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster(), users=users)
+    httpd = webui.serve(page, "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}", page, users
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def _token(url, username="dev-flask", password=DEV_PASSWORD):
+    status, body = _request(f"{url}/api/login", "POST", {"username": username,
+                                                         "password": password})
+    assert status == 200, body
+    return body["token"]
+
+
+def test_the_edge_page_logs_a_developer_in(login_page):
+    url, _, _ = login_page
+    status, body = _request(f"{url}/api/login", "POST",
+                            {"username": "dev-flask", "password": DEV_PASSWORD})
+    assert status == 200 and body["role"] == "developer" and body["expires_at"]
+    for bad in ({"username": "dev-flask", "password": "wrong"}, {"username": "ghost",
+                                                                 "password": DEV_PASSWORD}, {}):
+        assert _request(f"{url}/api/login", "POST", bad)[0] == 401
+
+
+def test_the_edge_pages_api_needs_the_token(login_page):
+    url, page, _ = login_page
+    for method, path, body in (("GET", "/api/status", None), ("GET", "/api/adapters", None),
+                               ("GET", "/api/job", None),
+                               ("POST", "/api/upload", {"adapter": "live-1/client-flask"}),
+                               ("POST", "/api/pull", {}),
+                               ("POST", "/api/train", {"client": "web/client-flask"})):
+        assert _request(f"{url}{path}", method, body)[0] == 401, path
+    assert page.job.snapshot()["kind"] is None          # nothing was started
+    with urllib.request.urlopen(url, timeout=10) as r:   # the page itself loads: it shows the form
+        assert b"CLASP Edge" in r.read()
+    assert _request(f"{url}/api/health")[1] == {"status": "ok", "login_required": True}
+    token = _token(url)
+    status, adapters = _request(f"{url}/api/adapters", token=token)
+    assert status == 200 and [a["id"] for a in adapters["adapters"]] == ["live-1/client-flask"]
+    assert _request(f"{url}/api/status", token=token)[0] == 200
+
+
+def test_another_clients_developer_or_an_operator_gets_403(login_page):
+    url, _, _ = login_page
+    for who in ("dev-numpy", "operator"):
+        status, body = _request(f"{url}/api/adapters", token=_token(url, who))
+        assert status == 403, who
+        assert "client-flask" in body["detail"]
+
+
+def test_an_expired_or_tampered_token_is_401_on_the_edge_page(login_page):
+    from security.auth.jwt_handler import JWTConfig
+    from security.auth.users import issue_token
+
+    url, page, users = login_page
+    expired = issue_token(users, "dev-flask", DEV_PASSWORD,
+                          JWTConfig(secret_key=page.jwt.secret_key, token_expiry_minutes=-1))
+    status, body = _request(f"{url}/api/status", token=expired)
+    assert status == 401 and "expired" in body["detail"]
+    assert _request(f"{url}/api/status", token=_token(url)[:-3] + "abc")[0] == 401
+
+
+def test_without_a_users_file_the_edge_page_runs_open(page_url):
+    url, _ = page_url
+    assert _request(f"{url}/api/adapters")[0] == 200
+    assert _request(f"{url}/api/health")[1] == {"status": "ok", "login_required": False}
+    status, body = _request(f"{url}/api/login", "POST", {"username": "x", "password": "y"})
+    assert status == 404 and "not enabled" in body["detail"]
+
+
+def test_the_edge_page_has_a_login_form():
+    html = webui.PAGE.read_text(encoding="utf-8")
+    assert 'id="login"' in html and 'type="password"' in html and "sessionStorage" in html
+    assert "localStorage" not in html
+
+# --------------------------------------------------------------------------- #
+# C1: the edge page over HTTPS (a server certificate; people log in)
+# --------------------------------------------------------------------------- #
+def test_the_edge_page_serves_https_when_given_a_page_certificate(tmp_path):
+    import ssl
+
+    pytest.importorskip("cryptography")
+    ca_mod = pytest.importorskip("security.mtls.ca")
+    certs_mod = pytest.importorskip("security.mtls.certs")
+    from cryptography.hazmat.primitives import serialization
+
+    from tests.test_upload import FakeCluster
+
+    ca_key, ca_cert = ca_mod.create_ca(common_name="clasp-dev-ca", key_size=2048)
+    key, cert = certs_mod.generate_service_cert(ca_key, ca_cert, "client-flask-page",
+                                                sans=["localhost", "127.0.0.1"])
+    (tmp_path / "ca.pem").write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "page.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "page.key").write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster())
+    httpd = webui.serve(page, "127.0.0.1", 0, tls=(tmp_path / "page.pem", tmp_path / "page.key"))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        port = httpd.server_address[1]
+        ctx = ssl.create_default_context(cafile=str(tmp_path / "ca.pem"))   # no client certificate
+        with urllib.request.urlopen(f"https://localhost:{port}/api/health", timeout=10,
+                                    context=ctx) as r:
+            assert json.loads(r.read())["status"] == "ok"
+        with pytest.raises(OSError):                                        # plain HTTP is refused
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5)
+        # ... and a client that says nothing does not stall the page for others
+        import socket
+
+        idle = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            with urllib.request.urlopen(f"https://localhost:{port}/api/health", timeout=10,
+                                        context=ctx) as r:
+                assert r.status == 200
+        finally:
+            idle.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_page_tls_comes_from_flags_or_the_environment_and_is_all_or_nothing(tmp_path, monkeypatch):
+    cert, key = tmp_path / "page.pem", tmp_path / "page.key"
+    cert.write_text("x", encoding="utf-8")
+    key.write_text("x", encoding="utf-8")
+    assert webui.page_tls(None, None, {}) is None
+    assert webui.page_tls(cert, key, {}) == (cert, key)
+    assert webui.page_tls(None, None, {"CLASP_PAGE_TLS_CERT": str(cert),
+                                       "CLASP_PAGE_TLS_KEY": str(key)}) == (cert, key)
+    with pytest.raises(ValueError, match="both"):
+        webui.page_tls(cert, None, {})
+    with pytest.raises(ValueError, match="not found"):
+        webui.page_tls(tmp_path / "no.pem", key, {})

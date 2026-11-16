@@ -11,7 +11,9 @@ Where the numbers come from, first match wins:
 0. ``.runtime/live-eval/<cluster>-v<N>.json`` (``CLASP_LIVE_EVAL_DIR``):
    ``scripts/evaluate_candidate.py`` scored version N itself — the version
    the registry is about to judge — and its baseline on this laptop's GPU.
-   Used only when its version and sha256 are the candidate's. When Promote
+   Used only when its version and sha256 are the candidate's. It carries
+   ``promote``: the body for the registry's ``/promote``, signed by the
+   evaluator (U4), which the panel forwards unchanged. When Promote
    names the candidate (it always does), this is the only source besides an
    explicit ``CLASP_EVAL_EVIDENCE``: a version nobody evaluated is refused,
    never judged on another adapter's numbers.
@@ -162,6 +164,9 @@ def _from_live_eval(cluster_id: str, version: int, sha256: Optional[str]) -> Opt
         "in_project": entry["in_project"], "baseline_in_project": entry["baseline_in_project"],
         "guard": entry.get("guard", []), "baseline_guard": entry.get("baseline_guard", []),
         "noise_band": float(entry.get("noise_band", 0.0)),
+        # the promote body the evaluator built and signed (U4); None for a file
+        # written before results were signed
+        "promote": doc.get("promote"),
         "provenance": {
             "in_project": (f"{rel} — v{version} ({sha_c}) against {against}, "
                            f"adapters as base + {details.get('alpha')}·cluster, on "

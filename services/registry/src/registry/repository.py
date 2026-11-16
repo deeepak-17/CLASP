@@ -23,6 +23,7 @@ from sqlalchemy import Connection, Engine, delete, func, insert, select, update
 
 from registry.config import RUN_DELTA
 from registry.db import (
+    access_log,
     active_pointer,
     adapters,
     cluster_sync,
@@ -54,6 +55,8 @@ class MetadataRepository(Protocol):
     def mark_cluster_sync(self, sync_id: int, *, done: bool, error: str | None = None) -> bool: ...
     def add_privacy_rows(self, name: str, version: int, rows: list[dict]) -> None: ...
     def privacy_ledger(self, cluster_id: str | None = None) -> list[dict]: ...
+    def add_access(self, row: dict) -> None: ...
+    def access_log(self, limit: int = 200, identity: str | None = None) -> list[dict]: ...
 
 
 class SqlMetadataRepository:
@@ -425,3 +428,20 @@ class SqlMetadataRepository:
             stmt = stmt.where(privacy_ledger.c.cluster_id == cluster_id)
         with self._connection() as conn:
             return [dict(r) for r in conn.execute(stmt).mappings()]
+
+    # -- access log (U4) ---------------------------------------------------
+
+    def add_access(self, row: dict) -> None:
+        """Record one request: ``at``, ``identity``, ``role``, ``method``,
+        ``path``, ``adapter``, ``version``, ``status``."""
+        keys = ("at", "identity", "role", "method", "path", "adapter", "version", "status")
+        with self._connection() as conn:
+            conn.execute(insert(access_log).values(**{k: row.get(k) for k in keys}))
+
+    def access_log(self, limit: int = 200, identity: str | None = None) -> list[dict[str, Any]]:
+        """The newest ``limit`` rows, newest first; with ``identity``, only that caller's."""
+        stmt = select(*[c for c in access_log.c if c.name != "id"]).order_by(access_log.c.id.desc())
+        if identity is not None:
+            stmt = stmt.where(access_log.c.identity == identity)
+        with self._connection() as conn:
+            return [dict(r) for r in conn.execute(stmt.limit(limit)).mappings()]

@@ -11,5 +11,9 @@ RUN cd dashboard && npm run build
 
 FROM nginx:1.27-alpine
 COPY --from=build /src/services/evaluation/dashboard/dist /usr/share/nginx/html
+# HTTPS when the pages certificate is mounted at /certs (see the script).
+COPY services/evaluation/dashboard/nginx-tls.sh /docker-entrypoint.d/30-clasp-tls.sh
+RUN sed -i 's/$//' /docker-entrypoint.d/30-clasp-tls.sh && chmod +x /docker-entrypoint.d/30-clasp-tls.sh
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD wget -q -O /dev/null http://localhost/ || exit 1
+# plain HTTP, or HTTPS on the same port (the certificate is the dev CA's: not verified here)
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD wget -q -O /dev/null http://localhost/ || wget -q --no-check-certificate -O /dev/null https://localhost:80/ || exit 1

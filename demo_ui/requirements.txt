@@ -1,3 +1,5 @@
+# plus the monorepo's contracts and security packages (logins, HMAC), which
+# the Dockerfile installs from the checkout: pip install -e contracts -e security
 fastapi
 uvicorn
 httpx

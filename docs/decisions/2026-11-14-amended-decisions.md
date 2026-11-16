@@ -95,6 +95,36 @@ code win.
   `experiments/d3-round2-dp/RESULTS.md` when it has been run.
 - **Reason:** U3 and calls C8, C9 in the design spec.
 
+## D7 — transport, as built (user decisions U4, U5, U6)
+
+- **As written:** mTLS on all service channels.
+- **As built until 2026-11-16:** mTLS was an option (an overlay compose file and a
+  `--mtls-dir` flag); the default stack ran plain HTTP. The security library's
+  roles, HMAC, JWT, middleware and audit code existed and was not wired in.
+- **As built now:**
+  - **mTLS is the default.** `docker compose up` and `scripts/run_services.py`
+    start the registry and the cluster behind mutual TLS 1.3 with certificates
+    from `.runtime/certs`, generated when missing. Plain HTTP is `--insecure` or
+    the `docker-compose.insecure.yml` overlay. A service started by hand without
+    certificates still runs plain HTTP with a warning.
+  - **Services are identified by certificate, people by login (U5).** Certificate
+    names map to roles and every registry and cluster route names the roles
+    allowed to call it. The live panel, the dashboard and the edge page are
+    served over HTTPS with a server certificate; the panel's operator and an edge
+    page's developer log in with a JWT that lasts 8 hours.
+  - **HMAC is used twice (U4):** on evaluation results sent to `/promote`, signed
+    by the evaluator and tied to the candidate's sha256; and on edge uploads,
+    signed by the edge and verified by the cluster.
+  - **Wired in from the library (U4):** security headers, a request-size limit, a
+    rate limit and the audit logger on the registry, the cluster and the panel;
+    the registry also keeps an access log. API keys stay in the library, unused.
+  - **Fall-back (U6, C11):** a check that is not configured is skipped with a
+    warning; one that is configured and fails is refused.
+- **Not done here:** the Docker bring-up of the default-mTLS stack and a
+  three-laptop round over it need Docker Desktop and the laptops; see
+  `docs/mtls_setup.md` for what to check.
+- **Reason:** U4, U5, U6 and calls C1–C3, C10, C11 in the design spec.
+
 ## D5 — promotion guard
 
 - **As written:** the guard is HumanEval pass@1: promote only if the drop is

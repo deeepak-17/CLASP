@@ -59,7 +59,8 @@ overwritten in place.
 
 1. **Edge → Cluster** (`AdapterUpload`): each client trains a LoRA on its repo
    partition and uploads factors + `num_train_samples` (for FedProx weighting),
-   LoRA hyperparams, ε spent, and seed. mTLS on this channel from W7 (D7).
+   LoRA hyperparams, ε spent (this round's and the run's cumulative), and seed.
+   The channel is mutual TLS and the upload is signed by the edge (D7).
 2. **Cluster aggregation** (D2): server reconstructs each `dWi = Bi·Ai` per target
    module, exact-averages (FedProx-weighted), re-factorizes to rank r via
    truncated SVD, streamed module-by-module. Naive A/B averaging is kept only as
@@ -170,6 +171,36 @@ Six tables (`registry/db.py`); foreign keys are enforced.
 
 The endpoint contract is the route list in the module docstring of
 `services/registry/src/registry/app.py` (16 routes).
+
+### Security, as built (D7)
+
+Full detail: `docs/mtls_setup.md`.
+
+- **Service channels use mutual TLS 1.3.** Edge → Cluster, Cluster → Registry,
+  and the panel's and evaluator's calls to both. Compose and
+  `scripts/run_services.py` turn it on by default; a service started by hand
+  without certificates runs plain HTTP and warns.
+- **Services are identified by certificate, people by login.** The certificate's
+  name maps to a role (`cluster` → `svc:cluster`, `demo-ui` → `svc:evaluation`,
+  `clasp-admin` → `admin`, `client-<repo>` → `edge`), and each registry and
+  cluster route names the roles allowed to call it. The three browser pages are
+  served over HTTPS with a server certificate; the panel's operator and each edge
+  page's developer log in and get a JWT that lasts 8 hours.
+- **Two things are signed (HMAC-SHA256).** Evaluation results, by the evaluator,
+  verified by the registry on `/promote` and tied to the sha256 of the bytes that
+  were evaluated. Edge uploads, by the edge, verified by the cluster before the
+  upload is buffered.
+- **In front of every route** of the registry, the cluster and the panel:
+  security headers, a body limit, a rate limit, and an audit trail of refused
+  authorisations and accepted changes. The registry also keeps an access log of
+  every request.
+- **The privacy budget** (ε ≤ 8 over a client's run of 2 rounds) is enforced on
+  the edge and at the cluster and recorded by the registry
+  (`docs/dp_config.md`).
+- **Fall-back.** A check whose secret or certificate is not configured is
+  skipped with a warning; one that is configured and fails is refused.
+- **Not used.** API-key authentication exists in the security library and is not
+  used, because services are identified by certificate.
 
 ## 5. Process & reproducibility (D9)
 

@@ -19,6 +19,14 @@ Endpoints:
     GET  /adapters/{name}/promotions               promotion/rollback audit trail
     GET  /sync/pending                             cluster steps of decisions not yet applied
     POST /sync/{id}/done                           report one: {"ok": bool, "error"?: str}
+    GET  /privacy/ledger                           each client's privacy spend (D7)
+    GET  /access-log                               who called what (admin only)
+
+In front of every route, in the order a request meets them: security headers,
+a body-size limit (the upload cap plus 1 MiB), a rate limit (600 requests a
+minute per caller in bursts of 60, ``CLASP_RATE_LIMIT_PER_MIN``; the caller is
+the verified certificate name, else the remote address; ``/healthz`` is
+exempt), and the access/audit recorder (``registry.audit``).
 
 ``POST /adapters/{name}/promote`` answers with the decision plus ``cluster_sync_id``,
 the id of the ``cluster_sync`` row written in its transaction (null unless the
@@ -71,10 +79,32 @@ from contracts import (
     PrivacySpec,
     PromotionAction,
 )
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
+from security.audit import SecurityEvent
+from security.auth.hmac_signer import SecretConfigError, secret_from_env, verify_evaluation
+from security.middleware import (
+    RateLimiter,
+    RateLimitMiddleware,
+    RequestValidationMiddleware,
+    SecurityHeadersMiddleware,
+    rate_limit_from_env,
+)
+from security.auth.roles import ROLE_ADMIN, ROLE_CLUSTER, ROLE_EVALUATION, require_roles
+from security.mtls.peer import peer_identity
 
 from . import __version__
+from . import audit as registry_audit
 from .cascade import apply_cascade, plan_cascade, write_cascade_files
 from .config import RUN_DELTA, RUN_EPSILON_BUDGET, RUN_ROUNDS
 from .composition import (
@@ -264,17 +294,76 @@ def _parse_save_meta(raw: str) -> dict:
         raise HTTPException(422, f"invalid meta: {e}") from e
 
 
+# ---- who is calling (U5) ------------------------------------------------------
+#
+# Services identify each other by mTLS certificate. Under TLS ``registry.serve``
+# runs ``PeerCertH11Protocol``, which puts the verified certificate's CN in the
+# request scope; the CN maps to a role (``security.auth.roles``) and each route
+# below names the roles allowed to call it. Over plain HTTP there is no
+# certificate name and every route is open, as before (U6).
+#
+#   GET /healthz                                   everyone
+#   every other GET                                svc:cluster, svc:evaluation, admin
+#   POST /adapters/{name}/versions                 svc:cluster, admin
+#   POST .../promote, .../compose, /sync/{id}/done svc:evaluation, admin
+#   POST .../restore                               svc:evaluation, admin
+#   POST .../gc, POST /gc                          admin
+_identity_provider = None
+
+
+def configure_identity(provider) -> None:
+    """Replace how the caller's certificate name is read (tests: a header).
+    ``None`` restores the default, the verified peer name in the request scope."""
+    global _identity_provider
+    _identity_provider = provider
+
+
+def _caller(request: Request) -> str | None:
+    return (_identity_provider or peer_identity)(request)
+
+
+def _record_access(row: dict) -> None:
+    get_store().repo.add_access(row)
+
+
+def _max_body_bytes() -> int:
+    try:
+        cap = int(os.environ.get(MAX_UPLOAD_ENV, DEFAULT_MAX_UPLOAD))
+    except ValueError:
+        cap = DEFAULT_MAX_UPLOAD
+    return cap + 1024 * 1024
+
+
+#: A request body may be the largest allowed upload plus its multipart envelope.
+MAX_BODY_BYTES = _max_body_bytes()
+#: 600 requests a minute per caller, bursts of 60 (CLASP_RATE_LIMIT_PER_MIN; 0 = off).
+rate_limiter = RateLimiter(rate_limit_from_env())
+
+# Added innermost first. A request meets: security headers, the body limit, the
+# rate limit, then the access/audit recorder, then the route.
+registry_audit.install(app, identity=_caller, record=_record_access)
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, key_func=_caller,
+                   exempt_paths=("/healthz",))
+app.add_middleware(RequestValidationMiddleware, max_body_bytes=MAX_BODY_BYTES)
+app.add_middleware(SecurityHeadersMiddleware)
+
+READERS = require_roles(ROLE_CLUSTER, ROLE_EVALUATION, ROLE_ADMIN, identity=_caller)
+PUBLISHERS = require_roles(ROLE_CLUSTER, ROLE_ADMIN, identity=_caller)
+DECIDERS = require_roles(ROLE_EVALUATION, ROLE_ADMIN, identity=_caller)
+ADMINS = require_roles(ROLE_ADMIN, identity=_caller)
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok", "service": "registry", "contracts": CONTRACTS_VERSION}
 
 
-@app.get("/adapters")
+@app.get("/adapters", dependencies=[Depends(READERS)])
 def list_adapters() -> dict:
     return {"adapters": get_store().list_adapters()}
 
 
-@app.post("/adapters/{name}/versions", status_code=201)
+@app.post("/adapters/{name}/versions", status_code=201, dependencies=[Depends(PUBLISHERS)])
 def save_version(
     name: str,
     file: UploadFile = File(..., description="safetensors payload"),
@@ -290,10 +379,15 @@ def save_version(
         raise
     except StorageError as e:  # bad payload / inconsistent envelope: client error
         raise HTTPException(422, str(e)) from e
+    for row in kwargs.get("client_privacy") or ():
+        if row.get("epsilon_cumulative") is not None:  # D7: a spend went on the ledger
+            registry_audit.audit_logger().log_privacy_event(
+                SecurityEvent.PRIVACY_BUDGET_RECORDED, row["client_id"],
+                row["epsilon_cumulative"], RUN_EPSILON_BUDGET)
     return _metadata_to_dict(written)
 
 
-@app.get("/adapters/{name}/versions")
+@app.get("/adapters/{name}/versions", dependencies=[Depends(READERS)])
 def list_versions(name: str) -> dict:
     store = get_store()
     versions = store.list_versions(name)
@@ -307,12 +401,12 @@ def list_versions(name: str) -> dict:
     }
 
 
-@app.get("/adapters/{name}/versions/{version}")
+@app.get("/adapters/{name}/versions/{version}", dependencies=[Depends(READERS)])
 def get_version(name: str, version: int) -> dict:
     return _metadata_to_dict(get_store().get_metadata(name, version))
 
 
-@app.get("/adapters/{name}/versions/{version}/file")
+@app.get("/adapters/{name}/versions/{version}/file", dependencies=[Depends(READERS)])
 def download_version(name: str, version: int) -> Response:
     payload = get_store().load_payload(name, version)
     return Response(
@@ -322,7 +416,7 @@ def download_version(name: str, version: int) -> Response:
     )
 
 
-@app.get("/adapters/{name}/active")
+@app.get("/adapters/{name}/active", dependencies=[Depends(READERS)])
 def get_active(name: str) -> dict:
     store = get_store()
     active = store.get_active(name)
@@ -331,13 +425,13 @@ def get_active(name: str) -> dict:
     return _metadata_to_dict(store.get_metadata(name, active))
 
 
-@app.get("/adapters/{name}/lineage")
+@app.get("/adapters/{name}/lineage", dependencies=[Depends(READERS)])
 def get_lineage(name: str) -> dict:
     """Every version with its parents (clients / cluster+client) and decisions."""
     return build_lineage(get_store(), name)
 
 
-@app.post("/adapters/{name}/compose", status_code=201)
+@app.post("/adapters/{name}/compose", status_code=201, dependencies=[Depends(DECIDERS)])
 def compose(name: str, response: Response, body: dict = Body(...)) -> dict:
     """Store ``alpha*cluster + beta*client`` as one COMPOSITE version of ``name``.
 
@@ -409,7 +503,7 @@ def _parse_promote_body(body: dict) -> tuple[EvalResult, tuple[GuardMetrics, ...
     return eval_result, baseline_guard
 
 
-@app.post("/adapters/{name}/promote")
+@app.post("/adapters/{name}/promote", dependencies=[Depends(DECIDERS)])
 def promote(name: str, body: dict = Body(...)) -> dict:
     """Apply the D5 two-sided rule to an inactive candidate version.
 
@@ -420,10 +514,15 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     the active version (409) and not already be decided (409). Body::
 
         {"eval": <EvalResult>, "baseline_guard": [<GuardMetrics>, ...],
+         "candidate_sha256"?: str, "eval_signature"?: str,
          "composite"?: {"name", "cluster", "client", "alpha", "beta"}}
 
     ``baseline_guard`` isn't part of the EvalResult contract — it's an
     API-boundary extension, same pattern as `save`'s ``meta`` envelope.
+    ``candidate_sha256`` names the bytes that were evaluated (409 when they are
+    not this version's) and ``eval_signature`` is the evaluator's HMAC over the
+    result, required when the registry has the shared secret (401 otherwise);
+    see ``_check_evaluation``.
 
     With ``composite`` (D6), a PROMOTE also stores the pre-merged composite
     built from the parts' active versions — i.e. including this candidate.
@@ -435,6 +534,48 @@ def promote(name: str, body: dict = Body(...)) -> dict:
     """
     with _WRITE_LOCK:
         return _promote(name, body)
+
+
+EVAL_SECRET_ENV = "CLASP_EVAL_HMAC_SECRET"
+
+
+def _check_evaluation(name: str, version: int, stored_sha256: str, body: dict) -> None:
+    """The evaluation must be about this version's bytes, and the evaluator's (U4).
+
+    ``candidate_sha256``, when sent, must be the stored version's sha256: an
+    evaluation of other bytes decides nothing about these (409). With the
+    shared secret configured (``CLASP_EVAL_HMAC_SECRET`` or the file
+    ``CLASP_EVAL_HMAC_SECRET_FILE`` names), ``candidate_sha256`` and a valid
+    ``eval_signature`` over ``{adapter, version, candidate_sha256, eval,
+    baseline_guard}`` are required (401). Without a secret the signature is not
+    checked and a warning says so (the fall-back, C11). A secret that is
+    configured but unreadable refuses the promote (500): it is not "no secret".
+    Raised before ``decide``: a refused promote records nothing.
+    """
+    try:
+        secret = secret_from_env(EVAL_SECRET_ENV)
+    except SecretConfigError as e:
+        raise HTTPException(500, f"evaluation signature cannot be checked: {e}") from e
+    sent_sha = body.get("candidate_sha256")
+    if sent_sha is not None and sent_sha != stored_sha256:
+        raise HTTPException(
+            409, f"evaluation was run on different bytes: {name} v{version} is "
+                 f"{stored_sha256[:12]}, the evaluation names {str(sent_sha)[:12]}")
+    if secret is None:
+        _log.warning("%s is not set: the evaluation result for %s v%s is accepted unsigned",
+                     EVAL_SECRET_ENV, name, version)
+        return
+    if sent_sha is None:
+        raise HTTPException(401, "candidate_sha256 is required: evaluation results are signed "
+                                 "together with the sha256 of the version they measured")
+    if not body.get("eval_signature"):
+        raise HTTPException(401, "eval_signature is required: this registry accepts only "
+                                 "evaluation results signed by the evaluator")
+    if not verify_evaluation(name, version, sent_sha, body["eval"],
+                             body.get("baseline_guard", []), body["eval_signature"], secret):
+        raise HTTPException(401, "the evaluation signature does not match the result sent: "
+                                 "it was changed after the evaluator signed it, or signed "
+                                 "with another secret")
 
 
 def _newly_written(store: RegistryStore, metas: list) -> list:
@@ -478,6 +619,7 @@ def _promote(name: str, body: dict) -> dict:
         raise HTTPException(409, f"v{version} is not a candidate: active is v{active_before}")
     if version in store.repo.decided_versions(name):
         raise HTTPException(409, f"v{version} was already decided")
+    _check_evaluation(name, version, candidate.sha256, body)
 
     decision = decide(eval_result, baseline_guard=baseline_guard,
                       active_version_before=active_before)
@@ -513,7 +655,7 @@ def _promote(name: str, body: dict) -> dict:
     return result
 
 
-@app.post("/adapters/{name}/restore")
+@app.post("/adapters/{name}/restore", dependencies=[Depends(DECIDERS)])
 def restore(name: str, body: dict = Body(...)) -> dict:
     """Repoint ``active`` by hand — the rollback drill and the D11 restore path.
 
@@ -595,7 +737,7 @@ def _gc_report(name: str, plan: RetentionPlan, dry_run: bool) -> dict:
     }
 
 
-@app.post("/adapters/{name}/gc")
+@app.post("/adapters/{name}/gc", dependencies=[Depends(ADMINS)])
 def gc_one(name: str, body: dict = Body(default={})) -> dict:
     """Retention for one adapter. Body: ``{"keep_last"?: int, "dry_run"?: bool}``.
 
@@ -616,7 +758,7 @@ def _gc_one(name: str, body: dict) -> dict:
     return _gc_report(name, plan, dry_run)
 
 
-@app.post("/gc")
+@app.post("/gc", dependencies=[Depends(ADMINS)])
 def gc_all(body: dict = Body(default={})) -> dict:
     """Retention across every adapter, with one shared composite-reference scan."""
     with _WRITE_LOCK:
@@ -639,7 +781,7 @@ def _gc_all(body: dict) -> dict:
     return {"dry_run": dry_run, "keep_last": keep_last, "adapters": reports}
 
 
-@app.get("/adapters/{name}/promotions")
+@app.get("/adapters/{name}/promotions", dependencies=[Depends(READERS)])
 def list_promotions(name: str) -> dict:
     store = get_store()
     if name not in store.list_adapters():
@@ -650,7 +792,7 @@ def list_promotions(name: str) -> dict:
     }
 
 
-@app.get("/privacy/ledger")
+@app.get("/privacy/ledger", dependencies=[Depends(READERS)])
 def privacy_ledger(cluster_id: str | None = None) -> dict:
     """D7: what each client's run has spent, as recorded with each cluster version.
 
@@ -665,7 +807,18 @@ def privacy_ledger(cluster_id: str | None = None) -> dict:
             "rows": get_store().repo.privacy_ledger(cluster_id)}
 
 
-@app.get("/sync/pending")
+@app.get("/access-log", dependencies=[Depends(ADMINS)])
+def access_log(limit: int = 200, identity: str | None = None) -> dict:
+    """U4: who called what, newest first. ``?limit=`` (1 to 1000, default 200)
+    and ``?identity=`` (one certificate name). Each row: ``at``, ``identity``
+    (null over plain HTTP), ``role``, ``method``, ``path``, ``adapter``,
+    ``version``, ``status``. For the ``admin`` role."""
+    if not 1 <= limit <= 1000:
+        raise HTTPException(422, f"limit must be between 1 and 1000, got {limit}")
+    return {"rows": get_store().repo.access_log(limit=limit, identity=identity)}
+
+
+@app.get("/sync/pending", dependencies=[Depends(READERS)])
 def sync_pending() -> dict:
     """Cluster promote/reject steps recorded with a decision and not yet applied."""
     keys = ("id", "adapter", "version", "cluster_id", "sha256", "action", "attempts", "last_error",
@@ -674,7 +827,7 @@ def sync_pending() -> dict:
                         for row in get_store().repo.pending_cluster_sync()]}
 
 
-@app.post("/sync/{sync_id}/done")
+@app.post("/sync/{sync_id}/done", dependencies=[Depends(DECIDERS)])
 def sync_done(sync_id: int, body: dict = Body(...)) -> dict:
     """Report a cluster step. Body: ``{"ok": bool, "error"?: str | null}``.
 

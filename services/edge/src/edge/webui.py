@@ -35,6 +35,11 @@ the page can do nothing the command line cannot.
   ``<root>/from_cluster/<cluster>-round<N>-<sha12>``, and the next fine-tune
   trains on top of exactly that adapter (D3, ``--cluster-adapter``).
 * One job (upload or train) runs at a time; its log streams into the page.
+* The developer logs in (U5): with a users file (``--users``, written by
+  ``scripts/make_users.py``) every ``/api/*`` route except ``/api/health`` and
+  ``/api/login`` needs ``Authorization: Bearer <token>`` for a ``developer``
+  whose client is this page's. With no users file the page runs open and says
+  so when it starts (the fall-back, C11).
 * The page shows this laptop's privacy budget for its run (D7: epsilon at most
   8 over the run's 2 rounds, charged when an adapter is uploaded) and does not
   offer to send an adapter the ledger would refuse.
@@ -173,7 +178,9 @@ class EdgePage:
                  python: str = sys.executable, allow_non_dp: bool = False,
                  allow_foreign_base: bool = False, fedprox_mu: float = DEFAULT_MU,
                  run_id: str = upload.DEFAULT_RUN_ID,
-                 ledger_root: Optional[Path] = None) -> None:
+                 ledger_root: Optional[Path] = None,
+                 hmac_secret: Optional[str] = None,
+                 users=None, jwt=None) -> None:
         self.cluster_url = cluster_url
         self.client_id = client_id
         self.adapters_root = Path(adapters_root)
@@ -188,11 +195,56 @@ class EdgePage:
         #: This laptop's privacy ledgers, beside the adapters they account for.
         self.ledger_root = Path(ledger_root) if ledger_root else self.adapters_root / "privacy_ledger"
         self._budget_cache: Dict = {}
+        #: Who may log in (``security.auth.users.UserStore``), or None: the page is open.
+        self.users = users
+        #: Token settings; a key for this process unless CLASP_JWT_SECRET is set.
+        self.jwt = jwt
+        if users is not None and jwt is None:
+            from security.auth.users import jwt_config_from_env
+
+            self.jwt = jwt_config_from_env()[0]
+        #: This edge's upload key (U4); never sent to the browser or logged.
+        self._hmac_secret = hmac_secret
         self.job = Job()
         #: The last adapter this page sent: id, cluster and round it went into.
         self.last_sent: Optional[Dict] = None
         #: Per cluster, the merge the tracker is following (see ``follow_merge``).
         self._merges: Dict[str, Dict] = {}
+
+    # -- logins (U5) ---------------------------------------------------------
+    def login(self, username, password) -> Optional[Dict]:
+        """``{"token", "role", "expires_at"}`` for a correct login, else ``None``."""
+        from security.auth.jwt_handler import verify_token
+        from security.auth.users import issue_token
+
+        if not (isinstance(username, str) and isinstance(password, str)):
+            return None
+        token = issue_token(self.users, username, password, self.jwt)
+        if token is None:
+            return None
+        claims = verify_token(token, self.jwt)
+        expires = datetime.fromtimestamp(claims["exp"], timezone.utc)
+        return {"token": token, "role": claims["role"], "expires_at": expires.isoformat()}
+
+    def authorize(self, authorization: Optional[str]) -> Optional[tuple]:
+        """``None`` when the caller may use this page, else ``(status, detail)``:
+        401 for a missing, invalid or expired token, 403 for a valid token of
+        someone who is not this page's developer."""
+        if self.users is None:
+            return None
+        from security.auth.jwt_handler import TokenError
+        from security.auth.users import ROLE_DEVELOPER, bearer_claims
+
+        try:
+            claims = bearer_claims(authorization, self.jwt)
+        except TokenError as exc:
+            return 401, str(exc)
+        mine = self.client_id is None or claims.get("subject") == self.client_id
+        if claims.get("role") != ROLE_DEVELOPER or not mine:
+            return 403, (f"this page is for the developer of {self.client_id or 'this laptop'}; "
+                         f"{claims.get('sub')!r} is {claims.get('role')!r}"
+                         + (f" of {claims.get('subject')}" if claims.get("subject") else ""))
+        return None
 
     # -- reads --------------------------------------------------------------
     def adapters(self) -> List[Dict]:
@@ -378,7 +430,8 @@ class EdgePage:
                     adapter["path"], cluster_url=self.cluster_url,
                     client_id=self.client_id or adapter["client_id"], http=self.http,
                     allow_foreign_base=self.allow_foreign_base,
-                    ledger_root=self.ledger_root, log=self.job.log)
+                    ledger_root=self.ledger_root, hmac_secret=self._hmac_secret,
+                    log=self.job.log)
                 self.last_sent = {"adapter": adapter_id, "cluster_id": res["cluster_id"],
                                   "round_id": res["round_id"], "utc": time.time()}
                 self.job.finish(result={k: v for k, v in res.items() if k != "privacy"}
@@ -493,12 +546,26 @@ def make_handler(page: EdgePage):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            if code == 401:
+                self.send_header("WWW-Authenticate", "Bearer")
             self.end_headers()
             self.wfile.write(data)
+
+        def _refused(self) -> bool:
+            """Answer 401/403 and return True unless the caller may use the API."""
+            problem = page.authorize(self.headers.get("Authorization"))
+            if problem is None:
+                return False
+            self._send(problem[0], {"detail": problem[1]})
+            return True
 
         def do_GET(self) -> None:
             if self.path in ("/", "/index.html"):
                 self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            elif self.path == "/api/health":
+                self._send(200, {"status": "ok", "login_required": page.users is not None})
+            elif self.path.startswith("/api/") and self._refused():
+                return
             elif self.path == "/api/status":
                 self._send(200, page.status())
             elif self.path == "/api/adapters":
@@ -515,6 +582,16 @@ def make_handler(page: EdgePage):
                 body = json.loads(self.rfile.read(n) or b"{}") if n <= 1 << 16 else None
                 if body is None:
                     return self._send(413, {"detail": "request too large"})
+                if self.path == "/api/login":
+                    if page.users is None:
+                        return self._send(404, {"detail": "logins are not enabled on this page "
+                                                          "(no users file)"})
+                    granted = page.login(body.get("username"), body.get("password"))
+                    if granted is None:
+                        return self._send(401, {"detail": "wrong username or password"})
+                    return self._send(200, granted)
+                if self.path.startswith("/api/") and self._refused():
+                    return None
                 if self.path == "/api/upload":
                     return self._send(202, page.start_upload(str(body["adapter"])))
                 if self.path == "/api/pull":
@@ -539,8 +616,43 @@ def make_handler(page: EdgePage):
     return Handler
 
 
-def serve(page: EdgePage, host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(page))
+PAGE_TLS_VARS = ("CLASP_PAGE_TLS_CERT", "CLASP_PAGE_TLS_KEY")
+
+
+def page_tls(cert: Optional[Path], key: Optional[Path], env=None) -> Optional[tuple]:
+    """The page's HTTPS certificate and key (C1): the two flags, else
+    ``CLASP_PAGE_TLS_CERT`` / ``CLASP_PAGE_TLS_KEY``, else ``None`` (plain HTTP).
+    Both or neither; a file that is not there is an error, never plain HTTP."""
+    env = os.environ if env is None else env
+    cert = cert if cert is not None else (Path(env[PAGE_TLS_VARS[0]]) if env.get(PAGE_TLS_VARS[0]) else None)
+    key = key if key is not None else (Path(env[PAGE_TLS_VARS[1]]) if env.get(PAGE_TLS_VARS[1]) else None)
+    if cert is None and key is None:
+        return None
+    if cert is None or key is None:
+        raise ValueError("HTTPS needs both the page certificate and its key "
+                         "(--tls-cert and --tls-key, or CLASP_PAGE_TLS_CERT and CLASP_PAGE_TLS_KEY)")
+    for path in (cert, key):
+        if not Path(path).is_file():
+            raise ValueError(f"page certificate file {path} not found")
+    return Path(cert), Path(key)
+
+
+def serve(page: EdgePage, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
+          tls: Optional[tuple] = None) -> ThreadingHTTPServer:
+    """The page's HTTP server; with ``tls`` = (certificate, key) it speaks HTTPS
+    only (a server certificate; the developer is identified by the login)."""
+    httpd = ThreadingHTTPServer((host, port), make_handler(page))
+    if tls is not None:
+        import ssl
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(str(tls[0]), str(tls[1]))
+        # the handshake happens in each connection's own thread (on its first
+        # read), so a client that connects and says nothing cannot stall accept()
+        httpd.socket = context.wrap_socket(httpd.socket, server_side=True,
+                                           do_handshake_on_connect=False)
+    return httpd
 
 
 def main(argv=None) -> int:
@@ -562,6 +674,15 @@ def main(argv=None) -> int:
                          "(as full adapters)")
     ap.add_argument("--fedprox-mu", type=float, default=DEFAULT_MU,
                     help="FedProx coefficient for fine-tunes started here (0 = off)")
+    ap.add_argument("--hmac-key", type=Path, default=None,
+                    help="this edge's upload key; default: hmac.key in --mtls-dir when present")
+    ap.add_argument("--tls-cert", type=Path, default=None,
+                    help="serve this page over HTTPS with this certificate (env CLASP_PAGE_TLS_CERT)")
+    ap.add_argument("--tls-key", type=Path, default=None,
+                    help="the page certificate's key (env CLASP_PAGE_TLS_KEY)")
+    ap.add_argument("--users", type=Path, default=None,
+                    help="users file (scripts/make_users.py): the page then asks for a login; "
+                         "without it the page is open")
     ap.add_argument("--run-id", default=upload.DEFAULT_RUN_ID,
                     help="the federated run fine-tunes started here belong to: its rounds "
                          "share one privacy budget (a new id starts a new budget)")
@@ -570,15 +691,38 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     try:
         http = upload.session_for(args.mtls_dir, args.server_hostname)
-    except upload.UploadError as exc:
+        hmac_secret = upload.read_hmac_key(args.hmac_key, args.mtls_dir)
+        tls = page_tls(args.tls_cert, args.tls_key)
+    except (upload.UploadError, ValueError) as exc:
         print(f"edge.webui: {exc}", file=sys.stderr)
         return 1
+    users = None
+    if args.users is not None:
+        from security.auth.users import UserStore, UserStoreError
+
+        if not args.users.is_file():
+            print(f"edge.webui: --users {args.users} not found (scripts/make_users.py writes it)",
+                  file=sys.stderr)
+            return 1
+        try:
+            users = UserStore(args.users)
+        except UserStoreError as exc:
+            print(f"edge.webui: {exc}", file=sys.stderr)
+            return 1
+    else:
+        print("edge.webui: WARNING no --users file: this page runs without a login; anyone who "
+              "can reach this port can upload from this laptop", file=sys.stderr)
     page = EdgePage(cluster_url=args.cluster_url, client_id=args.client_id,
                     adapters_root=args.adapters_root, http=http, corpus_root=args.corpus_root,
                     allow_non_dp=args.allow_non_dp, allow_foreign_base=args.allow_foreign_base,
-                    fedprox_mu=args.fedprox_mu, run_id=args.run_id)
-    httpd = serve(page, args.host, args.port)
-    print(f"edge page for {args.client_id or 'all clients'} -> http://{args.host}:{args.port}  "
+                    fedprox_mu=args.fedprox_mu, run_id=args.run_id, hmac_secret=hmac_secret,
+                    users=users)
+    httpd = serve(page, args.host, args.port, tls=tls)
+    if tls is None:
+        print("edge.webui: WARNING serving this page over plain HTTP (--tls-cert/--tls-key "
+              "for HTTPS)", file=sys.stderr)
+    print(f"edge page for {args.client_id or 'all clients'} -> "
+          f"{'https' if tls else 'http'}://{args.host}:{args.port}  "
           f"(cluster {args.cluster_url}); ctrl-c to stop")
     try:
         httpd.serve_forever()

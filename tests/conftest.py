@@ -1,6 +1,13 @@
 """Shared fixtures for the cross-module suites."""
 from __future__ import annotations
 
+import os
+
+# The suites fire hundreds of requests a second from one address. The services'
+# rate limit is switched off for them (before any service module is imported);
+# the middleware tests turn the real limits on for themselves.
+os.environ.setdefault("CLASP_RATE_LIMIT_PER_MIN", "0")
+
 import pytest
 
 

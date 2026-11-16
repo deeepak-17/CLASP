@@ -57,7 +57,9 @@ docker compose --profile demo up --build
 docker compose up -d --build
 ```
 
-`docs/devops.md` covers the compose profiles, CI, mTLS for the registry and the
+`docs/devops.md` covers the compose profiles, CI and the
+transport security that is on by default (`docs/mtls_setup.md`: mTLS between
+services, HTTPS and logins for the pages, roles, signatures, audit), and the
 measured non-functional requirements; `scripts/fresh_machine_check.sh` proves a
 clean clone installs, tests and runs.
 
@@ -86,7 +88,7 @@ python -m pytest tests/integration -q
 |--------|------|-------------|
 | Edge Layer | `services/edge` | Local LoRA training (PEFT), 4-bit inference, dynamic adapter merger |
 | Cluster Layer | `services/cluster` | FedProx + SVD aggregation (FastAPI; Flower for simulation), cluster LoRA redistribution |
-| Security | `security` | Opacus DP-SGD on gradients, mTLS between edge and cluster (library) |
+| Security | `security` | Library: Opacus DP-SGD and the per-run privacy ledger; mTLS and certificate roles; HMAC signatures; JWT logins; headers, rate limit, audit |
 | State Registry | `services/registry` | safetensors versioning, two-sided promotion/rollback, pre-merged composites, retention, run manifests, FastAPI |
 | Evaluation & Dashboard | `services/evaluation` | HumanEval/MBPP pipeline, Pass@k scoring, React/Recharts dashboard |
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import ssl
 import sys
@@ -247,6 +248,25 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     return report
 
 
+def tls_context_from_env(url: str, env) -> ssl.SSLContext | None:
+    """For an ``https`` registry: present ``CLASP_TLS_CLIENT_CERT`` /
+    ``CLASP_TLS_CLIENT_KEY`` and trust only ``CLASP_TLS_CA`` (TLS 1.3, hostname
+    checked). The job saves, promotes, restores and garbage-collects, so under
+    mTLS it needs the operator's certificate (``clasp-admin``, role ``admin``).
+    ``None`` for a plain ``http`` URL."""
+    if not url.startswith("https"):
+        return None
+    names = ("CLASP_TLS_CLIENT_CERT", "CLASP_TLS_CLIENT_KEY", "CLASP_TLS_CA")
+    missing = [n for n in names if not env.get(n)]
+    if missing:
+        raise SystemExit(f"{url} is https: set {', '.join(missing)} (the operator's "
+                         f"certificate, e.g. .runtime/certs/admin/)")
+    ctx = ssl.create_default_context(cafile=env["CLASP_TLS_CA"])
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.load_cert_chain(env["CLASP_TLS_CLIENT_CERT"], env["CLASP_TLS_CLIENT_KEY"])
+    return ctx
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--url", default="http://localhost:8004")
@@ -255,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--wait", type=float, default=60.0, help="seconds to wait for /healthz")
     args = ap.parse_args(argv)
 
-    reg = Registry(args.url)
+    reg = Registry(args.url, tls_context_from_env(args.url, os.environ))
     deadline = time.time() + args.wait
     while True:
         try:

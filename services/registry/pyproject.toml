@@ -5,6 +5,9 @@ description = "CLASP State Registry — safetensors versioning, two-sided promot
 requires-python = ">=3.10"
 dependencies = [
     "clasp-contracts>=1.2,<2.0",
+    # P3's library: the verified peer name (mTLS), roles, HMAC, middleware, audit.
+    # Only its light parts are used; its DP extra (torch, opacus) is not installed.
+    "clasp-security",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",

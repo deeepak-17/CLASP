@@ -6,6 +6,7 @@ from .rate_limiter import (
     RateLimitMiddleware,
     TokenBucket,
     rate_limit_dependency,
+    rate_limit_from_env,
 )
 from .request_validator import (
     RequestValidationMiddleware,
@@ -34,6 +35,7 @@ __all__ = [
     "ValidationError",
     "apply_security_headers",
     "rate_limit_dependency",
+    "rate_limit_from_env",
     "sanitize_client_id",
     "sanitize_path",
     "validate_round_id",

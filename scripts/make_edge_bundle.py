@@ -1,8 +1,13 @@
 """Build the setup bundle for one edge laptop (demo plan v3 item 4).
 
-    python scripts/make_edge_bundle.py client-flask --cluster-url http://192.168.43.10:8002
+    python scripts/make_edge_bundle.py client-flask --cluster-url https://192.168.43.10:8002
     python scripts/make_edge_bundle.py client-numpy --cluster-url https://192.168.43.10:8002 \\
-        --certs .runtime/certs --with-corpus
+        --with-corpus
+    python scripts/make_edge_bundle.py client-flask --cluster-url http://192.168.43.10:8002 \\
+        --no-certs        # only for a stack started with run_services.py --insecure
+
+mTLS is the default (U6), so a bundle carries its edge's certificates from
+``.runtime/certs/edges/<client>/`` unless ``--no-certs`` says otherwise.
 
 The edge laptop clones the repo as usual; this zip carries what git does not
 (trained weights and corpora are gitignored), laid out at the paths the edge
@@ -11,7 +16,10 @@ commands already use, so it unzips straight into the checkout:
     services/edge/artifacts/<set>/<client>/adapter/      the pre-trained adapter(s)
     services/edge/artifacts/<set>/<client>/manifest.json FedAvg weight + DP privacy block
     datasets/materialized/<cluster>/<client>/            (--with-corpus) for a live fine-tune
-    edge-certs/<client>/                                 (--certs) ca.pem client.pem client.key
+    edge-certs/<client>/                                 (--certs) ca.pem client.pem client.key,
+                                                         and hmac.key (this edge's upload key)
+    edge-users/<client>.json                             that edge page's users (scripts/make_users.py),
+                                                         when .runtime/users/<client>.json exists
     EDGE_<client>.md, start_edge_<client>.ps1            what to run on that laptop
 
 Uploading needs no GPU and no model: ``edge.upload`` only reads the adapter
@@ -29,6 +37,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = REPO_ROOT / "services" / "edge" / "artifacts"
 CORPUS = REPO_ROOT / "datasets" / "materialized"
+USERS_DIR = REPO_ROOT / ".runtime" / "users"
+#: Where scripts/make_dev_certs.sh writes; the bundle's certificates by default.
+DEFAULT_CERTS = REPO_ROOT / ".runtime" / "certs"
 DEFAULT_SETS = ("round2_d3", "dp_smoke", "round1")
 MODEL_ID = "deepseek-ai/deepseek-coder-1.3b-base"
 
@@ -46,8 +57,13 @@ def cluster_of(client: str) -> str:
     raise SystemExit(f"cannot tell which cluster {client} belongs to")
 
 
-def run_steps(client: str, cluster: str, cluster_url: str, sets, certs: bool, corpus: bool) -> str:
+def run_steps(client: str, cluster: str, cluster_url: str, sets, certs: bool, corpus: bool,
+              users: bool = False, page_tls: bool = False) -> str:
     mtls = f" --mtls-dir edge-certs/{client}" if certs else ""
+    page = f"http{'s' if page_tls else ''}://127.0.0.1:8020"
+    trust = (f" The page is served over HTTPS with a certificate from laptop A's development "
+             f"CA: import `edge-certs/{client}/ca.pem` into the browser once (or accept its "
+             f"warning for this address)." if page_tls else "")
     adapter = f"services/edge/artifacts/{sets[0]}/{client}/adapter"
     train = (f"""
 ## Optional: a short live fine-tune (needs an NVIDIA GPU with >= 4 GB)
@@ -64,6 +80,11 @@ which is what the next round needs. The new adapter shows up on the page, ready 
 Only adapters trained with DP on this laptop can be sent; the pre-trained adapters in this
 bundle are there for reference.
 """ if corpus else "")
+    keys_note = (f"""
+
+`edge-certs/{client}/` holds this laptop's certificate and `hmac.key`, its upload key: every
+upload is signed with it, and laptop A refuses one that was changed on the way. Both are
+private to this laptop.""" if certs else "")
     return f"""# Edge laptop: {client} (cluster `{cluster}`)
 
 Laptop A runs the cluster at `{cluster_url}`. This laptop uploads `{client}`'s adapter to it.
@@ -78,19 +99,19 @@ pip install -e contracts -e services/edge --no-deps
 pip install numpy safetensors requests{" -e security" if certs else ""}
 ```
 
-Uploading needs no GPU and no model weights.
+Uploading needs no GPU and no model weights.{keys_note}
 
 ## On the day
 
 1. Join the same hotspot as laptop A. Check: `curl {cluster_url}/healthz`{" (with --cacert/--cert/--key from edge-certs)" if certs else ""}.
 2. Wait until laptop A has pressed **Register clusters** in its demo panel.
-3. Start this laptop's page and open http://127.0.0.1:8020:
+3. Start this laptop's page and open {page}:{trust}
 
    ```powershell
    .\\start_edge_{client}.ps1
    ```
 
-   Pick the adapter, press **Upload to cluster**. Laptop A's panel shows `{client}` arrive.
+   {"The page asks you to log in (the username and password laptop A's operator set for this laptop). " if users else ""}Pick the adapter, press **Upload to cluster**. Laptop A's panel shows `{client}` arrive.
 
 Command-line equivalent:
 
@@ -104,22 +125,29 @@ Adapters in this bundle: {", ".join(f"`{s}`" for s in sets)}.
 """
 
 
-def start_script(client: str, cluster_url: str, certs: bool) -> str:
+def start_script(client: str, cluster_url: str, certs: bool, users: bool = False,
+                 page_tls: bool = False) -> str:
     mtls = f" --mtls-dir edge-certs/{client}" if certs else ""
-    return (f"# Start {client}'s edge page (http://127.0.0.1:8020) against laptop A's cluster.\n"
+    mtls += (f" --tls-cert edge-certs/{client}/page.pem --tls-key edge-certs/{client}/page.key"
+             if page_tls else "")
+    mtls += f" --users edge-users/{client}.json" if users else ""
+    return (f"# Start {client}'s edge page (http{'s' if page_tls else ''}://127.0.0.1:8020) "
+            f"against laptop A's cluster.\n"
             f"$here = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
             f"Set-Location $here\n"
             f"if (Test-Path .venv\\Scripts\\Activate.ps1) {{ . .venv\\Scripts\\Activate.ps1 }}\n"
             f"python -m edge.webui --cluster-url {cluster_url} --client-id {client}{mtls}\n")
 
 
-def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus: bool) -> Path:
+def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus: bool,
+          users_dir: Path | None = None) -> Path:
     cluster = cluster_of(client)
     found = [s for s in sets if (ARTIFACTS / s / client / "adapter" / "adapter_model.safetensors").exists()]
     if not found:
         raise SystemExit(f"no trained adapter for {client} under {ARTIFACTS} in sets {list(sets)}")
     out.parent.mkdir(parents=True, exist_ok=True)
     added = 0
+    page_tls = False
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         def add(path: Path, arc: str) -> None:
             nonlocal added
@@ -144,18 +172,50 @@ def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus
                                  f"CLASP_EDGE_CLIENTS={client} scripts/make_dev_certs.sh first")
             for n in ("ca.pem", "client.pem", "client.key"):
                 add(edge_certs / n, f"edge-certs/{client}/{n}")
+            # U4: this edge's own upload key, and never another edge's. The
+            # upload and the page pick it up from the certificate directory.
+            if (edge_certs / "hmac.key").exists():
+                add(edge_certs / "hmac.key", f"edge-certs/{client}/hmac.key")
+            # C1: the certificate this laptop's own page is served with
+            page_tls = all((edge_certs / n).exists() for n in ("page.pem", "page.key"))
+            if page_tls:
+                for n in ("page.pem", "page.key"):
+                    add(edge_certs / n, f"edge-certs/{client}/{n}")
+        # U5: this edge page's users (scrypt hashes, no passwords) and no other page's
+        users_file = Path(users_dir if users_dir is not None else USERS_DIR) / f"{client}.json"
+        has_users = users_file.is_file()
+        if has_users:
+            add(users_file, f"edge-users/{client}.json")
         z.writestr(f"EDGE_{client}.md",
-                   run_steps(client, cluster, cluster_url, found, bool(certs_dir), with_corpus))
-        z.writestr(f"start_edge_{client}.ps1", start_script(client, cluster_url, bool(certs_dir)))
+                   run_steps(client, cluster, cluster_url, found, bool(certs_dir), with_corpus,
+                             users=has_users, page_tls=page_tls))
+        z.writestr(f"start_edge_{client}.ps1",
+                   start_script(client, cluster_url, bool(certs_dir), users=has_users,
+                                page_tls=page_tls))
     print(f"{out}  ({added / 1e6:.1f} MB before compression)")
     print(f"  client {client}, cluster {cluster}, adapters {found}"
           f"{', corpus' if with_corpus else ''}{', certs' if certs_dir else ''}")
     if certs_dir:
-        print("  contains this edge's private key: hand it over directly, do not post it anywhere")
+        print("  contains this edge's private key and upload key: hand it over directly, "
+              "do not post it anywhere")
     return out
 
 
-def main(argv=None) -> int:
+def certs_dir_of(args) -> Path | None:
+    """The certificates the bundle carries: ``--certs``, else ``.runtime/certs``;
+    ``None`` only with ``--no-certs`` (a stack started with ``--insecure``)."""
+    if args.no_certs:
+        return None
+    certs = args.certs if args.certs is not None else DEFAULT_CERTS
+    if not certs.is_dir():
+        raise SystemExit(
+            f"no certificates in {certs}: run scripts/make_dev_certs.sh (or start the services "
+            f"once: run_services.py generates them), or pass --no-certs for a stack started "
+            f"with --insecure")
+    return certs
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="zip what one edge laptop needs for the demo")
     ap.add_argument("clients", nargs="+", help="client ids, e.g. client-flask client-numpy")
     ap.add_argument("--cluster-url", required=True, help="laptop A's cluster, e.g. http://192.168.43.10:8002")
@@ -163,12 +223,23 @@ def main(argv=None) -> int:
     ap.add_argument("--sets", nargs="+", default=list(DEFAULT_SETS),
                     help=f"artifact sets to include when present (default {' '.join(DEFAULT_SETS)})")
     ap.add_argument("--certs", type=Path, default=None,
-                    help="make_dev_certs.sh output dir; adds edges/<client>/ for mTLS")
+                    help="make_dev_certs.sh output dir (default .runtime/certs); the bundle "
+                         "carries edges/<client>/ from it")
+    ap.add_argument("--no-certs", action="store_true",
+                    help="carry no certificates (only for a stack started with --insecure)")
     ap.add_argument("--with-corpus", action="store_true", help="add the client's corpus for a live fine-tune")
-    args = ap.parse_args(argv)
+    ap.add_argument("--users-dir", type=Path, default=None,
+                    help="where scripts/make_users.py wrote <client>.json (default .runtime/users); "
+                         "the edge page then asks for a login")
+    return ap
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    certs = certs_dir_of(args)
     for client in args.clients:
         build(client, args.cluster_url, args.out_dir / f"edge-{client}.zip", args.sets,
-              args.certs, args.with_corpus)
+              certs, args.with_corpus, users_dir=args.users_dir)
     return 0
 
 

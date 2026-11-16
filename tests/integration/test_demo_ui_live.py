@@ -741,7 +741,362 @@ def test_the_panel_state_survives_a_registry_without_the_ledger_route(stack, mon
 
 
 def test_the_page_lists_the_privacy_spend():
-    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    html = ((panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+            + (panel.STATIC_DIR / "live.js").read_text(encoding="utf-8"))
     assert "function privacyLines" in html and "rounds_accounted" in html
     # the merge card no longer describes the cluster epsilon as a sum
     assert "plus the adapter it builds on" not in html
+
+
+# --------------------------------------------------------------------------- #
+# U4: evaluation results are signed by the evaluator and verified by the registry
+# --------------------------------------------------------------------------- #
+EVAL_SECRET = "5e" * 32
+
+
+def _signed_evidence(candidate_es: float, baseline_es: float, *, secret=EVAL_SECRET, tamper=None):
+    """Evidence as scripts/evaluate_candidate.py writes it: the promote body it
+    measured, signed with the evaluator's secret."""
+    from security.auth.hmac_signer import sign_evaluation
+
+    plain = _evidence(candidate_es, baseline_es)
+
+    def fake(cluster_id, version=None, sha256=None, **_kw):
+        ev = plain(cluster_id)
+        result = {"adapter": {"name": f"cluster-{cluster_id}", "version": version,
+                              "kind": "cluster", "cluster_id": cluster_id},
+                  "in_project": ev["in_project"], "guard": ev["guard"],
+                  "baseline_in_project": ev["baseline_in_project"],
+                  "baseline_noise_band": ev["noise_band"], "seed": 0}
+        signature = sign_evaluation(adapter=f"cluster-{cluster_id}", version=version,
+                                    candidate_sha256=sha256, eval_result=result,
+                                    baseline_guard=ev["baseline_guard"], secret=secret)
+        promote = {"eval": result, "baseline_guard": ev["baseline_guard"],
+                   "candidate_sha256": sha256, "eval_signature": signature}
+        if tamper:
+            tamper(promote)
+        return {**ev, "promote": promote}
+    return fake
+
+
+def test_a_signed_evaluation_is_promoted_through_the_panel(stack, tmp_path, monkeypatch):
+    ui, cluster_url, registry_url = stack
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)   # the registry's copy
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    sent = _spy_sends(monkeypatch)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _signed_evidence(0.50, 0.45))
+    r = ui.post("/api/live/promote/web")
+    assert r.status_code == 200, r.text
+    assert r.json()["decision"]["action"] == "promote"
+    body = next(j for m, u, j in sent if u.endswith("/adapters/cluster-web/promote"))
+    assert body["candidate_sha256"] == v1["sha256"] and body["eval_signature"]
+    assert _cluster_web(cluster_url)["active_sha256"] == v1["sha256"]
+
+
+def test_a_result_changed_after_signing_is_refused_and_nothing_is_decided(stack, tmp_path,
+                                                                           monkeypatch):
+    import requests
+
+    ui, cluster_url, registry_url = stack
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    assert ui.post("/api/live/register").status_code == 200
+    _round(ui, cluster_url, tmp_path / "r0", seed=1)
+
+    def inflate(promote):  # the numbers were edited after the evaluator signed them
+        promote["eval"]["in_project"] = {**promote["eval"]["in_project"], "edit_similarity": 0.99}
+
+    monkeypatch.setattr("demo_ui.evidence.evidence_for",
+                        _signed_evidence(0.40, 0.45, tamper=inflate))
+    r = ui.post("/api/live/promote/web")
+    assert r.status_code == 401, r.text
+    assert "signature" in r.json()["detail"]
+    decisions = requests.get(f"{registry_url}/adapters/cluster-web/promotions", timeout=10).json()
+    assert decisions["decisions"] == []
+    web = _cluster_web(cluster_url)
+    assert web["active_sha256"] is None and web["candidate_sha256"]  # still waiting, unserved
+
+
+def test_unsigned_evidence_against_a_registry_with_a_secret_is_refused(stack, tmp_path, monkeypatch):
+    ui, cluster_url, _ = stack
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    assert ui.post("/api/live/register").status_code == 200
+    _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))  # no promote body
+    r = ui.post("/api/live/promote/web")
+    assert r.status_code == 401 and "eval_signature" in r.json()["detail"]
+
+
+def test_the_panel_always_names_the_bytes_it_asks_about(stack, tmp_path, monkeypatch):
+    """Without a secret the body still carries the candidate's sha256, so the
+    registry can refuse an evaluation of other bytes."""
+    ui, cluster_url, _ = stack
+    assert ui.post("/api/live/register").status_code == 200
+    v1 = _round(ui, cluster_url, tmp_path / "r0", seed=1)
+    sent = _spy_sends(monkeypatch)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    assert ui.post("/api/live/promote/web").status_code == 200
+    body = next(j for m, u, j in sent if u.endswith("/adapters/cluster-web/promote"))
+    assert body["candidate_sha256"] == v1["sha256"] and "eval_signature" not in body
+
+# --------------------------------------------------------------------------- #
+# U4: edge uploads are signed by the edge and verified by the cluster
+# --------------------------------------------------------------------------- #
+def test_a_signed_edge_upload_is_accepted_and_a_wrong_key_is_refused(stack, tmp_path, monkeypatch):
+    ui, cluster_url, _ = stack
+    keys = {"client-flask": "f1" * 32, "client-requests": "e2" * 32}
+    secrets = tmp_path / "upload_hmac.json"
+    secrets.write_text(json.dumps(keys), encoding="utf-8")
+    monkeypatch.setenv("CLASP_UPLOAD_HMAC_SECRETS", str(secrets))
+    assert ui.post("/api/live/register").status_code == 200
+
+    flask = _adapter(tmp_path / "r0", "client-flask", 1)
+    out = upload.upload_adapter(flask, cluster_url=cluster_url, hmac_secret=keys["client-flask"],
+                                log=lambda *_: None)
+    assert out["response"]["pending_uploads"] == 1 and out["signed"] is True
+
+    requests_adapter = _adapter(tmp_path / "r0", "client-requests", 2)
+    with pytest.raises(upload.UploadError) as wrong:       # signed with another edge's key
+        upload.upload_adapter(requests_adapter, cluster_url=cluster_url,
+                              hmac_secret=keys["client-flask"], log=lambda *_: None)
+    assert wrong.value.status == 401 and "hmac.key" in wrong.value.hint
+    with pytest.raises(upload.UploadError) as unsigned:
+        upload.upload_adapter(requests_adapter, cluster_url=cluster_url, log=lambda *_: None)
+    assert unsigned.value.status == 401
+    assert _cluster_web(cluster_url)["uploaded_clients"] == ["client-flask"]
+    # a refused DP upload was not charged to the laptop's privacy ledger
+    ledger = upload.DEFAULT_LEDGER_ROOT / "client-requests"
+    assert not ledger.exists() or not any(ledger.iterdir())
+
+# --------------------------------------------------------------------------- #
+# U5: people log in to the panel (JWT); tokens carry a role
+# --------------------------------------------------------------------------- #
+PANEL_PASSWORD = "panel pass phrase"
+JWT_SECRET = "j" * 48
+
+
+@pytest.fixture
+def logins(stack, tmp_path, monkeypatch):
+    """The stack with a users file configured: (ui, cluster_url, registry_url, users)."""
+    from security.auth.users import UserStore
+
+    users = UserStore(tmp_path / "users" / "panel.json")
+    users.add("operator", PANEL_PASSWORD, "operator")
+    users.add("dev-flask", "developer pass phrase", "developer", subject="client-flask")
+    monkeypatch.setenv("CLASP_USERS_FILE", str(users.path))
+    monkeypatch.setenv("CLASP_JWT_SECRET", JWT_SECRET)
+    return (*stack, users)
+
+
+def _login(ui, username="operator", password=PANEL_PASSWORD):
+    return ui.post("/api/login", json={"username": username, "password": password})
+
+
+def _bearer(ui, **kw):
+    r = _login(ui, **kw)
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def test_login_gives_an_operator_token_and_a_wrong_password_does_not(logins):
+    ui = logins[0]
+    r = _login(ui)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["role"] == "operator" and body["token"].count(".") == 2
+    import datetime as dt
+
+    expires = dt.datetime.fromisoformat(body["expires_at"])
+    left = expires - dt.datetime.now(dt.timezone.utc)
+    assert dt.timedelta(hours=7, minutes=59) < left <= dt.timedelta(hours=8)
+    for bad in ({"username": "operator", "password": "wrong"},
+                {"username": "nobody", "password": PANEL_PASSWORD},
+                {"username": "operator"}, {}):
+        refused = ui.post("/api/login", json=bad)
+        assert refused.status_code == 401, bad
+        assert "token" not in refused.json()
+
+
+def test_every_api_route_needs_a_token_except_health_and_login(logins):
+    ui = logins[0]
+    for method, path in (("GET", "/api/live/state"), ("GET", "/api/live/plan"),
+                         ("POST", "/api/live/register"), ("POST", "/api/live/aggregate/web"),
+                         ("POST", "/api/live/publish/web"), ("POST", "/api/live/promote/web"),
+                         ("POST", "/api/live/evaluate/web"), ("GET", "/api/live/evaluate/web"),
+                         ("GET", "/api/cluster/clusters"), ("GET", "/api/registry/adapters")):
+        r = ui.request(method, path)
+        assert r.status_code == 401, (method, path, r.status_code)
+        assert r.headers["www-authenticate"].startswith("Bearer")
+    assert ui.get("/api/health").status_code == 200
+    assert ui.get("/").status_code == 200 and ui.get("/static/common.js").status_code == 200
+    headers = _bearer(ui)
+    assert ui.get("/api/live/plan", headers=headers).status_code == 200
+    assert ui.post("/api/live/register", headers=headers).status_code == 200
+    assert ui.get("/api/cluster/clusters", headers=headers).status_code == 200
+
+
+def test_a_refused_call_does_nothing(logins):
+    ui, cluster_url, _, _ = logins
+    assert ui.post("/api/live/register").status_code == 401
+    import requests
+
+    assert requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"].get("web") is None
+
+
+def test_a_developer_token_is_not_an_operator(logins):
+    ui = logins[0]
+    headers = _bearer(ui, username="dev-flask", password="developer pass phrase")
+    r = ui.get("/api/live/state", headers=headers)
+    assert r.status_code == 403 and "operator" in r.json()["detail"]
+
+
+def test_a_tampered_or_foreign_token_is_401(logins):
+    from security.auth.jwt_handler import JWTConfig
+    from security.auth.users import issue_token
+
+    ui, _, _, users = logins
+    good = _bearer(ui)["Authorization"]
+    assert ui.get("/api/live/plan", headers={"Authorization": good[:-3] + "abc"}).status_code == 401
+    forged = issue_token(users, "operator", PANEL_PASSWORD, JWTConfig(secret_key="x" * 48))
+    assert ui.get("/api/live/plan",
+                  headers={"Authorization": f"Bearer {forged}"}).status_code == 401
+    assert ui.get("/api/live/plan", headers={"Authorization": "Basic b3A6cHc="}).status_code == 401
+
+
+def test_an_expired_token_mid_round_is_401_and_the_round_is_still_there(logins, tmp_path):
+    """Review Focus 4: the page loses its login, the server loses nothing."""
+    from security.auth.jwt_handler import JWTConfig
+    from security.auth.users import issue_token
+
+    ui, cluster_url, _, users = logins
+    headers = _bearer(ui)
+    assert ui.post("/api/live/register", headers=headers).status_code == 200
+    for i, client in enumerate(CLIENTS):
+        upload.upload_adapter(_adapter(tmp_path / "r0", client, 1 + i), cluster_url=cluster_url,
+                              log=lambda *_: None)
+    assert ui.post("/api/live/aggregate/web", headers=headers).status_code == 200
+    assert ui.post("/api/live/publish/web", headers=headers).status_code == 200
+    before = ui.get("/api/live/state", headers=headers).json()
+    assert before["clusters"]["web"]["registry"]["candidate"] == 1
+
+    expired = issue_token(users, "operator", PANEL_PASSWORD,
+                          JWTConfig(secret_key=JWT_SECRET, token_expiry_minutes=-1))
+    stale = {"Authorization": f"Bearer {expired}"}
+    for method, path in (("GET", "/api/live/state"), ("GET", "/api/live/plan"),
+                         ("POST", "/api/live/promote/web"), ("POST", "/api/live/aggregate/web")):
+        r = ui.request(method, path, headers=stale)
+        assert r.status_code == 401 and "expired" in r.json()["detail"], (method, path)
+
+    after = ui.get("/api/live/state", headers=_bearer(ui)).json()
+    web_before, web_after = before["clusters"]["web"], after["clusters"]["web"]
+    for key in ("registered", "cluster", "candidate_sha256", "registry", "last", "privacy"):
+        assert web_after[key] == web_before[key], key
+
+
+def test_without_a_users_file_the_panel_runs_open(stack, monkeypatch):
+    ui = stack[0]
+    monkeypatch.delenv("CLASP_USERS_FILE", raising=False)
+    assert ui.get("/api/live/plan").status_code == 200
+    assert ui.post("/api/live/register").status_code == 200
+    r = ui.post("/api/login", json={"username": "operator", "password": PANEL_PASSWORD})
+    assert r.status_code == 404 and "not enabled" in r.json()["detail"]
+    assert ui.get("/api/health").json()["login_required"] is False
+
+
+def test_health_says_whether_a_login_is_required(logins):
+    assert logins[0].get("/api/health").json()["login_required"] is True
+
+
+def test_a_users_file_that_cannot_be_read_closes_the_panel(stack, tmp_path, monkeypatch):
+    """Configured but broken is not "open"."""
+    ui = stack[0]
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("CLASP_USERS_FILE", str(bad))
+    assert ui.get("/api/live/plan").status_code == 401
+    assert ui.post("/api/login", json={"username": "operator",
+                                       "password": PANEL_PASSWORD}).status_code == 500
+
+
+def test_the_page_has_a_login_form_and_keeps_the_token_for_the_session():
+    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    js = (panel.STATIC_DIR / "common.js").read_text(encoding="utf-8")
+    assert 'id="login"' in html and 'type="password"' in html
+    assert "sessionStorage" in js and "Authorization" in js and "401" in js
+    assert "localStorage" not in js and "localStorage" not in html
+
+# --------------------------------------------------------------------------- #
+# U4: the panel behind security headers, a body limit, a rate limit, an audit trail
+# --------------------------------------------------------------------------- #
+def test_the_panels_responses_carry_security_headers_its_page_can_live_with(stack):
+    ui = stack[0]
+    for response in (ui.get("/"), ui.get("/static/live.js"), ui.get("/api/health"),
+                     ui.get("/api/live/plan"), ui.post("/api/live/aggregate/nope")):
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["referrer-policy"]
+    csp = ui.get("/").headers["content-security-policy"]
+    # scripts only from this origin: the page has no inline script to allow
+    assert "default-src 'self'" in csp and "unsafe-inline" not in csp and "unsafe-eval" not in csp
+    # the page's one outside dependency is its typeface
+    assert "style-src 'self' https://fonts.googleapis.com" in csp
+    assert "font-src https://fonts.gstatic.com" in csp
+
+
+def test_the_page_has_no_inline_script_or_style():
+    import re
+
+    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    assert re.findall(r"<script(?![^>]*\bsrc=)[^>]*>", html) == []
+    assert "<style" not in html and " style=" not in html and "onclick=" not in html
+    assert '<script src="/static/live.js"></script>' in html
+    js = (panel.STATIC_DIR / "live.js").read_text(encoding="utf-8")
+    assert "function privacyLines" in js and " style=" not in js
+
+
+def test_a_body_over_one_mebibyte_is_413(stack):
+    ui = stack[0]
+    assert panel.MAX_BODY_BYTES == 1024 * 1024
+    over = ui.post("/api/login", content=b"{}", headers={
+        "content-length": str(panel.MAX_BODY_BYTES + 1), "content-type": "application/json"})
+    assert over.status_code == 413
+    assert over.headers["x-content-type-options"] == "nosniff"
+
+
+def test_the_panel_rate_limits_a_burst_but_not_health(stack, monkeypatch):
+    from security.middleware import RateLimitConfig, rate_limit_from_env, rate_limiter
+
+    ui = stack[0]
+    monkeypatch.setattr(rate_limiter.time, "monotonic", lambda: 1000.0)
+    panel.rate_limiter.reconfigure(rate_limit_from_env({}))
+    try:
+        codes = [ui.get("/api/live/plan").status_code for _ in range(61)]
+        assert codes[:60] == [200] * 60 and codes[60] == 429
+        assert all(ui.get("/api/health").status_code == 200 for _ in range(100))
+    finally:
+        panel.rate_limiter.reconfigure(RateLimitConfig(enabled=False))
+
+
+def test_the_panels_audit_trail_names_the_operator_and_never_a_password(logins, tmp_path,
+                                                                        monkeypatch):
+    ui = logins[0]
+    trail = tmp_path / "panel-audit.jsonl"
+    monkeypatch.setenv("CLASP_AUDIT_LOG", str(trail))
+    assert _login(ui, password="a wrong pass phrase").status_code == 401
+    headers = _bearer(ui)
+    assert ui.post("/api/live/register", headers=headers).status_code == 200
+    assert ui.get("/api/live/plan", headers=headers).status_code == 200      # a read: no line
+    assert ui.post("/api/live/register").status_code == 401                 # no token
+    panel.audit_trail.close()
+    text = trail.read_text(encoding="utf-8")
+    lines = [json.loads(x) for x in text.splitlines() if '"demo-ui"' in x or "AUTH_FAILURE" in x]
+    events = [(x["event"], x["actor"]) for x in lines]
+    assert ("AUTH_FAILURE", "anonymous") in events
+    assert ("TOKEN_ISSUED", "anonymous") in events        # the login call itself carries no token
+    assert ("ADAPTER_VALIDATED", "operator") in events
+    registered = next(x for x in lines if x["actor"] == "operator")
+    assert registered["metadata"]["role"] == "operator"
+    assert registered["metadata"]["path"] == "/api/live/register"
+    for secret in (PANEL_PASSWORD, "a wrong pass phrase", headers["Authorization"].split()[1],
+                   JWT_SECRET):
+        assert secret not in text

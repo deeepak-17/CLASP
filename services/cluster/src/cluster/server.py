@@ -14,8 +14,11 @@ network or ray.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
+import json
+import logging
 import os as _os
 import re
 import threading
@@ -23,7 +26,7 @@ import time
 from collections.abc import Callable, Sequence
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from flwr.common import (
     Code,
     FitRes,
@@ -37,7 +40,18 @@ from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
+from security.audit import AccessAuditMiddleware, SecurityEvent, ServiceAudit
+from security.auth.hmac_signer import verify_adapter_upload
+from security.auth.roles import ROLE_ADMIN, ROLE_EVALUATION, require_roles
 from security.dp.ledger import BUDGET_TOLERANCE, RUN_EPSILON_BUDGET, RUN_ROUNDS
+from security.middleware import (
+    RateLimiter,
+    RateLimitMiddleware,
+    RequestValidationMiddleware,
+    SecurityHeadersMiddleware,
+    rate_limit_from_env,
+)
+from security.mtls.peer import peer_identity
 from security.validation import detect_poisoning, validate_adapter_integrity
 
 from cluster.adapter_format import (
@@ -454,6 +468,23 @@ def configure_snapshot_sink(sink: SnapshotSink | None) -> None:
     _publishing.sink = sink
 
 
+def _role_identity(request: Request) -> str | None:
+    """The certificate name the role checks read: the installed provider's, else
+    the verified peer name ``PeerCertH11Protocol`` put in the scope. Unlike
+    ``_caller_identity`` it does not depend on ``CLASP_CLUSTER_BIND_IDENTITY``:
+    turning off the upload binding does not open the operator routes."""
+    if _identity.provider is not None:
+        return _identity.provider(request)
+    return peer_identity(request)
+
+
+#: Routes that drive a round or change what is served (U5): the panel and the
+#: evaluator it runs (certificate ``demo-ui``), or an administrator. Uploads and
+#: reads of the active adapter keep their own rules (certificate name equals
+#: ``client_id``; cluster membership). Over plain HTTP every route is open.
+OPERATORS = require_roles(ROLE_EVALUATION, ROLE_ADMIN, identity=_role_identity)
+
+
 def _caller_identity(request: Request) -> str | None:
     if _identity.provider is None:
         return None
@@ -471,6 +502,34 @@ app = FastAPI(
     description="Edge-facing HTTP surface over the existing SVD aggregation core (P2).",
     version="0.2.0",
 )
+
+
+# ---- in front of every route (U4) ----------------------------------------------
+#
+# In the order a request meets them: security headers, a body-size limit, a rate
+# limit (600 requests a minute per caller in bursts of 60,
+# CLASP_RATE_LIMIT_PER_MIN, 0 = off; the caller is the verified certificate name,
+# else the remote address; /healthz is exempt), and the audit recorder: every
+# refused authorisation and every accepted mutating call is a line in the audit
+# trail (CLASP_AUDIT_LOG; the console when it is not set). Budget refusals are
+# written where they happen (``_check_budget``).
+#: An upload is ~34 MB of JSON for a rank-16 adapter on the 1.3B model.
+MAX_BODY_BYTES = 512 * 1024 * 1024
+rate_limiter = RateLimiter(rate_limit_from_env())
+audit_trail = ServiceAudit("cluster")
+
+
+def _audit_identity(request: Request) -> str | None:
+    return _role_identity(request)
+
+
+# added innermost first
+app.add_middleware(AccessAuditMiddleware, audit=audit_trail.logger, identity=_audit_identity,
+                   service="cluster", exempt_paths=("/healthz",))
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter, key_func=_audit_identity,
+                   exempt_paths=("/healthz",))
+app.add_middleware(RequestValidationMiddleware, max_body_bytes=MAX_BODY_BYTES)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 class AggregateRequest(_BaseModel):
@@ -721,6 +780,99 @@ def _upload_locked(
     }
 
 
+# ---- upload signatures (U4) ---------------------------------------------------
+#
+# Each edge signs its upload with its own key; the cluster holds every edge's
+# key in the JSON file ``CLASP_UPLOAD_HMAC_SECRETS`` names ({client id: key},
+# written by scripts/make_dev_certs.sh as cluster/upload_hmac.json). mTLS says
+# which laptop is on the other end of the connection; the signature says the
+# body is the one that laptop built: tensors and sample count unchanged.
+UPLOAD_SECRETS_ENV = "CLASP_UPLOAD_HMAC_SECRETS"
+#: Body keys the signature does not cover: the payload itself (signed as raw
+#: bytes), the signature, and a timestamp a relay may add.
+UNSIGNED_UPLOAD_KEYS = ("tensors", "signature", "timestamp")
+_upload_secrets_cache: dict[str, object] = {}
+_log = logging.getLogger("cluster")
+
+
+def _upload_secrets() -> dict[str, str] | None:
+    """Client id -> key, or ``None`` when no file is configured (the fall-back).
+
+    Re-read when the file changes, so a rotated key needs no restart. A file
+    that is configured but missing or malformed is a 500: every upload is
+    refused rather than waved through unsigned.
+    """
+    path = _os.environ.get(UPLOAD_SECRETS_ENV)
+    if not path:
+        return None
+    try:
+        stat = _os.stat(path)
+        stamp = (path, stat.st_mtime_ns, stat.st_size)
+        if _upload_secrets_cache.get("stamp") != stamp:
+            with open(path, encoding="utf-8") as fh:
+                table = json.load(fh)
+            if not isinstance(table, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str) and v.strip()
+                    for k, v in table.items()):
+                raise ValueError("must be a JSON object mapping client ids to non-empty keys")
+            _upload_secrets_cache.update(
+                stamp=stamp, table={k: v.strip() for k, v in table.items()})
+    except (OSError, ValueError) as exc:
+        _upload_secrets_cache.clear()
+        raise HTTPException(
+            status_code=500,
+            detail=f"{UPLOAD_SECRETS_ENV} cannot be used ({type(exc).__name__}: "
+                   f"{exc if isinstance(exc, ValueError) and 'JSON object' in str(exc) else 'unreadable'}); "
+                   f"uploads are refused until it is fixed",
+        ) from exc
+    return _upload_secrets_cache["table"]  # type: ignore[return-value]
+
+
+async def _raw_upload(request: Request) -> dict:
+    """The upload body exactly as it arrived (FastAPI caches the bytes, so the
+    typed ``AdapterUpload`` parameter is parsed from the same ones)."""
+    try:
+        body = await request.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _check_upload_signature(client_id: str, raw: dict | None) -> None:
+    """Refuse (401) an upload whose signature is missing or wrong, for a client
+    the cluster holds a key for. Called before the upload is buffered.
+
+    A client with no configured key is accepted with a warning (C11); with no
+    secrets file at all nothing is checked.
+    """
+    secrets = _upload_secrets()
+    if secrets is None:
+        return
+    secret = secrets.get(client_id)
+    if secret is None:
+        _log.warning("no upload key configured for client %r: its upload is accepted unsigned",
+                     client_id)
+        return
+    refused = HTTPException(status_code=401, detail={
+        "error": "upload_signature_invalid",
+        "hint": (f"the upload from {client_id!r} is not signed with the key laptop A holds for "
+                 f"it: copy the current edge bundle (edge-certs/{client_id}/hmac.key) to that "
+                 f"laptop, or pass --hmac-key"),
+    })
+    signature = (raw or {}).get("signature")
+    if not isinstance(signature, str) or not signature:
+        raise refused
+    try:
+        tensors = {str(t["name"]): base64.b64decode(t["data_b64"], validate=True)
+                   for t in raw["tensors"]}
+        metadata = {k: v for k, v in raw.items() if k not in UNSIGNED_UPLOAD_KEYS}
+        valid = verify_adapter_upload(tensors, metadata, signature, secret)
+    except (KeyError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise refused
+
+
 def _check_budget(upload: AdapterUpload) -> None:
     """D7 (U3): a differentially private upload must fit its client's run budget.
 
@@ -739,30 +891,32 @@ def _check_budget(upload: AdapterUpload) -> None:
         return
     privacy = upload.privacy
     cumulative = privacy.epsilon_cumulative if privacy is not None else None
+    rounds = privacy.rounds_accounted if privacy is not None else None
+
+    def refuse(error: str, hint: str) -> HTTPException:
+        # every budget refusal goes on the audit trail (U4)
+        audit_trail.logger().log(
+            SecurityEvent.PRIVACY_BUDGET_EXHAUSTED, upload.client_id, "privacy_budget",
+            detail=f"upload refused: {error}", success=False,
+            metadata={"error": error, "epsilon_cumulative": cumulative,
+                      "rounds_accounted": rounds, "budget": RUN_EPSILON_BUDGET})
+        return HTTPException(status_code=422, detail={"error": error, "hint": hint})
+
     if cumulative is None:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_unreported",
-            "hint": "update the edge: uploads must report the run's cumulative epsilon",
-        })
+        raise refuse("privacy_budget_unreported",
+                     "update the edge: uploads must report the run's cumulative epsilon")
     if cumulative > RUN_EPSILON_BUDGET + BUDGET_TOLERANCE:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_exceeded",
-            "hint": (f"client {upload.client_id!r} reports a cumulative epsilon of "
-                     f"{cumulative:g} for its run; the budget is {RUN_EPSILON_BUDGET:g}"),
-        })
-    rounds = privacy.rounds_accounted
+        raise refuse("privacy_budget_exceeded",
+                     f"client {upload.client_id!r} reports a cumulative epsilon of "
+                     f"{cumulative:g} for its run; the budget is {RUN_EPSILON_BUDGET:g}")
     if rounds is not None and rounds > RUN_ROUNDS:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_exceeded",
-            "hint": (f"client {upload.client_id!r} reports round {rounds} of its run; "
-                     f"a run is {RUN_ROUNDS} rounds"),
-        })
+        raise refuse("privacy_budget_exceeded",
+                     f"client {upload.client_id!r} reports round {rounds} of its run; "
+                     f"a run is {RUN_ROUNDS} rounds")
     if cumulative < upload.epsilon - BUDGET_TOLERANCE:
-        raise HTTPException(status_code=422, detail={
-            "error": "privacy_budget_inconsistent",
-            "hint": (f"cumulative epsilon {cumulative:g} is below this round's epsilon "
-                     f"{upload.epsilon:g}"),
-        })
+        raise refuse("privacy_budget_inconsistent",
+                     f"cumulative epsilon {cumulative:g} is below this round's epsilon "
+                     f"{upload.epsilon:g}")
 
 
 def _check_base(state: _ClusterState, upload: AdapterUpload) -> None:
@@ -1231,15 +1385,18 @@ def healthz() -> dict[str, object]:
 
 
 @app.post("/uploads", status_code=201)
-def upload_adapter(upload: AdapterUpload, request: Request) -> dict[str, object]:
+def upload_adapter(upload: AdapterUpload, request: Request,
+                   raw: dict = Depends(_raw_upload)) -> dict[str, object]:
     """Seam A, cluster named by ``upload.cluster_id`` (default cluster when
     omitted). The cluster is created on its first upload here — the sprint demo
     relies on it — bounded by ``MAX_CLUSTERS``; use ``PUT /clusters/{id}/members``
     plus ``POST /clusters/{id}/uploads`` where a mistyped id must be a 404."""
-    return _upload(_cluster(upload.cluster_id, create=True), upload, _caller_identity(request))
+    state = _cluster(upload.cluster_id, create=True)
+    _check_upload_signature(upload.client_id, raw)
+    return _upload(state, upload, _caller_identity(request))
 
 
-@app.post("/aggregate", response_model=ClusterAdapterBroadcast)
+@app.post("/aggregate", response_model=ClusterAdapterBroadcast, dependencies=[Depends(OPERATORS)])
 def aggregate(request: AggregateRequest | None = None) -> ClusterAdapterBroadcast:
     state, req = _aggregate_target(request, None)
     return _aggregate(state, req)
@@ -1292,7 +1449,7 @@ def get_cluster_manifest(cluster_id: str) -> dict[str, object]:
     return _manifest(_clusters.get(cluster_id), cluster_id)
 
 
-@app.post("/adapters/{cluster_id}/publish", status_code=201)
+@app.post("/adapters/{cluster_id}/publish", status_code=201, dependencies=[Depends(OPERATORS)])
 def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) -> dict:
     """Seam B: Cluster -> Registry. POST the **candidate** aggregate as a new
     (inactive) version; 404 when no candidate is pending. The registry makes it
@@ -1419,7 +1576,7 @@ def list_clusters() -> dict[str, object]:
     return {"clusters": out}
 
 
-@app.put("/clusters/{cluster_id}/members")
+@app.put("/clusters/{cluster_id}/members", dependencies=[Depends(OPERATORS)])
 def set_members(cluster_id: str, body: MembersRequest) -> dict[str, object]:
     """Assign ``client_ids`` to this cluster (moving them out of any other).
     Created if new. Uploads already buffered by a moved client in its old
@@ -1463,16 +1620,18 @@ def _path_matches_body(cluster_id: str, upload: AdapterUpload) -> None:
 
 @app.post("/clusters/{cluster_id}/uploads", status_code=201)
 def upload_adapter_to_cluster(
-    cluster_id: str, upload: AdapterUpload, request: Request
+    cluster_id: str, upload: AdapterUpload, request: Request,
+    raw: dict = Depends(_raw_upload),
 ) -> dict[str, object]:
     # create=False: only ``PUT /clusters/{id}/members`` registers a cluster, so a
     # mistyped id is a 404 and callers cannot mint unlimited clusters.
     state = _cluster(cluster_id)
     _path_matches_body(cluster_id, upload)
+    _check_upload_signature(upload.client_id, raw)
     return _upload(state, upload, _caller_identity(request))
 
 
-@app.post("/clusters/{cluster_id}/aggregate", response_model=ClusterAdapterBroadcast)
+@app.post("/clusters/{cluster_id}/aggregate", response_model=ClusterAdapterBroadcast, dependencies=[Depends(OPERATORS)])
 def aggregate_cluster(
     cluster_id: str, request: AggregateRequest | None = None
 ) -> ClusterAdapterBroadcast:
@@ -1509,7 +1668,7 @@ def _pending_candidate(state: _ClusterState, sha256: str) -> ClusterAdapterBroad
     return candidate
 
 
-@app.get("/clusters/{cluster_id}/adapters/candidate", response_model=ClusterAdapterBroadcast)
+@app.get("/clusters/{cluster_id}/adapters/candidate", response_model=ClusterAdapterBroadcast, dependencies=[Depends(OPERATORS)])
 def get_cluster_candidate_adapter(cluster_id: str, request: Request) -> ClusterAdapterBroadcast:
     """The aggregate awaiting promote or reject (404 when none is pending).
     Edges do not read this: they keep pulling ``.../adapters/active``."""
@@ -1534,7 +1693,7 @@ def _drop_uploads_not_based_on(state: _ClusterState, digest: str) -> list[str]:
     return dropped
 
 
-@app.post("/clusters/{cluster_id}/adapters/candidate/promote")
+@app.post("/clusters/{cluster_id}/adapters/candidate/promote", dependencies=[Depends(OPERATORS)])
 def promote_candidate(cluster_id: str, body: CandidateDecision) -> dict[str, object]:
     """Make the pending candidate the served (active) adapter. ``sha256`` must
     name it, else 409. Uploads buffered while the candidate was pending were
@@ -1551,7 +1710,7 @@ def promote_candidate(cluster_id: str, body: CandidateDecision) -> dict[str, obj
             "dropped_uploads": dropped}
 
 
-@app.post("/clusters/{cluster_id}/adapters/candidate/reject")
+@app.post("/clusters/{cluster_id}/adapters/candidate/reject", dependencies=[Depends(OPERATORS)])
 def reject_candidate(cluster_id: str, body: CandidateDecision) -> dict[str, object]:
     """Drop the pending candidate; the previously promoted adapter keeps being
     served and uploads buffered for the next round are kept. The round number
@@ -1628,7 +1787,7 @@ def _broadcast_from_payload(
         update={"sha256": hashlib.sha256(_peft_bytes(broadcast)).hexdigest()})
 
 
-@app.post("/clusters/{cluster_id}/adapters/active/restore")
+@app.post("/clusters/{cluster_id}/adapters/active/restore", dependencies=[Depends(OPERATORS)])
 def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, object]:
     """Serve a registry version again: how a D5 ROLLBACK reaches the edges.
 
@@ -1701,7 +1860,7 @@ def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, o
     }
 
 
-@app.post("/recluster")
+@app.post("/recluster", dependencies=[Depends(OPERATORS)])
 def recluster(body: ReclusterRequest | None = None) -> dict[str, object]:
     """Dynamic re-clustering over HTTP (Week 10, D4) — same algorithm as
     ``MultiClusterFederation``: k-means on the cosine similarity of the clients'

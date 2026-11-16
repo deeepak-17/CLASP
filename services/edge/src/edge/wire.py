@@ -373,7 +373,8 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
                    num_examples: int, seed: Optional[int] = None,
                    key_convention: str = "peft",
                    privacy: Optional[Dict] = None,
-                   base: Optional[Dict] = None) -> Dict:
+                   base: Optional[Dict] = None,
+                   hmac_secret: Optional[str] = None) -> Dict:
     """Build the JSON body for ``POST /uploads`` from a real client adapter.
 
     Carries everything the cluster needs to identify and aggregate the upload:
@@ -387,6 +388,13 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
     residual: the adapter was trained on top of frozen base + alpha * the merged
     adapter with that digest, and the cluster adds it onto that adapter (the
     FedProx server step) instead of averaging it as a full adapter.
+
+    ``hmac_secret`` (this edge's upload key, U4) adds ``signature``: an
+    HMAC-SHA256 over every tensor's raw little-endian bytes (the bytes that are
+    base64-encoded below) and the rest of the body, built by
+    ``security.auth.hmac_signer.sign_adapter_upload``. The cluster recomputes
+    it from the body it receives, so a changed tensor or sample count is
+    refused. Without a key the body carries no signature.
     """
     sd = as_fp32(translate_keys(state_dict, "peft" if key_convention == "peft" else "cluster"))
     info = describe(sd)
@@ -409,7 +417,7 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
               for k, v in sd.items()}
         sd = as_fp32(sd)
 
-    return {
+    payload = {
         "client_id": client_id,
         "cluster_id": cluster_id,
         "round_id": round_id,
@@ -427,6 +435,26 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
            if base else {}),
         "tensors": [encode_tensor(name, arr) for name, arr in sd.items()],
     }
+    if hmac_secret:
+        payload["signature"] = sign_upload(payload, hmac_secret)
+    return payload
+
+
+#: Body keys the upload signature does not cover (the tensors are signed as raw
+#: bytes; a relay may add a timestamp).
+UNSIGNED_UPLOAD_KEYS = ("tensors", "signature", "timestamp")
+
+
+def sign_upload(payload: Dict, secret: str) -> str:
+    """This edge's signature over an upload body (see :func:`upload_payload`)."""
+    import base64
+
+    from security.auth.hmac_signer import sign_adapter_upload
+
+    tensors = {t["name"]: base64.b64decode(t["data_b64"]) for t in payload["tensors"]}
+    metadata = {k: v for k, v in payload.items() if k not in UNSIGNED_UPLOAD_KEYS}
+    # through JSON once, so tuples and floats are what the cluster will read
+    return sign_adapter_upload(tensors, json.loads(json.dumps(metadata)), secret)
 
 
 def upload_payload_from_dir(adapter_dir: Path | str, **kw) -> Dict:

@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -61,24 +62,43 @@ def main(argv=None) -> int:
         subprocess.run([bash(), "scripts/make_dev_certs.sh", certs.relative_to(REPO_ROOT).as_posix()],
                        cwd=str(REPO_ROOT), env=env, check=True)
         run_services += ["--mtls-dir", str(certs)]
+    else:
+        # run_services.py serves mTLS by default; this script's default stays plain HTTP
+        run_services += ["--insecure"]
     subprocess.run(run_services, cwd=str(REPO_ROOT), check=True)
 
-    req = urllib.request.Request("http://127.0.0.1:8010/api/live/register", method="POST")
-    with urllib.request.urlopen(req, timeout=30) as r:
-        print("registered:", json.loads(r.read())["registered"], flush=True)
-
     scheme = "https" if args.mtls else "http"
+    context = None
+    if args.mtls:  # the panel's page is HTTPS with the pages certificate
+        import ssl
+
+        context = ssl.create_default_context(cafile=str(certs / "ca.pem"))
+    req = urllib.request.Request(f"{scheme}://localhost:8010/api/live/register", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=context) as r:
+            print("registered:", json.loads(r.read())["registered"], flush=True)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401:
+            raise
+        # the panel asks for a login (.runtime/users/panel.json): the operator registers
+        print("the panel asks for a login: log in and press 'Register edge laptops'", flush=True)
+
     edges = []
     for i, client in enumerate(args.clients):
         port = args.first_port + i
         cmd = [py, "-m", "edge.webui", "--cluster-url", f"{scheme}://localhost:8002",
                "--client-id", client, "--port", str(port)]
         if args.mtls:
-            cmd += ["--mtls-dir", str(certs / "edges" / client)]
+            edge_certs = certs / "edges" / client
+            cmd += ["--mtls-dir", str(edge_certs), "--tls-cert", str(edge_certs / "page.pem"),
+                    "--tls-key", str(edge_certs / "page.key")]
         log = (RUNTIME / f"edge-{client}.log").open("w", encoding="utf-8")
         edges.append(subprocess.Popen(cmd, cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT))
-        print(f"edge {client:22s} -> http://127.0.0.1:{port}", flush=True)
-    print("live panel               -> http://127.0.0.1:8010\nctrl-c to stop everything", flush=True)
+        print(f"edge {client:22s} -> {scheme}://127.0.0.1:{port}", flush=True)
+    print(f"live panel               -> {scheme}://localhost:8010\nctrl-c to stop everything",
+          flush=True)
+    if args.mtls:
+        print(f"(import {certs / 'ca.pem'} into the browser, or accept its warning)", flush=True)
     try:
         while all(p.poll() is None for p in edges):
             time.sleep(1)

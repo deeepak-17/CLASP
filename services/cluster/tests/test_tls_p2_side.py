@@ -149,7 +149,14 @@ def test_files_helpers(pki, tmp_path):
         MTLSFiles(tmp_path / "x.crt", tmp_path / "y.crt", tmp_path / "z.key").checked()
 
 
-def test_common_name_from_peercert_dict_shape():
-    peercert = {"subject": ((("organizationName", "clasp"),), (("commonName", "client-1"),))}
-    assert common_name_from_peercert(peercert) == "client-1"
-    assert common_name_from_peercert({}) is None and common_name_from_peercert(None) is None
+def test_the_peer_helpers_are_the_security_librarys():
+    """Moved to ``security.mtls.peer`` (tested in security/tests/test_peer.py);
+    the cluster keeps its old import paths as re-exports."""
+    from security.mtls import peer
+
+    from cluster import serve, tls
+
+    assert common_name_from_peercert is peer.common_name_from_peercert
+    assert tls.common_name_from_peercert is peer.common_name_from_peercert
+    assert serve.PeerCertH11Protocol is peer.PeerCertH11Protocol
+    assert serve.peer_identity is peer.peer_identity and serve.SCOPE_KEY == peer.SCOPE_KEY

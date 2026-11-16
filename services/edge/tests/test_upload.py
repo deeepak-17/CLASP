@@ -443,3 +443,176 @@ def test_an_adapter_trained_before_this_change_is_accounted_from_its_results(tmp
     assert sent["epsilon_cumulative"] == pytest.approx(ONE_ROUND, abs=1e-3)
     assert sent["sample_rate"] == 1 / 160 and sent["steps"] == 160 and sent["rounds_accounted"] == 1
     assert _ledger(tmp_path)["records"][0]["steps"] == 160
+
+# --------------------------------------------------------------------------- #
+# U4: the upload is signed with this edge's key
+# --------------------------------------------------------------------------- #
+def test_upload_signs_with_the_given_key(tmp_path, fake_cluster):
+    pytest.importorskip("security.auth.hmac_signer")
+    adapter = _adapter(tmp_path / "r1", "client-flask", seed=1)
+    out = _send(adapter, fake_cluster, tmp_path, hmac_secret="k" * 64)
+    assert len(fake_cluster.uploads[0]["signature"]) == 64
+    assert out["signed"] is True
+    _send(adapter, fake_cluster, tmp_path)
+    assert "signature" not in fake_cluster.uploads[1]
+
+
+def test_the_key_defaults_to_hmac_key_beside_the_certificates(tmp_path):
+    certs = tmp_path / "edge-certs" / "client-flask"
+    certs.mkdir(parents=True)
+    assert upload.read_hmac_key(None, certs) is None           # no file: unsigned, as before
+    (certs / "hmac.key").write_text("f00d" * 16 + "\n", encoding="utf-8")
+    assert upload.read_hmac_key(None, certs) == "f00d" * 16
+    assert upload.read_hmac_key(None, None) is None
+    other = tmp_path / "other.key"
+    other.write_text("beef" * 16, encoding="utf-8")
+    assert upload.read_hmac_key(other, certs) == "beef" * 16     # --hmac-key wins
+
+
+def test_a_named_key_file_that_is_missing_or_empty_is_an_error(tmp_path):
+    with pytest.raises(upload.UploadError, match="--hmac-key"):
+        upload.read_hmac_key(tmp_path / "nope.key", None)
+    empty = tmp_path / "empty.key"
+    empty.write_text("\n", encoding="utf-8")
+    with pytest.raises(upload.UploadError, match="empty"):
+        upload.read_hmac_key(empty, None)
+
+
+def test_a_signature_refusal_says_to_copy_the_bundle(tmp_path, fake_cluster):
+    adapter = _adapter(tmp_path / "r1", "client-flask", seed=1)
+    fake_cluster.upload_status = 401
+
+    def refuse(url, json=None, timeout=None):
+        fake_cluster.requests.append(("POST", url, json))
+        return _Resp(401, {"detail": {"error": "upload_signature_invalid", "hint": "x"}})
+
+    fake_cluster.post = refuse
+    with pytest.raises(upload.UploadError) as exc:
+        _send(adapter, fake_cluster, tmp_path, hmac_secret="k" * 64)
+    assert exc.value.status == 401 and "hmac.key" in exc.value.hint
+
+
+def test_the_cli_reads_the_key_and_never_prints_it(cluster_url, tmp_path, capsys, monkeypatch):
+    pytest.importorskip("security.auth.hmac_signer")
+    key = "ab" * 32
+    secrets = tmp_path / "upload_hmac.json"
+    secrets.write_text(json.dumps({"client-flask": key}), encoding="utf-8")
+    monkeypatch.setenv("CLASP_UPLOAD_HMAC_SECRETS", str(secrets))
+    _register(cluster_url, "web", ["client-flask"])
+    adapter = _adapter(tmp_path / "r1", "client-flask", seed=1)
+    keyfile = tmp_path / "hmac.key"
+    keyfile.write_text(key, encoding="utf-8")
+    # unsigned: the real cluster refuses it
+    assert upload.main(["--adapter", str(adapter), "--cluster-url", cluster_url]) == 1
+    assert "upload_signature_invalid" in capsys.readouterr().err
+    assert upload.main(["--adapter", str(adapter), "--cluster-url", cluster_url,
+                        "--hmac-key", str(keyfile)]) == 0
+    out = capsys.readouterr()
+    assert "signed" in out.out and key not in out.out + out.err
+
+# --------------------------------------------------------------------------- #
+# Review Focus 3: a certificate issued for another address (an old hotspot)
+# --------------------------------------------------------------------------- #
+def _pem(path, *, cert=None, key=None):
+    from cryptography.hazmat.primitives import serialization
+
+    if cert is not None:
+        path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    else:
+        path.write_bytes(key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption()))
+    return path
+
+
+@pytest.fixture
+def old_hotspot_cluster(tmp_path):
+    """The real cluster behind mTLS, with a certificate that names an address
+    this laptop is not dialling (192.168.43.10 and ``cluster``, not 127.0.0.1)."""
+    pytest.importorskip("cryptography")
+    ca_mod = pytest.importorskip("security.mtls.ca")
+    certs_mod = pytest.importorskip("security.mtls.certs")
+    from cluster import serve
+
+    ca_key, ca_cert = ca_mod.create_ca(common_name="clasp-dev-ca", key_size=2048)
+    key, cert = certs_mod.generate_service_cert(ca_key, ca_cert, "cluster",
+                                                sans=["cluster", "192.168.43.10"])
+    server_dir = tmp_path / "cluster"
+    server_dir.mkdir()
+    edge_dir = tmp_path / "edge-certs" / "client-flask"
+    edge_dir.mkdir(parents=True)
+    for directory in (server_dir, edge_dir):
+        _pem(directory / "ca.pem", cert=ca_cert)
+    _pem(server_dir / "cluster.pem", cert=cert)
+    _pem(server_dir / "cluster.key", key=key)
+    client_key, client_cert = certs_mod.generate_client_cert(ca_key, ca_cert, "client-flask")
+    _pem(edge_dir / "client.pem", cert=client_cert)
+    _pem(edge_dir / "client.key", key=client_key)
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    config = serve.build_config({
+        "CLASP_TLS_CERT": str(server_dir / "cluster.pem"),
+        "CLASP_TLS_KEY": str(server_dir / "cluster.key"),
+        "CLASP_TLS_CA": str(server_dir / "ca.pem"),
+        "CLASP_CLUSTER_HOST": "127.0.0.1", "CLASP_CLUSTER_PORT": str(port)})
+    config.log_level = "error"
+    srv = uvicorn.Server(config)
+    thread = threading.Thread(target=srv.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not srv.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert srv.started
+    yield f"https://127.0.0.1:{port}", edge_dir
+    srv.should_exit = True
+    thread.join(timeout=10)
+    server.configure_identity(None)
+
+
+def test_a_certificate_for_another_address_says_which_and_how_to_fix_it(old_hotspot_cluster,
+                                                                       tmp_path):
+    url, edge_dir = old_hotspot_cluster
+    adapter = _adapter(tmp_path / "r1", "client-flask", seed=1)
+    http = upload.session_for(edge_dir)
+    with pytest.raises(upload.UploadError) as exc:
+        upload.upload_adapter(adapter, cluster_url=url, http=http, log=lambda _m: None)
+    hint = exc.value.hint
+    # the address it tried, the addresses the certificate does list, and the command
+    assert hint.startswith("127.0.0.1 is not in the cluster's certificate (it lists: ")
+    assert "192.168.43.10" in hint and "cluster" in hint.split("lists:")[1]
+    assert "On laptop A run: CLASP_LAN_IPS=127.0.0.1 scripts/make_dev_certs.sh" in hint
+    assert "restart the services" in hint and "copy the new edge bundle" in hint
+    assert "TLS" in str(exc.value).splitlines()[0]
+
+
+def test_the_edge_page_shows_the_same_hint(old_hotspot_cluster, tmp_path):
+    url, edge_dir = old_hotspot_cluster
+    page = webui_page(url, edge_dir, tmp_path)
+    status = page.status()
+    assert status["reachable"] is False
+    assert "127.0.0.1 is not in the cluster's certificate" in status["hint"]
+
+
+def webui_page(url, edge_dir, root):
+    from edge import webui
+
+    return webui.EdgePage(cluster_url=url, client_id="client-flask", adapters_root=root,
+                          http=upload.session_for(edge_dir))
+
+
+def test_another_tls_failure_keeps_the_general_hint(tmp_path):
+    """A server whose certificate is not from the CLASP CA at all: not an address problem."""
+    with pytest.raises(upload.UploadError) as exc:
+        upload.list_clusters(_Failing(), "https://192.168.43.10:8002")
+    assert "check --mtls-dir" in exc.value.hint and "is not in the cluster's certificate" \
+        not in exc.value.hint
+
+
+class _Failing:
+    def get(self, url, timeout=None):
+        import requests
+
+        raise requests.exceptions.SSLError("certificate verify failed: unable to get local "
+                                           "issuer certificate")

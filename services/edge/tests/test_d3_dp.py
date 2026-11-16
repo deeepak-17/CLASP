@@ -240,6 +240,9 @@ def test_saving_writes_the_client_adapter_only(stacked, tmp_path):
 # D7: one budget for the whole run of two rounds (U3, C9)
 # --------------------------------------------------------------------------- #
 def _tiny_dp_run(**kw):
+    # CI's edge job installs neither sibling package: skip there, as the tests above do
+    pytest.importorskip("opacus")
+    pytest.importorskip("security.dp.ledger")
     torch.manual_seed(0)
     gen = torch.Generator().manual_seed(0)
     chunks = torch.randint(0, _TinyLM.VOCAB, (40, 6), generator=gen).tolist()
@@ -250,7 +253,7 @@ def _tiny_dp_run(**kw):
 
 def test_train_dp_asks_for_the_two_round_sigma(monkeypatch):
     pytest.importorskip("opacus")
-    from security.dp import ledger
+    ledger = pytest.importorskip("security.dp.ledger")
 
     calls = []
     real = ledger.calibrate_run_sigma
