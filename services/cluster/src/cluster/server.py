@@ -659,7 +659,8 @@ def _healthz() -> dict[str, object]:
 
 
 def _upload(
-    state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None = None
+    state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None = None,
+    raw: dict | None = None,
 ) -> dict[str, object]:
     """Seam A: Edge -> Cluster. Accepts one client's trained LoRA adapter.
 
@@ -670,13 +671,18 @@ def _upload(
 
     Holds the cluster's lock for the whole check-and-store, so it is atomic with
     respect to ``_aggregate`` and to membership moves (see ``_ClusterState``).
+
+    ``raw`` is the request body as it arrived (the HTTP routes pass it): the
+    upload's signature is verified against it, after the caller's identity and
+    membership (see ``_check_upload_signature``). In-process callers pass none.
     """
     with state.lock:
-        return _upload_locked(state, upload, authenticated_as)
+        return _upload_locked(state, upload, authenticated_as, raw)
 
 
 def _upload_locked(
-    state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None
+    state: _ClusterState, upload: AdapterUpload, authenticated_as: str | None,
+    raw: dict | None = None,
 ) -> dict[str, object]:
     """Body of ``_upload``; the caller must hold ``state.lock``."""
     if authenticated_as is not None and authenticated_as != upload.client_id:
@@ -697,6 +703,10 @@ def _upload_locked(
                 f"not {state.cluster_id!r}"
             ),
         )
+    # U4: who it is (above) is settled; now that the body is the one that laptop
+    # built. After the identity checks, so "not your name" is a 403, not a 401.
+    if raw is not None:
+        _check_upload_signature(upload.client_id, raw)
     if upload.base_cluster_id is not None and upload.base_cluster_id != state.cluster_id:
         raise HTTPException(
             status_code=409,
@@ -1392,8 +1402,7 @@ def upload_adapter(upload: AdapterUpload, request: Request,
     relies on it — bounded by ``MAX_CLUSTERS``; use ``PUT /clusters/{id}/members``
     plus ``POST /clusters/{id}/uploads`` where a mistyped id must be a 404."""
     state = _cluster(upload.cluster_id, create=True)
-    _check_upload_signature(upload.client_id, raw)
-    return _upload(state, upload, _caller_identity(request))
+    return _upload(state, upload, _caller_identity(request), raw=raw)
 
 
 @app.post("/aggregate", response_model=ClusterAdapterBroadcast, dependencies=[Depends(OPERATORS)])
@@ -1627,8 +1636,7 @@ def upload_adapter_to_cluster(
     # mistyped id is a 404 and callers cannot mint unlimited clusters.
     state = _cluster(cluster_id)
     _path_matches_body(cluster_id, upload)
-    _check_upload_signature(upload.client_id, raw)
-    return _upload(state, upload, _caller_identity(request))
+    return _upload(state, upload, _caller_identity(request), raw=raw)
 
 
 @app.post("/clusters/{cluster_id}/aggregate", response_model=ClusterAdapterBroadcast, dependencies=[Depends(OPERATORS)])

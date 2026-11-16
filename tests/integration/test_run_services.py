@@ -255,3 +255,22 @@ def test_the_panel_answers_over_https_with_the_pages_certificate(tmp_path):
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+def test_the_launcher_says_on_the_console_which_checks_are_off(rs, tmp_path, monkeypatch):
+    """A certificate directory made before the keys existed has no secrets: the
+    services then accept unsigned results and uploads. That must be said where
+    the operator looks, not only in a log file."""
+    certs = _certs(tmp_path / "certs")
+    monkeypatch.setattr(rs, "USERS_FILE", tmp_path / "users" / "panel.json")
+    assert rs.checks_off(certs, with_ui=False) == []
+    assert rs.checks_off(certs, with_ui=True) == [
+        "the panel has no login (no users file: scripts/make_users.py)"]
+    (certs / "secrets" / "eval_hmac.key").unlink()
+    (certs / "cluster" / "upload_hmac.json").unlink()
+    (certs / "pages" / "pages.pem").unlink()
+    off = rs.checks_off(certs, with_ui=True)
+    assert len(off) == 4
+    text = " ".join(off)
+    assert "evaluation results are not signed" in text and "edge uploads are not signed" in text
+    assert "plain HTTP" in text and "make_dev_certs.sh" in text

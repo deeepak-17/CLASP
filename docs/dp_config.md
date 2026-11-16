@@ -34,6 +34,17 @@ rounds**, not of one round (decision U3, `docs/decisions/2026-11-14-amended-deci
   the cluster on the cumulative ε the upload reports. The registry records it.
 - **A new run.** Training with a new `--run-id` starts a new ledger with a new
   budget. That is a new claim: ε ≤ 8 holds per run, not across runs.
+- **What is not enforced.** The run is a name the laptop chooses. The cluster
+  checks the cumulative ε and round count an upload reports; it does not know
+  which run an upload belongs to (the run id is not sent). A developer who starts
+  a new run and keeps training on the same promoted cluster adapter therefore
+  gets a fresh budget on their own ledger, while the merged adapter now contains
+  more than two rounds of their data: the cluster keeps the merge's ε at the
+  largest value it has seen, and the registry ledger and the panel show the new
+  run's lower figure for that client. ε ≤ 8 is a guarantee per run as declared by
+  the client, not per adapter lineage. Closing this needs a decision (see the
+  amended-decisions file, D7): for example the cluster refusing a client's upload
+  onto a lineage it has already merged two of that client's rounds into.
 
 ## Budget Rationale: ε = 8, δ = 1e-5
 - **Epsilon (ε = 8)**: 

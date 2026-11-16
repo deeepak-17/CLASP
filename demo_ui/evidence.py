@@ -113,6 +113,8 @@ def _from_override(cluster_id: str, version: Optional[int] = None,
         "in_project": entry["in_project"], "baseline_in_project": entry["baseline_in_project"],
         "guard": entry.get("guard", []), "baseline_guard": entry.get("baseline_guard", []),
         "noise_band": float(entry.get("noise_band", 0.0)),
+        # the evaluator's signed promote body, when the file carries one (U4)
+        "promote": doc.get("promote"),
         "provenance": {"in_project": doc.get("source", path), "guard": doc.get("source", path),
                        "noise_band": doc.get("source", path), "stale": False,
                        "note": "measured for this round by an evaluation run (CLASP_EVAL_EVIDENCE)"},

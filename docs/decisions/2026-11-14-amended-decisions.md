@@ -113,6 +113,10 @@ code win.
   **rejected** has still spent its share of the budget, because the update left
   the laptop. Training that is never uploaded costs nothing. A new run
   (`--run-id`) starts a new budget.
+- **Open, needs a decision:** the budget is enforced against the run the laptop
+  declares. A new `--run-id` on the same promoted adapter is a new budget for the
+  client while the adapter keeps the earlier rounds; the cluster cannot tell
+  (`docs/dp_config.md`, "What is not enforced").
 - **Not yet measured:** whether the adapter still learns at the noise two rounds
   within epsilon 8 require. That needs a GPU round and is recorded in
   `experiments/d3-round2-dp/RESULTS.md` when it has been run.

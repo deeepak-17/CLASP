@@ -12,8 +12,8 @@ laptop A shows during the multi-laptop demo (docs/multi-laptop-demo.md). It
      the cluster the edges pull from (``candidate/promote`` or
      ``candidate/reject``): a published version is a candidate, a promotion
      makes it live, a rejected candidate is never served;
-  4. proxies ``/api/cluster/*`` and ``/api/registry/*`` straight through, for
-     inspection.
+  4. proxies ``GET /api/cluster/*`` and ``GET /api/registry/*`` straight
+     through, for inspection (read-only: nothing can be changed through them).
 
 People log in (U5): with a users file configured (``CLASP_USERS_FILE``, written
 by ``scripts/make_users.py``) every ``/api/*`` route except ``/api/health`` and
@@ -285,33 +285,54 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # --------------------------------------------------------------------------- #
 # Straight proxy to the REAL live services — no logic duplicated
 # --------------------------------------------------------------------------- #
+#: Headers of the browser's request that never go upstream: the person's login
+#: token and cookies are the panel's business, not the cluster's or registry's.
+_NOT_FORWARDED = frozenset({"host", "content-length", "authorization", "cookie"})
+
+
+def _upstream_status(status: int) -> int:
+    """The status the panel answers with for an upstream answer. A 401 or 403
+    from the cluster or the registry is about the *panel's* certificate, role or
+    signature, not the person's login: it becomes a 502, because the page reads
+    a 401 as "log in again" and would throw the operator out."""
+    return 502 if status in (401, 403) else status
+
+
+def _upstream_error(what: str, resp: httpx.Response) -> HTTPException:
+    refused = resp.status_code in (401, 403)
+    detail = _detail(resp)
+    text = f"{what}: {detail}" if what else detail
+    if refused:
+        text = f"{text} (refused upstream with {resp.status_code})"
+    return HTTPException(_upstream_status(resp.status_code), text)
+
+
 async def _proxy(base: str, path: str, request: Request) -> Response:
+    """Read-only pass-through for inspection. GET only: the panel's certificate
+    may promote, restore and re-cluster, and none of that is to be reachable by
+    forwarding whatever a browser sends (the actions are the ``/api/live/*``
+    routes, which decide what they ask for)."""
     url = f"{base}/{path}"
     async with _client(30.0) as client:
-        body = await request.body()
-        headers = {k: v for k, v in request.headers.items()
-                   if k.lower() not in ("host", "content-length")}
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in _NOT_FORWARDED}
         try:
-            resp = await client.request(
-                request.method, url, params=request.query_params,
-                content=body, headers=headers,
-            )
+            resp = await client.request("GET", url, params=request.query_params, headers=headers)
         except httpx.ConnectError as e:
             raise HTTPException(
                 502, f"{base} is not reachable — is it running? ({e})"
             ) from e
     return Response(
-        content=resp.content, status_code=resp.status_code,
+        content=resp.content, status_code=_upstream_status(resp.status_code),
         media_type=resp.headers.get("content-type"),
     )
 
 
-@app.api_route("/api/cluster/{path:path}", methods=["GET", "POST", "PUT"])
+@app.api_route("/api/cluster/{path:path}", methods=["GET"])
 async def proxy_cluster(path: str, request: Request) -> Response:
     return await _proxy(CLUSTER_BASE, path, request)
 
 
-@app.api_route("/api/registry/{path:path}", methods=["GET", "POST"])
+@app.api_route("/api/registry/{path:path}", methods=["GET"])
 async def proxy_registry(path: str, request: Request) -> Response:
     return await _proxy(REGISTRY_BASE, path, request)
 
@@ -397,7 +418,7 @@ async def live_register() -> dict:
             r = await _send(client, "PUT", f"{CLUSTER_BASE}/clusters/{cid}/members",
                             json={"client_ids": members})
             if r.status_code != 200:
-                raise HTTPException(r.status_code, f"register {cid}: {_detail(r)}")
+                raise _upstream_error(f"register {cid}", r)
             out[cid] = r.json()["members"]
     return {"registered": out}
 
@@ -652,7 +673,7 @@ async def live_recluster() -> dict:
     async with _client(120.0) as client:
         r = await _send(client, "POST", f"{CLUSTER_BASE}/recluster", json=dict(RECLUSTER_REQUEST))
     if r.status_code != 200:
-        raise HTTPException(r.status_code, _detail(r))
+        raise _upstream_error("", r)
     return {**r.json(), "applied": False}
 
 
@@ -741,7 +762,7 @@ async def live_aggregate(cluster_id: str) -> dict:
                     f"{cid} already has a merge waiting for the registry's decision "
                     f"({str(detail.get('sha256') or '?')[:12]}); publish and decide it "
                     "(promote or reject) before merging again."))
-            raise HTTPException(r.status_code, f"aggregate {cid}: {detail}")
+            raise _upstream_error(f"aggregate {cid}", r)
         m = await _send(client, "GET", f"{CLUSTER_BASE}/clusters/{cid}/aggregate/manifest")
     manifest = m.json()
     _live[cid] = {"aggregate": manifest}  # a new round: older publish/promote no longer apply
@@ -758,7 +779,7 @@ async def live_publish(cluster_id: str) -> dict:
         r = await _send(client, "POST", f"{CLUSTER_BASE}/adapters/{cid}/publish",
                         json={"registry_url": REGISTRY_BASE, "adapter_name": live_registry_name(cid)})
     if r.status_code != 201:
-        raise HTTPException(r.status_code, f"publish {cid}: {_detail(r)}")
+        raise _upstream_error(f"publish {cid}", r)
     v = r.json()["version"]
     summary = {"name": v["ref"]["name"], "version": v["ref"]["version"], "sha256": v["sha256"],
                "round": v.get("round"), "source_clients": v.get("source_clients", []),
@@ -839,7 +860,7 @@ async def live_promote(cluster_id: str) -> dict:
             }
         r = await _send(client, "POST", f"{REGISTRY_BASE}/adapters/{name}/promote", json=body)
         if r.status_code != 200:
-            raise HTTPException(r.status_code, f"promote {name}: {_detail(r)}")
+            raise _upstream_error(f"promote {name}", r)
         decision = r.json()
         step = "promote" if decision.get("action") == "promote" else "reject"
         # the registry recorded the cluster's step with its decision; apply it

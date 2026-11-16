@@ -122,6 +122,7 @@ main { padding: 24px 40px 40px; display: grid; gap: 22px; }
 }
 .parcel .who { font-weight: 700; font-size: 16px; overflow-wrap: anywhere; }
 .parcel .state { font-size: 14px; color: var(--ink-2); }
+[hidden] { display: none !important; }
 .login { max-width: 460px; margin: 28px 40px; background: var(--sheet); border-radius: 10px; padding: 20px 24px; }
 .login h2 { margin: 0 0 4px; }
 .login p { margin: 0 0 14px; color: var(--ink-2); }

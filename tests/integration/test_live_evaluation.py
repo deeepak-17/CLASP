@@ -363,3 +363,24 @@ def test_evidence_written_before_signing_existed_has_no_promote_body(tmp_path, m
     mod.evidence_path(tmp_path, "web", 2).write_text(json.dumps(doc), encoding="utf-8")
     monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
     assert evidence.evidence_for("web", version=2, sha256="b" * 64)["promote"] is None
+
+
+def test_an_override_file_from_the_evaluator_keeps_its_signed_promote_body(tmp_path, monkeypatch):
+    """CLASP_EVAL_EVIDENCE names a file an evaluation run wrote: with signing on,
+    the registry accepts it only with the evaluator's signed body."""
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    mod = _script()
+    doc = mod.evidence_document("web", _v(2, "b" * 64), _v(1, "a" * 64), SCORES["candidate"],
+                                SCORES["baseline"],
+                                band={"value": 0.01, "client": "web/client-flask", "source": "x"},
+                                details={"alpha": 0.5})
+    override = tmp_path / "elsewhere.json"
+    override.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setenv("CLASP_EVAL_EVIDENCE", str(override))
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path / "none")
+    ev = evidence.evidence_for("web", version=2, sha256="b" * 64)
+    assert ev["promote"] == doc["promote"] and ev["promote"]["eval_signature"]
+    # a hand-written override without one still works where nothing is signed
+    del doc["promote"]
+    override.write_text(json.dumps(doc), encoding="utf-8")
+    assert evidence.evidence_for("web", version=2, sha256="b" * 64)["promote"] is None

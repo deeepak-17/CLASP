@@ -809,8 +809,10 @@ def test_a_result_changed_after_signing_is_refused_and_nothing_is_decided(stack,
     monkeypatch.setattr("demo_ui.evidence.evidence_for",
                         _signed_evidence(0.40, 0.45, tamper=inflate))
     r = ui.post("/api/live/promote/web")
-    assert r.status_code == 401, r.text
-    assert "signature" in r.json()["detail"]
+    # the registry's 401 comes back as a 502: a 401 from the panel means only
+    # "your login", and the page would otherwise throw the operator out
+    assert r.status_code == 502, r.text
+    assert "signature" in r.json()["detail"] and "401" in r.json()["detail"]
     decisions = requests.get(f"{registry_url}/adapters/cluster-web/promotions", timeout=10).json()
     assert decisions["decisions"] == []
     web = _cluster_web(cluster_url)
@@ -824,7 +826,7 @@ def test_unsigned_evidence_against_a_registry_with_a_secret_is_refused(stack, tm
     _round(ui, cluster_url, tmp_path / "r0", seed=1)
     monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))  # no promote body
     r = ui.post("/api/live/promote/web")
-    assert r.status_code == 401 and "eval_signature" in r.json()["detail"]
+    assert r.status_code == 502 and "eval_signature" in r.json()["detail"]
 
 
 def test_the_panel_always_names_the_bytes_it_asks_about(stack, tmp_path, monkeypatch):
@@ -1244,3 +1246,93 @@ def test_the_page_has_the_dry_run_button_and_says_nothing_moves():
     assert "recluster_ready" in js and "/api/live/recluster" in js
     assert "similarityTable(r.similarity, r.clients_clustered)" in js
     assert '"apply"' not in js and "apply:" not in js       # the page has no way to apply
+
+
+def test_while_logged_out_the_page_shows_only_the_login_form():
+    js = (panel.STATIC_DIR / "live.js").read_text(encoding="utf-8")
+    body = js[js.index("function showLogin(on)"):js.index("window.addEventListener(\"clasp-login-required\"")]
+    for hidden in ("lanes", "regroup", "register"):
+        assert f'getElementById("{hidden}").hidden = on' in body, hidden
+
+
+def test_hidden_elements_stay_hidden_whatever_their_layout_rule_says():
+    """``#lanes`` is ``display: grid``; without this rule the ``hidden`` attribute
+    loses to it and the round stays on screen behind the login form."""
+    css = (panel.STATIC_DIR / "live.css").read_text(encoding="utf-8")
+    assert "[hidden] { display: none !important; }" in css
+
+
+# --------------------------------------------------------------------------- #
+# Review findings: the inspection proxy cannot change anything; an upstream
+# refusal is never mistaken for the panel's own
+# --------------------------------------------------------------------------- #
+def test_the_inspection_proxy_is_read_only(two_clusters, tmp_path, monkeypatch):
+    """`/api/cluster/*` and `/api/registry/*` carry the panel's certificate: a
+    POST through them would apply a re-clustering, promote or restore."""
+    import requests
+
+    ui, cluster_url, _ = two_clusters
+    for round_no in (1, 2):
+        _two_cluster_round(ui, cluster_url, tmp_path / f"r{round_no}", seed=round_no * 100)
+    before = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]
+    sent = _spy_sends(monkeypatch)
+    for method, path, body in (
+            ("POST", "/api/cluster/recluster", {"apply": True, "min_separation": 0.0}),
+            ("PUT", "/api/cluster/clusters/web/members", {"client_ids": []}),
+            ("POST", "/api/cluster/clusters/web/aggregate", {}),
+            ("POST", "/api/registry/gc", {}),
+            ("POST", "/api/registry/adapters/cluster-web/restore", {"reason": "x"})):
+        assert ui.request(method, path, json=body).status_code == 405, (method, path)
+    after = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]
+    assert {c: after[c]["members"] for c in after} == {c: before[c]["members"] for c in before}
+    assert sent == []
+    assert ui.get("/api/cluster/clusters").status_code == 200       # reading still works
+    assert ui.get("/api/registry/adapters").status_code == 200
+
+
+def test_the_proxy_does_not_forward_the_login_token(logins, monkeypatch):
+    ui = logins[0]
+    seen = {}
+    real = panel.httpx.AsyncClient.request
+
+    async def spy(self, method, url, **kw):
+        seen.update({k.lower(): v for k, v in (kw.get("headers") or {}).items()})
+        return await real(self, method, url, **kw)
+
+    monkeypatch.setattr(panel.httpx.AsyncClient, "request", spy)
+    assert ui.get("/api/cluster/clusters", headers={**_bearer(ui), "Cookie": "a=b"}).status_code == 200
+    assert "authorization" not in seen and "cookie" not in seen
+
+
+def test_an_upstream_refusal_is_a_502_not_the_panels_401(stack, monkeypatch):
+    ui = stack[0]
+    real = panel._send
+
+    async def refuse(client, method, url, **kw):
+        if url.endswith("/members") or url.endswith("/recluster") or url.endswith("/clusters"):
+            import httpx
+
+            return httpx.Response(401 if "members" in url else 403, json={"detail": "no certificate role"})
+        return await real(client, method, url, **kw)
+
+    monkeypatch.setattr(panel, "_send", refuse)
+    for path in ("/api/live/register", "/api/live/recluster"):
+        r = ui.post(path)
+        assert r.status_code == 502 and "no certificate role" in r.json()["detail"], path
+    monkeypatch.setattr(panel, "_send", real)
+
+    async def proxy_refused(self, method, url, **kw):
+        import httpx
+
+        return httpx.Response(401, json={"detail": "upstream says no"})
+
+    monkeypatch.setattr(panel.httpx.AsyncClient, "request", proxy_refused)
+    r = ui.get("/api/registry/adapters")
+    assert r.status_code == 502 and "upstream says no" in r.text
+
+
+def test_other_upstream_answers_keep_their_status(stack):
+    ui = stack[0]                                   # one cluster: the cluster's own 409
+    assert ui.post("/api/live/register").status_code == 200
+    assert ui.post("/api/live/recluster").status_code == 409
+    assert ui.post("/api/live/publish/web").status_code == 404

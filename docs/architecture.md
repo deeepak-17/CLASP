@@ -172,6 +172,17 @@ Six tables (`registry/db.py`); foreign keys are enforced.
 The endpoint contract is the route list in the module docstring of
 `services/registry/src/registry/app.py` (16 routes).
 
+### Deployment and remote access
+
+Laptop A runs the registry, the cluster and the panel (compose, or
+`scripts/run_services.py` on the host); each edge laptop runs its own page and
+uploads to laptop A. On a shared hotspot the laptops dial laptop A's address,
+which must be in its certificates. `docs/remote-access.md` describes the
+alternative: a WireGuard tunnel with laptop A as the hub and a fixed address
+per laptop (`10.77.0.1` for A), so the certificates stop changing with the
+hotspot and the service ports are open on the tunnel interface only. Ports
+8002, 8004 and 8010 are never put on a public interface.
+
 ### Re-clustering, as built (D4)
 
 Rounds 1–2 use the project grouping (D1). After round 2 the panel's "Re-cluster

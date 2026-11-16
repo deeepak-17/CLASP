@@ -155,6 +155,27 @@ def lan_addresses() -> List[str]:
     return sorted(ip for ip in found if not ip.startswith("127."))
 
 
+def checks_off(mtls_dir: Path, with_ui: bool) -> List[str]:
+    """What the stack will run without, because its file is not in ``mtls_dir``
+    (a certificate directory made by an older ``make_dev_certs.sh``) or was
+    never written. Each service then falls back to "allowed, with a warning" in
+    its own log; this is the same news, for the console."""
+    mtls_dir = Path(mtls_dir)
+    again = "run scripts/make_dev_certs.sh again"
+    off = []
+    if not (mtls_dir / "secrets" / "eval_hmac.key").is_file():
+        off.append(f"evaluation results are not signed or verified (no secrets/eval_hmac.key: {again})")
+    if not (mtls_dir / "cluster" / "upload_hmac.json").is_file():
+        off.append(f"edge uploads are not signed or verified (no cluster/upload_hmac.json: {again})")
+    if with_ui:
+        if not ((mtls_dir / "pages" / "pages.pem").is_file()
+                and (mtls_dir / "pages" / "pages.key").is_file()):
+            off.append(f"the panel is served over plain HTTP (no pages/ certificate: {again})")
+        if not USERS_FILE.is_file():
+            off.append("the panel has no login (no users file: scripts/make_users.py)")
+    return off
+
+
 def _commands(host: str) -> Dict[str, List[str]]:
     py = sys.executable
     return {
@@ -299,11 +320,15 @@ def start(background: bool, host: str, with_ui: bool, mtls_dir: Optional[Path],
                   + (f"    demo_ui {scheme}://{ip}:{PORTS['demo-ui']}" if with_ui else ""))
         if ips and mtls_dir:
             print("  (each IP must be in the certificates: CLASP_LAN_IPS=... scripts/make_dev_certs.sh)")
+    if mtls_dir:
+        for line in checks_off(mtls_dir, with_ui):
+            print(f"WARNING {line}")
     if with_ui and mtls_dir:
-        print(f"\nlive panel: {scheme}://localhost:{PORTS['demo-ui']}  "
-              + ("(asks for a login)" if USERS_FILE.is_file() else
-                 "(NO LOGIN: write .runtime/users/panel.json with scripts/make_users.py)"))
-        print(f"  the browser must trust {mtls_dir / 'ca.pem'} (import it once), or it will warn")
+        page_scheme = "https" if (mtls_dir / "pages" / "pages.pem").is_file() else "http"
+        print(f"\nlive panel: {page_scheme}://localhost:{PORTS['demo-ui']}"
+              + ("  (asks for a login)" if USERS_FILE.is_file() else ""))
+        if page_scheme == "https":
+            print(f"  the browser must trust {mtls_dir / 'ca.pem'} (import it once), or it will warn")
 
     if background:
         print("\nrunning in the background - stop with: python scripts/run_services.py --stop")
