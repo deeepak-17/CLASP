@@ -184,3 +184,15 @@ def test_no_response_or_log_line_contains_a_key_or_signature(caplog):
         r = _post(body)
     text = r.text + " ".join(rec.getMessage() for rec in caplog.records)
     assert KEY_A not in text and KEY_B not in text and "de" * 32 not in text
+
+
+def test_the_certificate_is_checked_before_the_signature():
+    """Uploading under another client's name is "not your identity" (403), whatever
+    the signature says: the clearer of the two refusals."""
+    server.configure_identity(lambda request: request.headers.get("x-test-cn"))
+    body = _signed("b", 2, secret=KEY_A)             # a's key, b's name, a's certificate
+    r = client.post("/clusters/web/uploads", json=body, headers={"x-test-cn": "a"})
+    assert r.status_code == 403 and "may not upload as client 'b'" in r.json()["detail"]
+    own = client.post("/clusters/web/uploads", json=_signed("a", 1), headers={"x-test-cn": "a"})
+    assert own.status_code == 201
+    assert _buffered() == ["a"]
