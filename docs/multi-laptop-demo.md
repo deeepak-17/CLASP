@@ -67,7 +67,11 @@ the certificates are inside them). An edge that still has the old ones is told
 so: its upload fails with the address it tried, the addresses the certificate
 lists, and the command above.
 
-Windows Firewall on laptop A (PowerShell as administrator):
+With the WireGuard tunnel (`docs/remote-access.md`) skip the address hunt: laptop A is
+always `10.77.0.1`, the certificates are issued for it once, and the firewall rule is the
+tunnel-only one from that document instead of the one below.
+
+Windows Firewall on laptop A (PowerShell as administrator), without the tunnel:
 
 ```powershell
 New-NetFirewallRule -DisplayName "CLASP demo" -Direction Inbound -Protocol TCP `
