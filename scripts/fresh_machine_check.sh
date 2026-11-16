@@ -43,9 +43,7 @@ docker run --rm -v "$WORK/CLASP:/src:ro" python:3.11-slim bash -euo pipefail -c 
 
 echo "== 3. docker compose bring-up from the clone"
 cd "$WORK/CLASP"
-docker compose -p "$PROJECT" --profile demo up --build --exit-code-from demo-seed \
-  certs registry demo-seed 2>&1 | grep -E "demo-seed-1 +\| (ok|FAIL|registry demo)" || true
-docker compose -p "$PROJECT" --profile demo ps -a --format '{{.Service}} exit={{.ExitCode}}' \
-  | grep -q "demo-seed exit=0" || { echo "FAIL: demo-seed did not pass"; exit 1; }
+docker compose -p "$PROJECT" --profile demo run --rm --build demo-seed \
+  || { echo "FAIL: demo-seed did not pass"; exit 1; }
 
 echo "== fresh-machine bring-up of $COMMIT: PASS"

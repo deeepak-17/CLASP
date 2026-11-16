@@ -63,7 +63,9 @@ services:
       - registry-data:/data/registry
       # Only the registry's own cert/key and the CA cert — never the CA key.
       - ./.runtime/certs/registry:/certs:ro
-      - ./.runtime/certs/secrets/eval_hmac.key:/secrets/eval_hmac.key:ro
+      # The folder, not the key file: containers are created before `certs`
+      # writes the key, and a missing file source would be mounted as a directory.
+      - ./.runtime/certs/secrets:/secrets:ro
     healthcheck:
       # TLS-aware: probes over mTLS when CLASP_TLS_* is set.
       test: ["CMD", "python", "-m", "registry.healthcheck"]
@@ -126,7 +128,7 @@ services:
     volumes:
       - demo-reports:/reports
       - ./.runtime/certs/admin:/certs:ro
-      - ./.runtime/certs/secrets/eval_hmac.key:/secrets/eval_hmac.key:ro
+      - ./.runtime/certs/secrets:/secrets:ro
     restart: "no"
 
   demo-ui:

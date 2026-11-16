@@ -151,9 +151,15 @@ jobs:
       # Over mutual TLS, as the stack runs by default: the one-shot `certs`
       # service writes the dev CA and certificates first, the registry serves
       # with its own, and demo-seed presents the operator's.
+      # `run` starts what demo-seed depends on (certs, then a healthy registry)
+      # and exits with demo-seed's own code. `up --exit-code-from` cannot be
+      # used: the one-shot certs job exits first and trips its abort.
       - name: Registry image + demo-seed end to end
-        run: docker compose --profile demo up --build --exit-code-from demo-seed certs registry demo-seed
+        run: docker compose --profile demo run --rm --build demo-seed
       - name: Logs on failure
         if: failure()
         run: docker compose --profile demo logs certs registry demo-seed
+      - name: Tear down
+        if: always()
+        run: docker compose --profile demo down -v --remove-orphans
 
