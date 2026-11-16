@@ -269,14 +269,61 @@ def _http_error(r: requests.Response) -> str:
     return detail if isinstance(detail, str) else json.dumps(detail)
 
 
+def certificate_names(http, cluster_url: str, timeout: float = 5.0) -> Optional[list]:
+    """The names and addresses the cluster's certificate lists (its SANs), read
+    with this edge's own certificate but without checking the address; ``None``
+    when they cannot be read (no mTLS session, or the handshake fails anyway)."""
+    import socket
+    import ssl
+    from urllib.parse import urlsplit
+
+    files = getattr(http, "clasp_mtls", None)
+    target = urlsplit(cluster_url)
+    if not files or not target.hostname:
+        return None
+    try:
+        context = ssl.create_default_context(cafile=str(files["ca_cert"]))
+        context.check_hostname = False  # the chain is still verified against the CLASP CA
+        context.load_cert_chain(str(files["client_cert"]), str(files["client_key"]))
+        with socket.create_connection((target.hostname, target.port or 443), timeout=timeout) as raw:
+            with context.wrap_socket(raw) as tls:
+                peer = tls.getpeercert() or {}
+    except (OSError, ValueError):
+        return None
+    return [value for _kind, value in peer.get("subjectAltName", ())]
+
+
+def tls_failure_hint(http, cluster_url: str, exc: Exception) -> str:
+    """What to do about a failed TLS handshake.
+
+    The common case on demo day: the certificates were made for another
+    address (yesterday's hotspot), so the cluster's certificate does not list
+    the address this laptop dialled. Then the hint names that address, what the
+    certificate does list, and the command that issues new certificates.
+    """
+    from urllib.parse import urlsplit
+
+    general = ("check --mtls-dir (this edge's ca.pem/client.pem/client.key) "
+               "and that laptop A's IP is in the cluster certificate's SANs")
+    text = str(exc).lower()
+    if "mismatch" not in text and "doesn't match" not in text and "not valid for" not in text:
+        return general
+    address = urlsplit(cluster_url).hostname
+    names = certificate_names(http, cluster_url)
+    if not address or names is None:
+        return general
+    return (f"{address} is not in the cluster's certificate (it lists: {', '.join(names) or 'nothing'}). "
+            f"On laptop A run: CLASP_LAN_IPS={address} scripts/make_dev_certs.sh, "
+            f"restart the services, and copy the new edge bundle.")
+
+
 def list_clusters(http: requests.Session, cluster_url: str, timeout: float = 15.0) -> Dict:
     url = f"{cluster_url.rstrip('/')}/clusters"
     try:
         r = http.get(url, timeout=timeout)
     except requests.exceptions.SSLError as exc:
         raise UploadError(f"TLS handshake with {cluster_url} failed: {exc}",
-                          hint="check --mtls-dir (this edge's ca.pem/client.pem/client.key) "
-                               "and that laptop A's IP is in the cluster certificate's SANs") from exc
+                          hint=tls_failure_hint(http, cluster_url, exc)) from exc
     except requests.exceptions.ConnectionError as exc:
         raise UploadError(f"cluster not reachable at {cluster_url}: {exc}",
                           hint="is laptop A's stack up, on the same network, and is port 8002 "
@@ -502,7 +549,10 @@ def session_for(mtls_dir: Optional[Path], server_hostname: Optional[str] = None)
     if missing:
         raise UploadError(f"missing certificate files {missing}",
                           hint="copy .runtime/certs/edges/<client_id>/ from laptop A")
-    return transport.mtls_session(**files, server_hostname=server_hostname)
+    session = transport.mtls_session(**files, server_hostname=server_hostname)
+    #: where this session's certificates are, for ``certificate_names``
+    session.clasp_mtls = files
+    return session
 
 
 def main(argv=None) -> int:

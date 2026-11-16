@@ -275,3 +275,22 @@ def test_service_audit_with_no_file_configured_writes_to_the_console(monkeypatch
     trail.logger().log_auth_failure("x", "m", "to the console")
     trail.close()
     assert "to the console" in capsys.readouterr().err
+
+
+def test_a_dropped_logger_never_lends_its_file_to_a_later_one(tmp_path):
+    """Private loggers must not be named by object address: Python reuses
+    addresses, and a new logger would inherit an unclosed one's file handle."""
+    names = set()
+    for i in range(200):
+        audit = AuditLogger(log_file=tmp_path / f"{i % 2}.jsonl", stream=False)
+        names.add(audit.logger.name)
+        del audit                     # dropped without close(), as a crashed caller would
+    assert len(names) == 200
+
+    stale = AuditLogger(log_file=tmp_path / "old.jsonl", stream=False)
+    del stale
+    fresh = AuditLogger(log_file=tmp_path / "new.jsonl", stream=False)
+    fresh.log_auth_failure("x", "m", "goes to the new file")
+    fresh.close()
+    assert "goes to the new file" in (tmp_path / "new.jsonl").read_text(encoding="utf-8")
+    assert "goes to the new file" not in (tmp_path / "old.jsonl").read_text(encoding="utf-8")

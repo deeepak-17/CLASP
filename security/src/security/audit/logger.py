@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
@@ -8,6 +9,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+
+
+#: Numbers the private (file-only) loggers; see ``AuditLogger.__init__``.
+_private_names = itertools.count(1)
 
 
 class SecurityEvent(str, Enum):
@@ -62,7 +67,11 @@ class AuditLogger:
                 :meth:`close` releases the file.
         """
         if not stream:
-            name = f"{name}.{id(self):x}"
+            # A name no other instance has or will have. Not the object's
+            # address: Python reuses addresses, and loggers live for the whole
+            # process, so a new instance would inherit a dropped one's handlers
+            # and write into its file.
+            name = f"{name}.{next(_private_names)}"
         self.logger = logging.getLogger(name)
         # Avoid adding handlers multiple times if the logger already has them
         if not self.logger.handlers:

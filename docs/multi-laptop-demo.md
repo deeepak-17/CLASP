@@ -42,22 +42,30 @@ just the bundle (`numpy`, `safetensors`, `requests`, `contracts`).
 On laptop A (the one with the trained adapters):
 
 ```powershell
-# 1. laptop A's address on the hotspot (ipconfig) — say 192.168.43.10
-# 2. one bundle per edge laptop (adapters + manifest + run steps)
-python scripts/make_edge_bundle.py client-flask client-numpy --cluster-url http://192.168.43.10:8002
-#    for mTLS: certs first (in Git Bash), then bundles that carry each edge's cert
+# 1. laptop A's address on the hotspot (ipconfig) — say 192.168.43.10.
+#    With the WireGuard tunnel of docs/remote-access.md use its fixed address
+#    (10.77.0.1) instead: it does not change between sessions.
+# 2. certificates and keys for that address (in Git Bash; everything is mTLS by default)
 #    $ CLASP_LAN_IPS=192.168.43.10 CLASP_EDGE_CLIENTS="client-flask client-numpy" scripts/make_dev_certs.sh
-python scripts/make_edge_bundle.py client-flask client-numpy --cluster-url https://192.168.43.10:8002 --certs .runtime/certs
-# 3. refresh the dashboard's data (bakes services/evaluation/results in)
+# 3. who may log in: the panel's operator, and each edge page's developer
+python scripts/make_users.py --out .runtime/users/panel.json --add operator:operator
+python scripts/make_users.py --out .runtime/users/client-flask.json --add asha:developer:client-flask
+# 4. one bundle per edge laptop: adapters, manifest, that edge's certificate,
+#    upload key and users file, and its run steps
+python scripts/make_edge_bundle.py client-flask client-numpy --cluster-url https://192.168.43.10:8002
+# 5. refresh the dashboard's data (bakes services/evaluation/results in)
 python scripts/feed_dashboard.py --build
 ```
 
 Hand each `.runtime/edge-bundles/edge-<client>.zip` to its laptop. The zip holds
-`EDGE_<client>.md` with that laptop's steps. A bundle made with `--certs` contains
-that edge's private key, so hand it over directly.
+`EDGE_<client>.md` with that laptop's steps. A bundle contains that edge's private
+key and upload key, so hand it over directly.
 
 Hotspot addresses change between sessions. If laptop A's IP changes, remake the
-bundles (the URL is inside them) and, for mTLS, the certificates.
+certificates (step 2), restart the services and remake the bundles (the URL and
+the certificates are inside them). An edge that still has the old ones is told
+so: its upload fails with the address it tried, the addresses the certificate
+lists, and the command above.
 
 Windows Firewall on laptop A (PowerShell as administrator):
 
@@ -66,21 +74,24 @@ New-NetFirewallRule -DisplayName "CLASP demo" -Direction Inbound -Protocol TCP `
   -LocalPort 8002,8004,8005,8010 -Action Allow -Profile Any
 ```
 
-Some hotspots isolate clients from each other. Test with `curl http://<A>:8002/healthz`
-from each edge laptop during the rehearsal (item 13).
+Some hotspots isolate clients from each other. Test from each edge laptop during
+the rehearsal (item 13), with the certificate from its bundle:
+`curl --cacert edge-certs/<client>/ca.pem --cert edge-certs/<client>/client.pem --key edge-certs/<client>/client.key https://<A>:8002/healthz`.
 
 ## On the day
 
 Laptop A:
 
 ```powershell
-docker compose --profile demo up -d                     # registry, cluster, demo-ui, dashboard
-#   mTLS: docker compose -f docker-compose.yml -f docker-compose.mtls.yml --profile demo up -d
+docker compose --profile demo up -d                     # registry, cluster, demo-ui, dashboard: mTLS + HTTPS
 # without docker:
-python scripts/run_services.py --ui                     # add --mtls-dir .runtime/certs for mTLS
+python scripts/run_services.py --ui                     # the same, on the host
+#   plain HTTP, for debugging only: --insecure, or -f docker-compose.insecure.yml
 ```
 
-Open `http://localhost:8010` and press **1 · Register clusters and members**.
+Open `https://localhost:8010` (import `.runtime/certs/ca.pem` into the browser
+once, or accept its warning), log in as the operator, and press
+**Register edge laptops**.
 
 Laptops B and C: `.\start_edge_<client>.ps1`, open `http://127.0.0.1:8020`.
 
@@ -147,7 +158,7 @@ Plain HTTP:
 - Round 2: one upload through `edge.webui`, the DP adapter (ε 7.99) and two more over the CLI. Aggregate → publish v2, then Promote: ROLLBACK as above.
 - The aggregate's ε is reported as unknown because `client-werkzeug` trained without DP (D7 rule).
 
-mTLS (`--mtls-dir`, certs with the LAN IP):
+mTLS (then an option, `--mtls-dir`; now the default), certs with the LAN IP:
 - A client without a certificate is refused at the handshake.
 - Per-edge uploads are accepted.
 - An upload as `client-werkzeug` with `client-flask`'s certificate gets 403.

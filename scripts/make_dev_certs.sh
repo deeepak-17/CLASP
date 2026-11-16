@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Throwaway CA + server certs (registry, cluster) + client certs, for running the
-# stack behind mTLS locally or across laptops on one LAN (docker-compose.mtls.yml,
+# stack behind mTLS locally or across laptops on one LAN (docker-compose.yml,
 # docs/multi-laptop-demo.md). DEV ONLY — production keys come from the security
 # library's CA (P3) and never live in the repo.
 #
@@ -60,11 +60,15 @@ done
 issue registry registry serverAuth,clientAuth "DNS:registry,DNS:localhost,IP:127.0.0.1$lan_sans"
 issue cluster cluster serverAuth,clientAuth "DNS:cluster,DNS:localhost,IP:127.0.0.1$lan_sans"
 issue client clasp-dev-client clientAuth
+# The browser pages (the live panel, the evaluation dashboard): a server
+# certificate only, since people log in rather than present a certificate (C1).
+issue pages clasp-pages serverAuth "DNS:localhost,IP:127.0.0.1$lan_sans"
 issue demo-ui demo-ui clientAuth            # the panel's calls to cluster + registry
 # The operator's certificate (role "admin": registry GC and restore, every
 # cluster and registry route). It stays on laptop A; no service presents it.
 issue admin clasp-admin clientAuth
-mkdir -p registry cluster demo-ui admin
+mkdir -p registry cluster demo-ui admin pages
+cp pages.pem pages.key pages/
 cp ca.pem registry.pem registry.key registry/
 cp ca.pem cluster.pem cluster.key cluster/
 cp ca.pem demo-ui.pem demo-ui.key demo-ui/
@@ -78,6 +82,8 @@ upload_keys=""
 for cid in $EDGE_CLIENTS; do
   mkdir -p "edges/$cid"
   issue "edges/$cid/client" "$cid" clientAuth
+  # that laptop's own page (edge.webui on its loopback), over HTTPS
+  issue "edges/$cid/page" "$cid-page" serverAuth "DNS:localhost,IP:127.0.0.1"
   cp ca.pem "edges/$cid/ca.pem"
   key="$(openssl rand -hex 32)"
   printf '%s\n' "$key" > "edges/$cid/hmac.key"
@@ -96,8 +102,9 @@ mkdir -p secrets
 
 echo "wrote $(pwd):"
 echo "  registry/  cluster/  demo-ui/   mounted into the containers on laptop A"
+echo "  pages/                          the HTTPS certificate of the panel and the dashboard"
 echo "  admin/                          the operator's certificate (CN clasp-admin); keep it on laptop A"
-echo "  edges/<client_id>/              ca.pem client.pem client.key hmac.key — copy to that edge laptop"
+echo "  edges/<client_id>/              ca.pem client.pem client.key hmac.key page.pem page.key — copy to that edge laptop"
 echo "  cluster/upload_hmac.json        every edge's upload key, for the cluster to verify uploads"
 echo "  secrets/jwt.key                 signs the panel's login tokens"
 echo "  secrets/eval_hmac.key           signs evaluation results (evaluator) and verifies them (registry)"

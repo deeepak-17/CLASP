@@ -1,0 +1,55 @@
+# Plain HTTP, for debugging only. Overlay on the main file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.insecure.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.insecure.yml --profile demo up
+#
+# It clears every TLS, signing and login variable, so the registry and the
+# cluster serve plain HTTP with no client authentication (each prints its own
+# warning), no signature is checked, and the panel runs without a login. An
+# empty value counts as unset in every service. Nothing on this stack is then
+# authenticated: do not use it on a network you share.
+services:
+  registry:
+    environment:
+      CLASP_TLS_CERT: ""
+      CLASP_TLS_KEY: ""
+      CLASP_TLS_CA: ""
+      CLASP_EVAL_HMAC_SECRET_FILE: ""
+
+  cluster:
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
+      CLASP_TLS_CERT: ""
+      CLASP_TLS_KEY: ""
+      CLASP_TLS_CA: ""
+      CLASP_UPLOAD_HMAC_SECRETS: ""
+
+  demo-seed:
+    command: ["python", "-m", "registry.demo", "--url", "http://registry:8004",
+              "--report", "/reports/registry-demo.json"]
+
+  demo-ui:
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
+      CLASP_CLUSTER_URL: http://cluster:8002
+      CLASP_TLS_CLIENT_CERT: ""
+      CLASP_TLS_CLIENT_KEY: ""
+      CLASP_TLS_CA: ""
+      CLASP_PAGE_TLS_CERT: ""
+      CLASP_PAGE_TLS_KEY: ""
+      CLASP_USERS_FILE: ""
+      CLASP_JWT_SECRET_FILE: ""
+      CLASP_EVAL_HMAC_SECRET_FILE: ""
+
+  dashboard:
+    environment:
+      CLASP_DASHBOARD_PLAIN_HTTP: "1"
+
+  edge:
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004
+      CLASP_CLUSTER_URL: http://cluster:8002
+
+  evaluation:
+    environment:
+      CLASP_REGISTRY_URL: http://registry:8004

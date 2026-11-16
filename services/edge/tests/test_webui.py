@@ -582,3 +582,64 @@ def test_the_edge_page_has_a_login_form():
     html = webui.PAGE.read_text(encoding="utf-8")
     assert 'id="login"' in html and 'type="password"' in html and "sessionStorage" in html
     assert "localStorage" not in html
+
+# --------------------------------------------------------------------------- #
+# C1: the edge page over HTTPS (a server certificate; people log in)
+# --------------------------------------------------------------------------- #
+def test_the_edge_page_serves_https_when_given_a_page_certificate(tmp_path):
+    import ssl
+
+    pytest.importorskip("cryptography")
+    ca_mod = pytest.importorskip("security.mtls.ca")
+    certs_mod = pytest.importorskip("security.mtls.certs")
+    from cryptography.hazmat.primitives import serialization
+
+    from tests.test_upload import FakeCluster
+
+    ca_key, ca_cert = ca_mod.create_ca(common_name="clasp-dev-ca", key_size=2048)
+    key, cert = certs_mod.generate_service_cert(ca_key, ca_cert, "client-flask-page",
+                                                sans=["localhost", "127.0.0.1"])
+    (tmp_path / "ca.pem").write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "page.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "page.key").write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster())
+    httpd = webui.serve(page, "127.0.0.1", 0, tls=(tmp_path / "page.pem", tmp_path / "page.key"))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        port = httpd.server_address[1]
+        ctx = ssl.create_default_context(cafile=str(tmp_path / "ca.pem"))   # no client certificate
+        with urllib.request.urlopen(f"https://localhost:{port}/api/health", timeout=10,
+                                    context=ctx) as r:
+            assert json.loads(r.read())["status"] == "ok"
+        with pytest.raises(OSError):                                        # plain HTTP is refused
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5)
+        # ... and a client that says nothing does not stall the page for others
+        import socket
+
+        idle = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            with urllib.request.urlopen(f"https://localhost:{port}/api/health", timeout=10,
+                                        context=ctx) as r:
+                assert r.status == 200
+        finally:
+            idle.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_page_tls_comes_from_flags_or_the_environment_and_is_all_or_nothing(tmp_path, monkeypatch):
+    cert, key = tmp_path / "page.pem", tmp_path / "page.key"
+    cert.write_text("x", encoding="utf-8")
+    key.write_text("x", encoding="utf-8")
+    assert webui.page_tls(None, None, {}) is None
+    assert webui.page_tls(cert, key, {}) == (cert, key)
+    assert webui.page_tls(None, None, {"CLASP_PAGE_TLS_CERT": str(cert),
+                                       "CLASP_PAGE_TLS_KEY": str(key)}) == (cert, key)
+    with pytest.raises(ValueError, match="both"):
+        webui.page_tls(cert, None, {})
+    with pytest.raises(ValueError, match="not found"):
+        webui.page_tls(tmp_path / "no.pem", key, {})

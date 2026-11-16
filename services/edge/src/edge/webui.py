@@ -616,8 +616,43 @@ def make_handler(page: EdgePage):
     return Handler
 
 
-def serve(page: EdgePage, host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(page))
+PAGE_TLS_VARS = ("CLASP_PAGE_TLS_CERT", "CLASP_PAGE_TLS_KEY")
+
+
+def page_tls(cert: Optional[Path], key: Optional[Path], env=None) -> Optional[tuple]:
+    """The page's HTTPS certificate and key (C1): the two flags, else
+    ``CLASP_PAGE_TLS_CERT`` / ``CLASP_PAGE_TLS_KEY``, else ``None`` (plain HTTP).
+    Both or neither; a file that is not there is an error, never plain HTTP."""
+    env = os.environ if env is None else env
+    cert = cert if cert is not None else (Path(env[PAGE_TLS_VARS[0]]) if env.get(PAGE_TLS_VARS[0]) else None)
+    key = key if key is not None else (Path(env[PAGE_TLS_VARS[1]]) if env.get(PAGE_TLS_VARS[1]) else None)
+    if cert is None and key is None:
+        return None
+    if cert is None or key is None:
+        raise ValueError("HTTPS needs both the page certificate and its key "
+                         "(--tls-cert and --tls-key, or CLASP_PAGE_TLS_CERT and CLASP_PAGE_TLS_KEY)")
+    for path in (cert, key):
+        if not Path(path).is_file():
+            raise ValueError(f"page certificate file {path} not found")
+    return Path(cert), Path(key)
+
+
+def serve(page: EdgePage, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
+          tls: Optional[tuple] = None) -> ThreadingHTTPServer:
+    """The page's HTTP server; with ``tls`` = (certificate, key) it speaks HTTPS
+    only (a server certificate; the developer is identified by the login)."""
+    httpd = ThreadingHTTPServer((host, port), make_handler(page))
+    if tls is not None:
+        import ssl
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(str(tls[0]), str(tls[1]))
+        # the handshake happens in each connection's own thread (on its first
+        # read), so a client that connects and says nothing cannot stall accept()
+        httpd.socket = context.wrap_socket(httpd.socket, server_side=True,
+                                           do_handshake_on_connect=False)
+    return httpd
 
 
 def main(argv=None) -> int:
@@ -641,6 +676,10 @@ def main(argv=None) -> int:
                     help="FedProx coefficient for fine-tunes started here (0 = off)")
     ap.add_argument("--hmac-key", type=Path, default=None,
                     help="this edge's upload key; default: hmac.key in --mtls-dir when present")
+    ap.add_argument("--tls-cert", type=Path, default=None,
+                    help="serve this page over HTTPS with this certificate (env CLASP_PAGE_TLS_CERT)")
+    ap.add_argument("--tls-key", type=Path, default=None,
+                    help="the page certificate's key (env CLASP_PAGE_TLS_KEY)")
     ap.add_argument("--users", type=Path, default=None,
                     help="users file (scripts/make_users.py): the page then asks for a login; "
                          "without it the page is open")
@@ -653,7 +692,8 @@ def main(argv=None) -> int:
     try:
         http = upload.session_for(args.mtls_dir, args.server_hostname)
         hmac_secret = upload.read_hmac_key(args.hmac_key, args.mtls_dir)
-    except upload.UploadError as exc:
+        tls = page_tls(args.tls_cert, args.tls_key)
+    except (upload.UploadError, ValueError) as exc:
         print(f"edge.webui: {exc}", file=sys.stderr)
         return 1
     users = None
@@ -677,8 +717,12 @@ def main(argv=None) -> int:
                     allow_non_dp=args.allow_non_dp, allow_foreign_base=args.allow_foreign_base,
                     fedprox_mu=args.fedprox_mu, run_id=args.run_id, hmac_secret=hmac_secret,
                     users=users)
-    httpd = serve(page, args.host, args.port)
-    print(f"edge page for {args.client_id or 'all clients'} -> http://{args.host}:{args.port}  "
+    httpd = serve(page, args.host, args.port, tls=tls)
+    if tls is None:
+        print("edge.webui: WARNING serving this page over plain HTTP (--tls-cert/--tls-key "
+              "for HTTPS)", file=sys.stderr)
+    print(f"edge page for {args.client_id or 'all clients'} -> "
+          f"{'https' if tls else 'http'}://{args.host}:{args.port}  "
           f"(cluster {args.cluster_url}); ctrl-c to stop")
     try:
         httpd.serve_forever()

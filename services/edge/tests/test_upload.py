@@ -509,3 +509,110 @@ def test_the_cli_reads_the_key_and_never_prints_it(cluster_url, tmp_path, capsys
                         "--hmac-key", str(keyfile)]) == 0
     out = capsys.readouterr()
     assert "signed" in out.out and key not in out.out + out.err
+
+# --------------------------------------------------------------------------- #
+# Review Focus 3: a certificate issued for another address (an old hotspot)
+# --------------------------------------------------------------------------- #
+def _pem(path, *, cert=None, key=None):
+    from cryptography.hazmat.primitives import serialization
+
+    if cert is not None:
+        path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    else:
+        path.write_bytes(key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption()))
+    return path
+
+
+@pytest.fixture
+def old_hotspot_cluster(tmp_path):
+    """The real cluster behind mTLS, with a certificate that names an address
+    this laptop is not dialling (192.168.43.10 and ``cluster``, not 127.0.0.1)."""
+    pytest.importorskip("cryptography")
+    ca_mod = pytest.importorskip("security.mtls.ca")
+    certs_mod = pytest.importorskip("security.mtls.certs")
+    from cluster import serve
+
+    ca_key, ca_cert = ca_mod.create_ca(common_name="clasp-dev-ca", key_size=2048)
+    key, cert = certs_mod.generate_service_cert(ca_key, ca_cert, "cluster",
+                                                sans=["cluster", "192.168.43.10"])
+    server_dir = tmp_path / "cluster"
+    server_dir.mkdir()
+    edge_dir = tmp_path / "edge-certs" / "client-flask"
+    edge_dir.mkdir(parents=True)
+    for directory in (server_dir, edge_dir):
+        _pem(directory / "ca.pem", cert=ca_cert)
+    _pem(server_dir / "cluster.pem", cert=cert)
+    _pem(server_dir / "cluster.key", key=key)
+    client_key, client_cert = certs_mod.generate_client_cert(ca_key, ca_cert, "client-flask")
+    _pem(edge_dir / "client.pem", cert=client_cert)
+    _pem(edge_dir / "client.key", key=client_key)
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    config = serve.build_config({
+        "CLASP_TLS_CERT": str(server_dir / "cluster.pem"),
+        "CLASP_TLS_KEY": str(server_dir / "cluster.key"),
+        "CLASP_TLS_CA": str(server_dir / "ca.pem"),
+        "CLASP_CLUSTER_HOST": "127.0.0.1", "CLASP_CLUSTER_PORT": str(port)})
+    config.log_level = "error"
+    srv = uvicorn.Server(config)
+    thread = threading.Thread(target=srv.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not srv.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert srv.started
+    yield f"https://127.0.0.1:{port}", edge_dir
+    srv.should_exit = True
+    thread.join(timeout=10)
+    server.configure_identity(None)
+
+
+def test_a_certificate_for_another_address_says_which_and_how_to_fix_it(old_hotspot_cluster,
+                                                                       tmp_path):
+    url, edge_dir = old_hotspot_cluster
+    adapter = _adapter(tmp_path / "r1", "client-flask", seed=1)
+    http = upload.session_for(edge_dir)
+    with pytest.raises(upload.UploadError) as exc:
+        upload.upload_adapter(adapter, cluster_url=url, http=http, log=lambda _m: None)
+    hint = exc.value.hint
+    # the address it tried, the addresses the certificate does list, and the command
+    assert hint.startswith("127.0.0.1 is not in the cluster's certificate (it lists: ")
+    assert "192.168.43.10" in hint and "cluster" in hint.split("lists:")[1]
+    assert "On laptop A run: CLASP_LAN_IPS=127.0.0.1 scripts/make_dev_certs.sh" in hint
+    assert "restart the services" in hint and "copy the new edge bundle" in hint
+    assert "TLS" in str(exc.value).splitlines()[0]
+
+
+def test_the_edge_page_shows_the_same_hint(old_hotspot_cluster, tmp_path):
+    url, edge_dir = old_hotspot_cluster
+    page = webui_page(url, edge_dir, tmp_path)
+    status = page.status()
+    assert status["reachable"] is False
+    assert "127.0.0.1 is not in the cluster's certificate" in status["hint"]
+
+
+def webui_page(url, edge_dir, root):
+    from edge import webui
+
+    return webui.EdgePage(cluster_url=url, client_id="client-flask", adapters_root=root,
+                          http=upload.session_for(edge_dir))
+
+
+def test_another_tls_failure_keeps_the_general_hint(tmp_path):
+    """A server whose certificate is not from the CLASP CA at all: not an address problem."""
+    with pytest.raises(upload.UploadError) as exc:
+        upload.list_clusters(_Failing(), "https://192.168.43.10:8002")
+    assert "check --mtls-dir" in exc.value.hint and "is not in the cluster's certificate" \
+        not in exc.value.hint
+
+
+class _Failing:
+    def get(self, url, timeout=None):
+        import requests
+
+        raise requests.exceptions.SSLError("certificate verify failed: unable to get local "
+                                           "issuer certificate")

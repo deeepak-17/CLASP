@@ -191,3 +191,19 @@ def test_the_registrys_run_budget_is_the_security_librarys():
 
     assert (config.RUN_EPSILON_BUDGET, config.RUN_DELTA, config.RUN_ROUNDS) == (
         ledger.RUN_EPSILON_BUDGET, ledger.RUN_DELTA, ledger.RUN_ROUNDS)
+
+# --------------------------------------------------------------------------- #
+# the demo-seed job speaks mTLS too (it is how compose proves the stack)
+# --------------------------------------------------------------------------- #
+def test_the_demo_job_presents_a_client_certificate_when_the_url_is_https(pki):
+    from registry import demo
+
+    assert demo.tls_context_from_env("http://registry:8004", {}) is None
+    ctx = demo.tls_context_from_env("https://registry:8004", {
+        "CLASP_TLS_CLIENT_CERT": str(pki["client_cert"]),
+        "CLASP_TLS_CLIENT_KEY": str(pki["client_key"]), "CLASP_TLS_CA": str(pki["ca"])})
+    assert isinstance(ctx, ssl.SSLContext) and ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True and ctx.minimum_version == ssl.TLSVersion.TLSv1_3
+    with pytest.raises(SystemExit) as stop:
+        demo.tls_context_from_env("https://registry:8004", {"CLASP_TLS_CA": str(pki["ca"])})
+    assert "CLASP_TLS_CLIENT_CERT" in str(stop.value)

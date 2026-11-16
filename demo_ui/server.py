@@ -87,7 +87,7 @@ REGISTRY_BASE = os.environ.get("CLASP_REGISTRY_URL", "http://localhost:8004")
 
 
 def _tls_verify():
-    """Under mTLS (docker-compose.mtls.yml, run_services.py --mtls-dir) this
+    """Under mTLS (docker-compose.yml and run_services.py by default) this
     panel presents the demo-ui certificate to the cluster and the registry and
     trusts only the CLASP CA; otherwise plain HTTP, as before."""
     import ssl
@@ -221,7 +221,8 @@ async def require_login(request: Request, call_next):
     try:
         settings = _login_settings()
     except (UserStoreError, SecretConfigError) as e:
-        return _unauthorized(f"logins are misconfigured: {e}")
+        return _unauthorized(f"logins are misconfigured: {e}. Write the users file with "
+                             f"scripts/make_users.py --out <file> --add operator:operator")
     if settings is None:
         return await call_next(request)
     try:
