@@ -1244,3 +1244,17 @@ def test_the_page_has_the_dry_run_button_and_says_nothing_moves():
     assert "recluster_ready" in js and "/api/live/recluster" in js
     assert "similarityTable(r.similarity, r.clients_clustered)" in js
     assert '"apply"' not in js and "apply:" not in js       # the page has no way to apply
+
+
+def test_while_logged_out_the_page_shows_only_the_login_form():
+    js = (panel.STATIC_DIR / "live.js").read_text(encoding="utf-8")
+    body = js[js.index("function showLogin(on)"):js.index("window.addEventListener(\"clasp-login-required\"")]
+    for hidden in ("lanes", "regroup", "register"):
+        assert f'getElementById("{hidden}").hidden = on' in body, hidden
+
+
+def test_hidden_elements_stay_hidden_whatever_their_layout_rule_says():
+    """``#lanes`` is ``display: grid``; without this rule the ``hidden`` attribute
+    loses to it and the round stays on screen behind the login form."""
+    css = (panel.STATIC_DIR / "live.css").read_text(encoding="utf-8")
+    assert "[hidden] { display: none !important; }" in css

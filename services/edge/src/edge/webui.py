@@ -619,6 +619,22 @@ def make_handler(page: EdgePage):
 PAGE_TLS_VARS = ("CLASP_PAGE_TLS_CERT", "CLASP_PAGE_TLS_KEY")
 
 
+class _PageServer(ThreadingHTTPServer):
+    """One page per port. On Windows ``SO_REUSEADDR`` (http.server's default)
+    lets a second process bind a port that is already being served, and
+    requests then land on either one; there the socket is taken exclusively,
+    so a second page on the same port fails to start."""
+
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        import socket
+
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def page_tls(cert: Optional[Path], key: Optional[Path], env=None) -> Optional[tuple]:
     """The page's HTTPS certificate and key (C1): the two flags, else
     ``CLASP_PAGE_TLS_CERT`` / ``CLASP_PAGE_TLS_KEY``, else ``None`` (plain HTTP).
@@ -641,7 +657,7 @@ def serve(page: EdgePage, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
           tls: Optional[tuple] = None) -> ThreadingHTTPServer:
     """The page's HTTP server; with ``tls`` = (certificate, key) it speaks HTTPS
     only (a server certificate; the developer is identified by the login)."""
-    httpd = ThreadingHTTPServer((host, port), make_handler(page))
+    httpd = _PageServer((host, port), make_handler(page))
     if tls is not None:
         import ssl
 

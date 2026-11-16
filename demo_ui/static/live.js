@@ -177,7 +177,8 @@ function showLogin(on) {
   needLogin = on;
   document.getElementById("login").hidden = !on;
   document.getElementById("lanes").hidden = on;
-  document.getElementById("register").disabled = on;
+  document.getElementById("regroup").hidden = on;
+  document.getElementById("register").hidden = on;
   if (on) document.getElementById("login-user").focus();
 }
 window.addEventListener("clasp-login-required", () => showLogin(true));

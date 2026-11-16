@@ -643,3 +643,18 @@ def test_page_tls_comes_from_flags_or_the_environment_and_is_all_or_nothing(tmp_
         webui.page_tls(cert, None, {})
     with pytest.raises(ValueError, match="not found"):
         webui.page_tls(tmp_path / "no.pem", key, {})
+
+
+def test_a_second_page_on_the_same_port_is_refused(tmp_path):
+    """On Windows a reusable listening socket lets two pages share one port, and
+    requests land on either: the second page must fail to start instead."""
+    from tests.test_upload import FakeCluster
+
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster())
+    first = webui.serve(page, "127.0.0.1", 0)
+    try:
+        with pytest.raises(OSError):
+            webui.serve(page, "127.0.0.1", first.server_address[1]).server_close()
+    finally:
+        first.server_close()
