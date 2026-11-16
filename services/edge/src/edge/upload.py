@@ -20,6 +20,15 @@ What it does, in order:
 3. ``POST /clusters/{id}/uploads`` — the cluster-addressed route, which answers
    404 for an unregistered cluster instead of opening a new one.
 
+A differentially private adapter is charged to this laptop's privacy ledger
+(D7, U3: epsilon at most 8 over the whole run of 2 rounds, per client). Before
+anything is sent, the round is composed with the run's earlier uploads
+(``security.BudgetLedger``); a round that does not fit is refused here, with no
+network call. The upload carries the run's cumulative epsilon, and the ledger
+is charged only once the cluster has accepted it (C8: the cost is incurred by
+what leaves the laptop, so a rehearsal training or a refused upload is free).
+Sending the same adapter again charges nothing.
+
 Over mTLS (``--mtls-dir``, the per-edge directory ``scripts/make_dev_certs.sh``
 writes) the cluster checks that ``client_id`` is the CN of this edge's
 certificate, so the certificate decides who may upload as whom.
@@ -31,6 +40,7 @@ not registered yet), 409 (stale round: someone aggregated in between), 403
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -43,8 +53,13 @@ from typing import Dict, Optional
 import requests
 
 from edge import transport, wire
+from edge.config import REPO_ROOT
 
 DEFAULT_CLUSTER_URL = os.environ.get("CLASP_CLUSTER_URL", "http://localhost:8002")
+#: This laptop's privacy ledgers: ``<root>/<client_id>/<run_id>.json``.
+DEFAULT_LEDGER_ROOT = Path(os.environ.get(
+    "CLASP_PRIVACY_LEDGER", REPO_ROOT / "services" / "edge" / "artifacts" / "privacy_ledger"))
+DEFAULT_RUN_ID = "run-1"
 
 
 class UploadError(RuntimeError):
@@ -118,6 +133,105 @@ def manifest_num_examples(manifest: Dict) -> Optional[int]:
     return int(n) if n else None
 
 
+def adapter_sha256(adapter_dir: Path | str) -> str:
+    """Digest of the adapter's weights file: what the ledger knows an upload by."""
+    digest = hashlib.sha256()
+    with open(Path(adapter_dir) / "adapter_model.safetensors", "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class BudgetPlan:
+    """What sending one DP adapter does to the run's privacy budget."""
+    ledger: object            # security.BudgetLedger
+    record: object            # security.RoundRecord
+    run_id: str
+    epsilon_cumulative: float  # the run's epsilon once this adapter is counted
+    rounds_accounted: int
+    already_charged: bool      # this very adapter was accepted before: a retry
+
+
+def run_accounting(manifest: Dict) -> Dict:
+    """The manifest's ``privacy`` block with one round of accountant history.
+
+    ``edge.train_client`` records ``sample_rate`` and ``steps`` in the block.
+    Manifests written before it did keep the same two numbers under
+    ``results`` (``results.dp.sample_rate``, ``results.optimizer_steps``), so an
+    adapter trained then is still a known DP round and is composed like any
+    other. A round calibrated to the whole budget on its own simply leaves no
+    room for a second one.
+    """
+    recorded = dict(manifest.get("privacy") or {})
+    results = manifest.get("results") or {}
+    if recorded.get("sample_rate") is None:
+        recorded["sample_rate"] = (results.get("dp") or {}).get("sample_rate")
+    if recorded.get("steps") is None:
+        recorded["steps"] = results.get("optimizer_steps")
+    return recorded
+
+
+def budget_plan(adapter_dir: Path | str, manifest: Dict, client_id: str,
+                ledger_root: Optional[Path] = None) -> Optional[BudgetPlan]:
+    """Fit a DP adapter into its run's budget, or raise :class:`UploadError`.
+
+    ``None`` for an adapter trained without DP: it spends nothing. Nothing is
+    written and nothing is sent here; ``plan.ledger.charge(plan.record)``
+    records the round once the cluster has accepted it.
+    """
+    recorded = run_accounting(manifest)
+    if recorded.get("epsilon") is None:
+        return None
+    try:
+        from security import BudgetExhaustedError, BudgetLedger, LedgerError, RoundRecord, ledger_path
+    except ImportError as exc:
+        raise UploadError(
+            "a differentially private adapter needs the security library's privacy ledger "
+            "(security.BudgetLedger)", hint="update this checkout and reinstall `security`") from exc
+    missing = [k for k in ("noise_multiplier", "sample_rate", "steps") if recorded.get(k) is None]
+    if missing:
+        raise UploadError(
+            f"{adapter_dir} was trained before the run's privacy budget was recorded "
+            f"(its manifest has no {', '.join(missing)})",
+            hint="train it again with this version: the upload composes each round's "
+                 "noise, sample rate and steps into the run's epsilon")
+    run_id = str(recorded.get("run_id") or DEFAULT_RUN_ID)
+    root = Path(ledger_root) if ledger_root is not None else DEFAULT_LEDGER_ROOT
+    try:
+        ledger = BudgetLedger(ledger_path(root, client_id, run_id),
+                              rounds_total=int(recorded.get("rounds_total") or 2))
+    except (LedgerError, ValueError) as exc:
+        raise UploadError(str(exc)) from exc
+    sha = adapter_sha256(adapter_dir)
+    records = ledger.records()
+    epsilon_round = float(recorded["epsilon"])
+    for position, charged in enumerate(records, start=1):
+        if charged.adapter_sha256 == sha:
+            # a retry: re-send what was recorded for it, charge nothing
+            history = [(r.noise_multiplier, r.sample_rate, r.steps) for r in records[:position]]
+            from security.dp.ledger import _compose
+
+            cumulative = max(_compose(history, ledger.delta, ledger.accountant), epsilon_round)
+            return BudgetPlan(ledger, charged, run_id, round(cumulative, 6), position, True)
+    record = RoundRecord(
+        round=len(records) + 1, noise_multiplier=float(recorded["noise_multiplier"]),
+        sample_rate=float(recorded["sample_rate"]), steps=int(recorded["steps"]),
+        epsilon_round=epsilon_round, adapter_sha256=sha,
+        uploaded_at=datetime.now(timezone.utc).isoformat())
+    try:
+        ledger.check(record)
+    except BudgetExhaustedError as exc:
+        raise UploadError(
+            f"{client_id}'s privacy budget for run {run_id!r} does not allow this upload: {exc}",
+            hint=f"epsilon {ledger.cumulative_epsilon():.2f} of {ledger.budget:g} is spent in "
+                 f"run {run_id!r}. A new run has a new budget: train with "
+                 f"--run-id <new name> (edge.train_client) and upload that adapter") from exc
+    # never below the round's own epsilon (the two come from differently rounded inputs)
+    cumulative = max(ledger.cumulative_epsilon(record), epsilon_round)
+    return BudgetPlan(ledger, record, run_id, round(cumulative, 6), len(records) + 1, False)
+
+
 def _http_error(r: requests.Response) -> str:
     try:
         detail = r.json().get("detail", r.text)
@@ -175,8 +289,12 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                    seed: Optional[int] = None, http: Optional[requests.Session] = None,
                    timeout: float = transport.DEFAULT_UPLOAD_TIMEOUT,
                    allow_foreign_base: bool = False, allow_reset: bool = False,
-                   log=print) -> Dict:
-    """Upload one adapter directory; returns the cluster's answer plus what was sent."""
+                   ledger_root: Optional[Path] = None, log=print) -> Dict:
+    """Upload one adapter directory; returns the cluster's answer plus what was sent.
+
+    ``ledger_root`` holds this laptop's privacy ledgers (default
+    ``DEFAULT_LEDGER_ROOT``); see the module docstring for when it is charged.
+    """
     adapter_dir = Path(adapter_dir)
     if not (adapter_dir / "adapter_model.safetensors").exists():
         raise UploadError(f"{adapter_dir} has no adapter_model.safetensors",
@@ -198,6 +316,8 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                      "default) or on the bare base; --allow-foreign-base sends it as a full "
                      "adapter anyway") from exc
         base = None
+    # D7: a DP round must fit the run's budget before anything goes on the wire.
+    plan = budget_plan(adapter_dir, manifest, client_id, ledger_root)
 
     clusters = list_clusters(http, cluster_url)
     target = resolve_target(clusters, client_id, cluster_id, manifest_cluster(manifest))
@@ -215,6 +335,11 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
         f"({target.how}) at {cluster_url}")
 
     privacy = wire.privacy_from_training_manifest(adapter_dir)
+    if plan is not None:
+        privacy = wire.privacy_block({**privacy, "epsilon_cumulative": plan.epsilon_cumulative,
+                                      "rounds_accounted": plan.rounds_accounted,
+                                      "sample_rate": plan.record.sample_rate,
+                                      "steps": plan.record.steps})
     payload = wire.upload_payload_from_dir(
         adapter_dir, client_id=client_id, cluster_id=target.cluster_id, round_id=rnd,
         num_examples=n, seed=seed if seed is not None else manifest.get("seed"),
@@ -223,6 +348,11 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
     log(f"  {len(payload['tensors'])} tensors, {payload['num_layers']} layers, "
         f"rank {payload['rank']}, {size_mb:.1f} MB fp32, weight {n} blocks, "
         f"epsilon {privacy['epsilon'] if privacy['epsilon'] is not None else 'none (DP off)'}")
+    if plan is not None:
+        log(f"  privacy budget, run {plan.run_id!r}: epsilon {plan.epsilon_cumulative:.2f} of "
+            f"{plan.ledger.budget:g} after this upload, round {plan.rounds_accounted} of "
+            f"{plan.ledger.rounds_total}"
+            + (" (already sent once: not charged again)" if plan.already_charged else ""))
     log(f"  trained on round {base['round_id']}'s merged adapter {base['sha256'][:12]} "
         f"(alpha {base['alpha']:g}): the cluster adds it onto that adapter (FedProx)"
         if base else "  a full adapter (trained on the bare base): averaged with the round's others")
@@ -236,6 +366,9 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
     seconds = round(time.monotonic() - t0, 2)
     if r.status_code == 201:
         body = r.json()
+        if plan is not None and not plan.already_charged:
+            # C8: charged now that the update has left the laptop and was accepted
+            plan.ledger.charge(plan.record)
         log(f"  accepted in {seconds}s: {body['pending_uploads']} upload(s) now pending "
             f"in {target.cluster_id!r} round {body['round_id']}")
         return {"response": body, "cluster_id": target.cluster_id, "client_id": client_id,
@@ -255,7 +388,12 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
               "the certificate's CN" if "authenticated identity" in detail else
               "this client is assigned to another cluster"),
         401: "the cluster requires a client certificate: pass --mtls-dir",
-        422: "the cluster could not parse or combine this adapter with the round's others",
+        422: ("the cluster counts this client's run over its privacy budget; a new run "
+              "(train with --run-id <new name>) has a new budget"
+              if "privacy_budget_exceeded" in detail else
+              "the cluster expects the run's cumulative epsilon with a DP upload: update this "
+              "edge and train the adapter again" if "privacy_budget_unreported" in detail else
+              "the cluster could not parse or combine this adapter with the round's others"),
         429: "the cluster is full for this round",
     }
     raise UploadError(f"cluster refused the upload ({r.status_code}): {detail}",
@@ -350,6 +488,9 @@ def main(argv=None) -> int:
                          "this cluster, as a full adapter")
     ap.add_argument("--allow-reset", action="store_true",
                     help="send a bare-base adapter even though the cluster has merged rounds")
+    ap.add_argument("--ledger-root", type=Path, default=None,
+                    help="this laptop's privacy ledgers (default: services/edge/artifacts/"
+                         "privacy_ledger, env CLASP_PRIVACY_LEDGER)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON")
     args = ap.parse_args(argv)
     try:
@@ -358,7 +499,7 @@ def main(argv=None) -> int:
                              cluster_id=args.cluster, num_examples=args.num_examples,
                              round_id=args.round, http=http,
                              allow_foreign_base=args.allow_foreign_base,
-                             allow_reset=args.allow_reset,
+                             allow_reset=args.allow_reset, ledger_root=args.ledger_root,
                              # with --json, stdout carries only the JSON
                              log=(lambda m: print(m, file=sys.stderr)) if args.json else print)
     except UploadError as exc:

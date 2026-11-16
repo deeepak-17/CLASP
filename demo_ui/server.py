@@ -239,6 +239,33 @@ async def _registry_summary(client: httpx.AsyncClient, cluster_id: str) -> dict:
     }
 
 
+async def _privacy_summary(client: httpx.AsyncClient, cluster_id: str) -> dict:
+    """D7: what each of the cluster's clients has spent of its run's privacy
+    budget, from the registry's ledger (``GET /privacy/ledger``): the latest
+    row per client. Never raises: a registry that cannot answer costs the
+    page these lines, with the reason under ``error``."""
+    out: dict = {"budget": None, "rounds_total": None, "clients": [], "error": None}
+    try:
+        r = await _send(client, "GET", f"{REGISTRY_BASE}/privacy/ledger",
+                        params={"cluster_id": cluster_id})
+        if r.status_code != 200:
+            out["error"] = _step_error("registry GET /privacy/ledger", resp=r)
+            return out
+        body = r.json()
+        latest: dict[str, dict] = {}
+        for row in body.get("rows", []):  # oldest first: a later row replaces an earlier one
+            latest[row["client_id"]] = {
+                "client_id": row["client_id"],
+                "epsilon_cumulative": row["epsilon_cumulative"],
+                "rounds_accounted": row.get("rounds_accounted"),
+            }
+        out.update(budget=body.get("budget"), rounds_total=body.get("rounds_total"),
+                   clients=sorted(latest.values(), key=lambda c: c["client_id"]))
+    except (HTTPException, httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        out["error"] = _step_error("registry GET /privacy/ledger", exc=e)
+    return out
+
+
 #: Only one reconciliation runs at a time, so two page polls (or a poll and a
 #: Promote) never send the same cluster step twice.
 _reconciling = False
@@ -397,6 +424,8 @@ async def live_state() -> dict:
                 # the aggregate awaiting evaluation and promote / reject
                 "candidate_sha256": (cluster or {}).get("candidate_sha256"),
                 "registry": reg,
+                # D7: each client's spend of its run's budget, as the registry recorded it
+                "privacy": await _privacy_summary(client, cid),
                 "last": _live.get(cid, {}),
                 "cluster_sync": [p for p in sync["pending"] if p["cluster_id"] == cid],
                 "evaluation": _eval_snapshot(cid, tail=4),

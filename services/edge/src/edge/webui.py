@@ -35,6 +35,9 @@ the page can do nothing the command line cannot.
   ``<root>/from_cluster/<cluster>-round<N>-<sha12>``, and the next fine-tune
   trains on top of exactly that adapter (D3, ``--cluster-adapter``).
 * One job (upload or train) runs at a time; its log streams into the page.
+* The page shows this laptop's privacy budget for its run (D7: epsilon at most
+  8 over the run's 2 rounds, charged when an adapter is uploaded) and does not
+  offer to send an adapter the ledger would refuse.
 
 Standard library only (``http.server``), so the page runs in the edge's
 existing environment. It binds 127.0.0.1 by default: it is the operator's page
@@ -168,7 +171,9 @@ class EdgePage:
     def __init__(self, *, cluster_url: str, client_id: Optional[str], adapters_root: Path,
                  http: Optional[requests.Session] = None, corpus_root: Optional[Path] = None,
                  python: str = sys.executable, allow_non_dp: bool = False,
-                 allow_foreign_base: bool = False, fedprox_mu: float = DEFAULT_MU) -> None:
+                 allow_foreign_base: bool = False, fedprox_mu: float = DEFAULT_MU,
+                 run_id: str = upload.DEFAULT_RUN_ID,
+                 ledger_root: Optional[Path] = None) -> None:
         self.cluster_url = cluster_url
         self.client_id = client_id
         self.adapters_root = Path(adapters_root)
@@ -178,6 +183,11 @@ class EdgePage:
         self.allow_non_dp = allow_non_dp
         self.allow_foreign_base = allow_foreign_base
         self.fedprox_mu = fedprox_mu
+        #: The federated run fine-tunes started here belong to (one privacy budget).
+        self.run_id = run_id
+        #: This laptop's privacy ledgers, beside the adapters they account for.
+        self.ledger_root = Path(ledger_root) if ledger_root else self.adapters_root / "privacy_ledger"
+        self._budget_cache: Dict = {}
         self.job = Job()
         #: The last adapter this page sent: id, cluster and round it went into.
         self.last_sent: Optional[Dict] = None
@@ -193,12 +203,73 @@ class EdgePage:
             found = [a for a in found if a["epsilon"] is not None]
         if not self.allow_foreign_base:
             found = [a for a in found if not a["foreign_base"]]
-        return found
+        return [{**a, **self.budget_for(a)} for a in found]
+
+    # -- the run's privacy budget (D7) ---------------------------------------
+    def _ledger_stamp(self, client_id: str, run_id: str):
+        try:
+            from security import ledger_path
+
+            stat = ledger_path(self.ledger_root, client_id, run_id).stat()
+            return (stat.st_mtime_ns, stat.st_size)
+        except (ImportError, OSError, ValueError):
+            return None
+
+    def budget_for(self, adapter: Dict) -> Dict:
+        """Whether the ledger lets this adapter be sent: ``budget_ok``, ``uploaded``
+        (already charged: sending it again is a free retry) and ``budget_reason``.
+
+        Composing a run with the accountant takes a moment, so the answer is
+        kept until the adapter's weights or its ledger file change.
+        """
+        if adapter["epsilon"] is None:
+            return {"budget_ok": True, "uploaded": False, "budget_reason": None}
+        manifest = upload.training_manifest(adapter["path"])
+        client_id = self.client_id or adapter["client_id"]
+        run_id = str((manifest.get("privacy") or {}).get("run_id") or upload.DEFAULT_RUN_ID)
+        weights = Path(adapter["path"]) / "adapter_model.safetensors"
+        stat = weights.stat()
+        key = (str(weights), stat.st_mtime_ns, stat.st_size, client_id,
+               self._ledger_stamp(client_id, run_id))
+        if key not in self._budget_cache:
+            try:
+                plan = upload.budget_plan(adapter["path"], manifest, client_id, self.ledger_root)
+                answer = {"budget_ok": True, "uploaded": bool(plan and plan.already_charged),
+                          "budget_reason": None}
+            except upload.UploadError as exc:
+                answer = {"budget_ok": False, "uploaded": False, "budget_reason": str(exc)}
+            self._budget_cache = {k: v for k, v in self._budget_cache.items() if k[0] != key[0]}
+            self._budget_cache[key] = answer
+        return self._budget_cache[key]
+
+    def privacy_status(self) -> Optional[Dict]:
+        """This laptop's spend in the page's run, for the status JSON."""
+        if not self.client_id:
+            return None  # a page for every client has no one ledger to show
+        key = ("status", self.client_id, self.run_id,
+               self._ledger_stamp(self.client_id, self.run_id))
+        if key not in self._budget_cache:
+            try:
+                from security import BudgetLedger, LedgerError, ledger_path
+            except ImportError:
+                return None
+            try:
+                ledger = BudgetLedger(ledger_path(self.ledger_root, self.client_id, self.run_id))
+                answer = {"run_id": self.run_id,
+                          "epsilon_spent": round(ledger.cumulative_epsilon(), 4),
+                          "budget": ledger.budget, "rounds_used": len(ledger.records()),
+                          "rounds_total": ledger.rounds_total}
+            except (LedgerError, ValueError) as exc:
+                answer = {"run_id": self.run_id, "error": str(exc)}
+            self._budget_cache = {k: v for k, v in self._budget_cache.items() if k[0] != "status"}
+            self._budget_cache[key] = answer
+        return self._budget_cache[key]
 
     def status(self) -> Dict:
         out: Dict = {"cluster_url": self.cluster_url, "client_id": self.client_id,
                      "secure": self.cluster_url.startswith("https"), "reachable": False,
-                     "allow_non_dp": self.allow_non_dp, "last_sent": self.last_sent}
+                     "allow_non_dp": self.allow_non_dp, "last_sent": self.last_sent,
+                     "privacy": self.privacy_status()}
         try:
             clusters = upload.list_clusters(self.http, self.cluster_url, timeout=5)
         except upload.UploadError as exc:
@@ -295,6 +366,9 @@ class EdgePage:
         if adapter["foreign_base"] and not self.allow_foreign_base:
             raise ValueError(f"{adapter_id} was trained on a cluster adapter that did not come "
                              f"from this cluster; train on the merged adapter pulled from laptop A")
+        budget = self.budget_for(adapter)
+        if not budget["budget_ok"]:
+            raise ValueError(budget["budget_reason"])
         if not self.job.begin("upload"):
             raise RuntimeError("another job is still running")
 
@@ -303,7 +377,8 @@ class EdgePage:
                 res = upload.upload_adapter(
                     adapter["path"], cluster_url=self.cluster_url,
                     client_id=self.client_id or adapter["client_id"], http=self.http,
-                    allow_foreign_base=self.allow_foreign_base, log=self.job.log)
+                    allow_foreign_base=self.allow_foreign_base,
+                    ledger_root=self.ledger_root, log=self.job.log)
                 self.last_sent = {"adapter": adapter_id, "cluster_id": res["cluster_id"],
                                   "round_id": res["round_id"], "utc": time.time()}
                 self.job.finish(result={k: v for k, v in res.items() if k != "privacy"}
@@ -356,7 +431,7 @@ class EdgePage:
         if cluster_adapter:
             cmd += ["--cluster-adapter", cluster_adapter]
         if dp:
-            cmd += ["--dp", "--seq-len", str(DP_SEQ_LEN)]
+            cmd += ["--dp", "--seq-len", str(DP_SEQ_LEN), "--run-id", self.run_id]
         return cmd
 
     def start_train(self, *, client: str, max_steps: int, dp: bool,
@@ -487,6 +562,9 @@ def main(argv=None) -> int:
                          "(as full adapters)")
     ap.add_argument("--fedprox-mu", type=float, default=DEFAULT_MU,
                     help="FedProx coefficient for fine-tunes started here (0 = off)")
+    ap.add_argument("--run-id", default=upload.DEFAULT_RUN_ID,
+                    help="the federated run fine-tunes started here belong to: its rounds "
+                         "share one privacy budget (a new id starts a new budget)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = ap.parse_args(argv)
@@ -498,7 +576,7 @@ def main(argv=None) -> int:
     page = EdgePage(cluster_url=args.cluster_url, client_id=args.client_id,
                     adapters_root=args.adapters_root, http=http, corpus_root=args.corpus_root,
                     allow_non_dp=args.allow_non_dp, allow_foreign_base=args.allow_foreign_base,
-                    fedprox_mu=args.fedprox_mu)
+                    fedprox_mu=args.fedprox_mu, run_id=args.run_id)
     httpd = serve(page, args.host, args.port)
     print(f"edge page for {args.client_id or 'all clients'} -> http://{args.host}:{args.port}  "
           f"(cluster {args.cluster_url}); ctrl-c to stop")

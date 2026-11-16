@@ -86,6 +86,7 @@ library's job, so the plain demo round runs without the overlay.
 | One federated round | ≤ 30 min | **14.0–17.9 min** (four seams, real adapters, 3 runs); **27.8 min** for the full 6-client round excluding training — training adds 55.8 min | `experiments/w12-integration/RESULTS.md`; `experiments/w4w5-g2-g3-round/SUMMARY.md` |
 | Adapter swap | ≤ 2 s | 0.501 s median (p95 1.387 s) | edge, `experiments/w3-edge-lora-composite/RESULTS.md` |
 | Composite TTFT overhead | ≤ 200 ms | +36.7 ms worst | edge, `docs/integration-sprint.md` §9 |
+| Privacy budget (D7) | ε ≤ 8 at δ = 1e-5 per client over a run of 2 rounds | enforced, not yet measured on a GPU round: the edge ledger and the cluster refuse an upload past it; with 160 steps a round at sample rate 1/160 the calibrated σ is 0.47 and two rounds compose to ε 7.90 (PRV) | `security/tests/test_ledger.py`, `services/cluster/tests/test_privacy_budget.py`; recorded per client at `GET /privacy/ledger` |
 
 The round NFR passes only if D11 excludes client training. Including training it
 is 83.6 min on the development GPU (RTX 2050, 4 GB), which is not the reference

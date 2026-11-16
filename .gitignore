@@ -35,6 +35,9 @@ wandb/
 # toy fixtures under services/edge/src/edge/toy/cache/ are unaffected.
 cache/
 
+# --- This laptop's privacy ledgers (edge.upload): local state, one per client and run ---
+services/edge/artifacts/privacy_ledger/
+
 # --- Secrets / certs (mTLS) ---
 .env
 *.key

@@ -103,6 +103,27 @@ cluster_sync = Table(
 )
 
 
+# D7 (U3): what each client's run has spent, as the cluster reported it with the
+# version that contains the client's round. ``adapter_version_id`` goes NULL when
+# that version is garbage collected: deleting weights does not un-spend a budget.
+privacy_ledger = Table(
+    "privacy_ledger",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("client_id", String, nullable=False),
+    Column("cluster_id", String, nullable=False),
+    Column("adapter_version_id", Integer, ForeignKey("versions.id")),
+    Column("round", Integer),
+    Column("epsilon_round", Float),
+    Column("epsilon_cumulative", Float, nullable=False),
+    Column("rounds_accounted", Integer),
+    Column("delta", Float),
+    Column("recorded_at", String),
+    UniqueConstraint("client_id", "adapter_version_id"),
+    Index("ix_privacy_ledger_client_id_recorded_at", "client_id", "recorded_at"),
+)
+
+
 def default_url() -> str:
     """``CLASP_REGISTRY_DB`` if set, else SQLite under the registry data root."""
     explicit = os.environ.get(DB_ENV)

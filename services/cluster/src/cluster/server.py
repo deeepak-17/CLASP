@@ -37,6 +37,7 @@ from flwr.server.client_proxy import ClientProxy
 from flwr.server.strategy import FedAvg
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
+from security.dp.ledger import BUDGET_TOLERANCE, RUN_EPSILON_BUDGET, RUN_ROUNDS
 from security.validation import detect_poisoning, validate_adapter_integrity
 
 from cluster.adapter_format import (
@@ -290,7 +291,7 @@ MAX_CLUSTERS = 64
 
 class _StoredUpload:
     __slots__ = ("adapter", "arrived_at", "base_sha256", "composition_alpha", "epsilon",
-                 "num_examples", "round_id")
+                 "epsilon_cumulative", "num_examples", "round_id", "rounds_accounted")
 
     def __init__(
         self,
@@ -301,12 +302,17 @@ class _StoredUpload:
         epsilon: float | None = None,
         base_sha256: str | None = None,
         composition_alpha: float | None = None,
+        epsilon_cumulative: float | None = None,
+        rounds_accounted: int | None = None,
     ) -> None:
         self.adapter = adapter
         self.num_examples = num_examples
         self.round_id = round_id
         self.arrived_at = arrived_at
         self.epsilon = epsilon
+        # D7: the client's run so far, this round included (see ``_check_budget``).
+        self.epsilon_cumulative = epsilon_cumulative
+        self.rounds_accounted = rounds_accounted
         # Set for a D3 residual: the merged adapter it was trained on top of,
         # and the alpha it was composed with (see ``_check_base``).
         self.base_sha256 = base_sha256
@@ -651,6 +657,7 @@ def _upload_locked(
             ),
         )
     _check_base(state, upload)
+    _check_budget(upload)
     if upload.client_id not in state.uploads and len(state.uploads) >= MAX_UPLOADS_PER_CLUSTER:
         raise HTTPException(
             status_code=429,
@@ -700,6 +707,8 @@ def _upload_locked(
         epsilon=upload.epsilon,
         base_sha256=upload.base_sha256,
         composition_alpha=upload.composition_alpha,
+        epsilon_cumulative=upload.privacy.epsilon_cumulative if upload.privacy else None,
+        rounds_accounted=upload.privacy.rounds_accounted if upload.privacy else None,
     )
     return {
         "client_id": upload.client_id,
@@ -710,6 +719,50 @@ def _upload_locked(
         "status": "accepted",
         "pending_uploads": len(state.uploads),
     }
+
+
+def _check_budget(upload: AdapterUpload) -> None:
+    """D7 (U3): a differentially private upload must fit its client's run budget.
+
+    The edge keeps the ledger and refuses first; this is the second check, on
+    what it reports. An upload trained without DP (``epsilon`` is None) spends
+    nothing and is not checked. Every refusal is a 422 raised before the
+    upload is buffered:
+
+    * ``privacy_budget_unreported``: no ``privacy.epsilon_cumulative`` (an edge
+      that predates the run budget);
+    * ``privacy_budget_exceeded``: the run's cumulative epsilon is over
+      ``RUN_EPSILON_BUDGET``, or it covers more than ``RUN_ROUNDS`` rounds;
+    * a cumulative epsilon below this round's own epsilon is not a composition.
+    """
+    if upload.epsilon is None:
+        return
+    privacy = upload.privacy
+    cumulative = privacy.epsilon_cumulative if privacy is not None else None
+    if cumulative is None:
+        raise HTTPException(status_code=422, detail={
+            "error": "privacy_budget_unreported",
+            "hint": "update the edge: uploads must report the run's cumulative epsilon",
+        })
+    if cumulative > RUN_EPSILON_BUDGET + BUDGET_TOLERANCE:
+        raise HTTPException(status_code=422, detail={
+            "error": "privacy_budget_exceeded",
+            "hint": (f"client {upload.client_id!r} reports a cumulative epsilon of "
+                     f"{cumulative:g} for its run; the budget is {RUN_EPSILON_BUDGET:g}"),
+        })
+    rounds = privacy.rounds_accounted
+    if rounds is not None and rounds > RUN_ROUNDS:
+        raise HTTPException(status_code=422, detail={
+            "error": "privacy_budget_exceeded",
+            "hint": (f"client {upload.client_id!r} reports round {rounds} of its run; "
+                     f"a run is {RUN_ROUNDS} rounds"),
+        })
+    if cumulative < upload.epsilon - BUDGET_TOLERANCE:
+        raise HTTPException(status_code=422, detail={
+            "error": "privacy_budget_inconsistent",
+            "hint": (f"cumulative epsilon {cumulative:g} is below this round's epsilon "
+                     f"{upload.epsilon:g}"),
+        })
 
 
 def _check_base(state: _ClusterState, upload: AdapterUpload) -> None:
@@ -784,7 +837,9 @@ def _expected_clients(cluster_id: str, requested: int | None) -> int | None:
 
 def cluster_epsilon(epsilons: Sequence[float | None]) -> float | None:
     """The privacy budget (D7) to record for an aggregate: the **max** ε over the
-    aggregated clients — the loosest guarantee any contribution carries.
+    aggregated clients — the loosest guarantee any contribution carries. Given
+    each client's cumulative ε over its run, this is the cluster's ε: every
+    client's accountant has already composed its rounds, so nothing is summed.
 
     ``None`` as soon as one aggregated client did not report an ε: that client
     was trained without DP (or did not say), so no finite ε describes the
@@ -919,8 +974,16 @@ def _aggregate_locked(
     used_ids = [u.client_id for u in accepted]
     rank = req.rank or adapters[0].rank
 
-    epsilon = cluster_epsilon([state.uploads[c].epsilon for c in used_ids])
-    round_epsilon = epsilon
+    # D7: each client reports its run's cumulative epsilon (checked at upload);
+    # the cluster's is the largest of them. An upload without DP has neither.
+    round_epsilon = cluster_epsilon([state.uploads[c].epsilon for c in used_ids])
+    epsilon = cluster_epsilon([state.uploads[c].epsilon_cumulative for c in used_ids])
+    client_privacy = [
+        {"client_id": c, "epsilon_round": state.uploads[c].epsilon,
+         "epsilon_cumulative": state.uploads[c].epsilon_cumulative,
+         "rounds_accounted": state.uploads[c].rounds_accounted}
+        for c in used_ids
+    ]
     start_broadcast = state.active if residual_round else None
     if start_broadcast is not None:
         stale = sorted(c for c in used_ids
@@ -930,10 +993,12 @@ def _aggregate_locked(
                 status_code=409,
                 detail=f"stale_adapter: {stale} were trained on another merged adapter",
             )
-        # The new adapter is a function of the one it builds on, so by basic
-        # sequential composition its epsilon is that adapter's plus this round's.
+        # The new adapter contains the one it builds on. A client's cumulative
+        # epsilon already covers its own earlier rounds, so nothing is added;
+        # the base's epsilon still counts for clients that are in it but sent
+        # nothing this round, and a base without one leaves this one unknown.
         epsilon = (None if epsilon is None or start_broadcast.epsilon is None
-                   else float(start_broadcast.epsilon) + epsilon)
+                   else max(float(start_broadcast.epsilon), epsilon))
 
     manifest: dict[str, object] = {
         "cluster_id": state.cluster_id,
@@ -947,6 +1012,10 @@ def _aggregate_locked(
         "sample_weights": [float(u.num_examples) for u in accepted],
         "rank": rank,
         "epsilon": epsilon,
+        "epsilon_this_round": round_epsilon,
+        "epsilon_composition": "per-client accountant composition over the run; "
+                               "cluster epsilon is the max over clients",
+        "client_privacy": client_privacy,
         "update_rule": "fedprox_cumulative" if start_broadcast is not None else "average",
         "screening": {
             "uploads": "security.validation.validate_adapter_integrity",
@@ -960,8 +1029,6 @@ def _aggregate_locked(
             "composition_alpha": alpha,
             "base_sha256": start_broadcast.sha256,
             "base_round_id": start_broadcast.round_id,
-            "epsilon_this_round": round_epsilon,
-            "epsilon_composition": "basic sequential: base adapter's epsilon + this round's",
             "update_definition": "dW_new = dW_base + (1/alpha) * sum_k w_k dW(residual_k), "
                                  "best rank-r truncation (FedProx server step under D3)",
         })
@@ -1029,6 +1096,7 @@ def _aggregate_locked(
         "update_rule": manifest["update_rule"],
         "composition_alpha": manifest.get("composition_alpha"),
         "base_sha256": manifest.get("base_sha256"),
+        "client_privacy": tuple(client_privacy),
     })
     # The identity edges train against: the digest of exactly the payload
     # /download serves and /publish stores (the registry hashes the same bytes).
@@ -1234,7 +1302,9 @@ def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) 
     what ``/download`` serves, plus the metadata envelope the registry records:
     aggregation method, source clients, round, the LoRA hyperparameters and —
     when every aggregated client reported one — the cluster's privacy budget
-    (D7: the max ε over the aggregated clients). Every field is read off the
+    (D7: the max over the aggregated clients of each one's cumulative ε), plus
+    ``client_privacy``, one row per client for the registry's privacy ledger
+    (an API-boundary extension of the envelope, like ``set_active``). Every field is read off the
     aggregate itself, none typed by hand. The registry computes and stores its
     own sha256 over the payload; Edge verifies the download against that on the
     way back out (seam C1).
@@ -1280,7 +1350,10 @@ def publish_to_registry(cluster_id: str, request: PublishRequest | None = None) 
     if broadcast.epsilon is not None:
         # D7: without this every cluster (and every composite built from it) is
         # recorded in the registry with epsilon = null.
-        meta["privacy"] = {"epsilon": broadcast.epsilon}
+        meta["privacy"] = {"epsilon": broadcast.epsilon,
+                           "epsilon_cumulative": broadcast.epsilon}
+    # D7: what each client's run has spent, for the registry's privacy ledger
+    meta["client_privacy"] = [dict(row) for row in broadcast.client_privacy]
 
     from cluster.tls import outbound_ssl_context
 

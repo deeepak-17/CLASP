@@ -12,6 +12,8 @@ Differential Privacy (DP-SGD):
     make_private       — wraps (model, optimizer, loader) with Opacus DP-SGD
     PrivacyAccountant  — RDP-based ε tracking across steps and rounds
     BudgetExhaustedError — raised when cumulative ε exceeds target_epsilon
+    BudgetLedger       — one client's ε spend over a run of rounds (charged at upload)
+    calibrate_run_sigma — the noise level at which a whole run fits the budget
     get_privacy_engine — retrieves the Opacus PrivacyEngine from a wrapped model
 
 mTLS:
@@ -33,11 +35,19 @@ __version__ = "0.1.0"
 
 # ── DP-SGD ──────────────────────────────────────────────────────────────────
 from security.dp import (
+    RUN_DELTA,
+    RUN_EPSILON_BUDGET,
+    RUN_ROUNDS,
     BudgetExhaustedError,
+    BudgetLedger,
     DPConfig,
     EpsilonTracker,
+    LedgerError,
     PrivacyAccountant,
+    RoundRecord,
+    calibrate_run_sigma,
     get_privacy_engine,
+    ledger_path,
     make_private,
 )
 
@@ -59,14 +69,21 @@ from security.mtls import (
 from security.threat_model import THREAT_MODEL, render_markdown
 
 __all__ = [
+    "RUN_DELTA",
+    "RUN_EPSILON_BUDGET",
+    "RUN_ROUNDS",
     # Threat Model
     "THREAT_MODEL",
     "BudgetExhaustedError",
+    "BudgetLedger",
     "CertStatus",
     # DP
     "DPConfig",
     "EpsilonTracker",
+    "LedgerError",
     "PrivacyAccountant",
+    "RoundRecord",
+    "calibrate_run_sigma",
     "check_expiry",
     "client_ssl_context",
     # mTLS
@@ -75,6 +92,7 @@ __all__ = [
     "generate_client_cert",
     "generate_service_cert",
     "get_privacy_engine",
+    "ledger_path",
     "make_private",
     "render_markdown",
     "server_ssl_context",

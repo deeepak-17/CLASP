@@ -225,12 +225,17 @@ def test_upload_epsilon_is_optional_and_validated():
 
 def _edge_privacy(epsilon, **over):
     """The ``privacy`` block exactly as ``edge.wire.privacy_block`` builds it
-    (``asdict(contracts.PrivacySpec(...))``): all four keys, always present."""
+    (``asdict(contracts.PrivacySpec(...))``): every contract key, always present.
+    A DP upload reports its run's cumulative epsilon (D7); for a first round
+    that is the round's own."""
+    spent = isinstance(epsilon, float)
     return {
         "epsilon": epsilon,
         "delta": 1e-05,
         "noise_multiplier": None,
         "max_grad_norm": None,
+        "epsilon_cumulative": epsilon if spent else None,
+        "rounds_accounted": 1 if spent else None,
         **over,
     }
 
@@ -274,12 +279,12 @@ def test_the_privacy_block_is_validated_and_tolerates_unknown_keys():
 def test_epsilon_sent_in_the_edge_privacy_shape_reaches_the_registry(monkeypatch):
     """The seam that was broken: the Edge sends ``privacy.epsilon``, not a
     top-level ``epsilon``. Cluster epsilon = max over the clients, published as
-    ``privacy.epsilon``; one client on the old top-level field mixes in fine."""
+    ``privacy.epsilon``; one client that also states the top-level field mixes in fine."""
     registry = _Registry(monkeypatch)
     for who, seed, kw in (
         ("a1", 1, {"privacy": _edge_privacy(2.0)}),
         ("a2", 2, {"privacy": _edge_privacy(5.0)}),
-        ("a3", 3, {"epsilon": 3.5}),
+        ("a3", 3, {"epsilon": 3.5, "privacy": _edge_privacy(3.5)}),
     ):
         assert _up("cluster-web", who, seed, **kw).status_code == 201
     agg = client.post("/aggregate", json={"cluster_id": "cluster-web"})
@@ -287,7 +292,7 @@ def test_epsilon_sent_in_the_edge_privacy_shape_reaches_the_registry(monkeypatch
     manifest = client.get("/adapters/cluster-web/manifest").json()
     assert manifest["epsilon"] == 5.0 and "epsilon_not_reported_by" not in manifest
     assert client.post("/adapters/cluster-web/publish").status_code == 201
-    assert registry.posts[0]["meta"]["privacy"] == {"epsilon": 5.0}
+    assert registry.posts[0]["meta"]["privacy"] == {"epsilon": 5.0, "epsilon_cumulative": 5.0}
 
 
 def test_a_dp_off_edge_client_still_makes_the_cluster_epsilon_unknown(monkeypatch):
@@ -304,7 +309,7 @@ def test_a_dp_off_edge_client_still_makes_the_cluster_epsilon_unknown(monkeypatc
 def test_aggregate_records_the_max_epsilon_and_publishes_it(monkeypatch):
     registry = _Registry(monkeypatch)
     for who, seed, eps in (("a1", 1, 2.0), ("a2", 2, 5.0), ("a3", 3, 3.5)):
-        assert _up("cluster-web", who, seed, epsilon=eps).status_code == 201
+        assert _up("cluster-web", who, seed, privacy=_edge_privacy(eps)).status_code == 201
     agg = client.post("/aggregate", json={"cluster_id": "cluster-web"})
     assert agg.status_code == 200 and agg.json()["epsilon"] == 5.0
     manifest = client.get("/adapters/cluster-web/manifest").json()
@@ -313,7 +318,7 @@ def test_aggregate_records_the_max_epsilon_and_publishes_it(monkeypatch):
     pub = client.post("/adapters/cluster-web/publish")
     assert pub.status_code == 201
     (post,) = registry.posts
-    assert post["meta"]["privacy"] == {"epsilon": 5.0}
+    assert post["meta"]["privacy"] == {"epsilon": 5.0, "epsilon_cumulative": 5.0}
     assert post["meta"]["source_clients"] == ["a1", "a2", "a3"]
     assert post["url"].endswith("/adapters/cluster-web/versions")
 
@@ -322,9 +327,9 @@ def test_epsilon_is_the_max_over_the_clients_actually_aggregated(monkeypatch):
     # a straggler's epsilon must not count: it is not in the aggregate
     ticks = iter([0.0, 1.0, 50.0])
     monkeypatch.setattr(server._clusters[server.DEFAULT_CLUSTER_ID], "clock", lambda: next(ticks))
-    for who, seed, eps in (("a1", 1, 2.0), ("a2", 2, 3.0), ("slow", 3, 9.0)):
+    for who, seed, eps in (("a1", 1, 2.0), ("a2", 2, 3.0), ("slow", 3, 7.5)):
         assert client.post(
-            "/uploads", json=upload_body(who, trained_adapter(seed), epsilon=eps)
+            "/uploads", json=upload_body(who, trained_adapter(seed), privacy=_edge_privacy(eps))
         ).status_code == 201
     agg = client.post("/aggregate", json={"straggler_timeout_s": 10})
     assert agg.status_code == 200
@@ -334,7 +339,7 @@ def test_epsilon_is_the_max_over_the_clients_actually_aggregated(monkeypatch):
 
 def test_one_client_without_epsilon_makes_the_cluster_epsilon_unknown(monkeypatch):
     registry = _Registry(monkeypatch)
-    assert _up("cluster-web", "dp", 1, epsilon=2.0).status_code == 201
+    assert _up("cluster-web", "dp", 1, privacy=_edge_privacy(2.0)).status_code == 201
     assert _up("cluster-web", "plain", 2).status_code == 201
     agg = client.post("/aggregate", json={"cluster_id": "cluster-web"})
     assert agg.json()["epsilon"] is None

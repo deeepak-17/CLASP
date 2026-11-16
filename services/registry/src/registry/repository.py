@@ -21,11 +21,13 @@ from typing import Any, ContextManager, Protocol
 from contracts import AdapterMetadata, AdapterRef, PromotionDecision, utcnow_iso
 from sqlalchemy import Connection, Engine, delete, func, insert, select, update
 
+from registry.config import RUN_DELTA
 from registry.db import (
     active_pointer,
     adapters,
     cluster_sync,
     composite_parts,
+    privacy_ledger,
     promotion_decisions,
     versions,
 )
@@ -50,6 +52,8 @@ class MetadataRepository(Protocol):
     def add_cluster_sync(self, decision_id: int, cluster_id: str, sha256: str, action: str) -> int: ...
     def pending_cluster_sync(self) -> list[dict]: ...
     def mark_cluster_sync(self, sync_id: int, *, done: bool, error: str | None = None) -> bool: ...
+    def add_privacy_rows(self, name: str, version: int, rows: list[dict]) -> None: ...
+    def privacy_ledger(self, cluster_id: str | None = None) -> list[dict]: ...
 
 
 class SqlMetadataRepository:
@@ -188,6 +192,12 @@ class SqlMetadataRepository:
             ).first():
                 raise StorageError(f"refusing to delete {name} v{version}: a composite is built from it")
             conn.execute(delete(composite_parts).where(composite_parts.c.composite_version_id == version_id))
+            # the spend stays on the ledger; only its link to the deleted weights goes
+            conn.execute(
+                update(privacy_ledger)
+                .where(privacy_ledger.c.adapter_version_id == version_id)
+                .values(adapter_version_id=None)
+            )
             conn.execute(delete(versions).where(versions.c.id == version_id))
 
     # -- active pointer --------------------------------------------------
@@ -350,3 +360,68 @@ class SqlMetadataRepository:
             stmt = stmt.where(cluster_sync.c.status == "pending")
         with self._connection() as conn:
             return conn.execute(stmt.values(**values)).rowcount > 0
+
+    # -- privacy ledger (D7) ---------------------------------------------
+
+    def add_privacy_rows(self, name: str, version: int, rows: list[dict]) -> None:
+        """Record each client's run spend with the version that contains its round.
+
+        ``rows`` are the cluster's ``client_privacy`` entries. A client without
+        a cumulative epsilon trained without DP and has nothing to record. The
+        cluster, round and delta come from the version's own metadata. Call it
+        inside the transaction that adds the version.
+        """
+        with self._connection() as conn:
+            found = conn.execute(
+                select(versions.c.id, versions.c.metadata_json)
+                .join(adapters, adapters.c.id == versions.c.adapter_id)
+                .where(adapters.c.name == name, versions.c.version == version)
+            ).first()
+            if found is None:
+                raise AdapterNotFound(f"{name} v{version}")
+            meta = json.loads(found.metadata_json)
+            ref = meta.get("ref") or {}
+            privacy = meta.get("privacy") or {}
+            now = utcnow_iso()
+            for row in rows:
+                if row.get("epsilon_cumulative") is None:
+                    continue
+                conn.execute(
+                    insert(privacy_ledger).values(
+                        client_id=row["client_id"],
+                        cluster_id=ref.get("cluster_id") or name,
+                        adapter_version_id=found.id,
+                        round=meta.get("round"),
+                        epsilon_round=row.get("epsilon_round"),
+                        epsilon_cumulative=row["epsilon_cumulative"],
+                        rounds_accounted=row.get("rounds_accounted"),
+                        delta=privacy.get("delta") if privacy.get("delta") is not None else RUN_DELTA,
+                        recorded_at=now,
+                    )
+                )
+
+    def privacy_ledger(self, cluster_id: str | None = None) -> list[dict[str, Any]]:
+        """Every recorded spend, oldest first; ``adapter`` and ``version`` are None
+        once the version it was recorded with has been deleted."""
+        stmt = (
+            select(
+                privacy_ledger.c.client_id,
+                privacy_ledger.c.cluster_id,
+                adapters.c.name.label("adapter"),
+                versions.c.version.label("version"),
+                privacy_ledger.c.round,
+                privacy_ledger.c.epsilon_round,
+                privacy_ledger.c.epsilon_cumulative,
+                privacy_ledger.c.rounds_accounted,
+                privacy_ledger.c.delta,
+                privacy_ledger.c.recorded_at,
+            )
+            .select_from(privacy_ledger)
+            .outerjoin(versions, versions.c.id == privacy_ledger.c.adapter_version_id)
+            .outerjoin(adapters, adapters.c.id == versions.c.adapter_id)
+            .order_by(privacy_ledger.c.id)
+        )
+        if cluster_id is not None:
+            stmt = stmt.where(privacy_ledger.c.cluster_id == cluster_id)
+        with self._connection() as conn:
+            return [dict(r) for r in conn.execute(stmt).mappings()]

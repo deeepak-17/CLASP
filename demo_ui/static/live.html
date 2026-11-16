@@ -54,15 +54,30 @@ async function plan() {
     : "Links are <b>plain HTTP</b> on the private hotspot.";
 }
 
+// D7: what each laptop has spent of its run's privacy budget, as the registry
+// recorded it with the merges that contain its rounds.
+function privacyLines(c) {
+  const p = c.privacy || {};
+  const spent = Object.fromEntries((p.clients || []).map(x => [x.client_id, x]));
+  return (m) => {
+    const s = spent[m];
+    if (!s) return "";
+    const rounds = s.rounds_accounted != null && p.rounds_total != null
+      ? ` · ${s.rounds_accounted} of ${plural(p.rounds_total, "round", "rounds")}` : "";
+    return `<div class="spend">ε ${fmt(s.epsilon_cumulative, 1)} of ${fmt(p.budget, 0)}${rounds}</div>`;
+  };
+}
+
 function edgesStop(c) {
   const st = c.cluster || {};
   const uploaded = st.uploaded_clients || [];
   const members = st.members && st.members.length ? st.members : c.planned_members;
   const all = [...new Set([...members, ...uploaded])].sort();
+  const spend = privacyLines(c);
   const parcels = all.map(m => {
     const has = uploaded.includes(m);
     const state = has ? "Adapter received" : (c.registered ? "Waiting" : "Not registered");
-    return `<div class="parcel ${has ? "in" : ""}"><div class="who">${esc(m)}</div><div class="state">${state}</div></div>`;
+    return `<div class="parcel ${has ? "in" : ""}"><div class="who">${esc(m)}</div><div class="state">${state}</div>${spend(m)}</div>`;
   }).join("");
   return `<div class="stop"><h3>Edge laptops</h3>
     <p class="lead">${c.registered ? `${uploaded.length} of ${plural(members.length, "adapter", "adapters")} received` : "Not open for uploads yet"}</p>
@@ -80,8 +95,8 @@ function mergeStop(cid, c) {
     const eps = m.epsilon == null
       ? `<p class="fine warn">Privacy budget unknown: ${m.epsilon_not_reported_by ? `${esc(m.epsilon_not_reported_by.join(", "))} trained without DP` : "the adapter it builds on has none recorded"}.</p>`
       : cumulative
-        ? `<p class="fine">Privacy budget ε ${fmt(m.epsilon, 2)}: this round's ${fmt(m.epsilon_this_round, 2)} plus the adapter it builds on.</p>`
-        : `<p class="fine">Privacy budget ε ${fmt(m.epsilon, 2)}, the largest any laptop spent.</p>`;
+        ? `<p class="fine">Privacy budget ε ${fmt(m.epsilon, 2)} of 8: the largest any laptop has spent over its whole run. Each laptop's own accountant composes its rounds; nothing is added up here.</p>`
+        : `<p class="fine">Privacy budget ε ${fmt(m.epsilon, 2)} of 8, the largest any laptop has spent in its run.</p>`;
     const rule = cumulative
       ? `<p class="fine">Added onto round ${m.base_round_id}'s merged adapter (${esc(m.base_sha256.slice(0, 12))}), which the laptops trained on top of at α ${fmt(m.composition_alpha, 2)}: FedProx's server step.</p>`
       : `<p class="fine">Averaged as full adapters (the laptops trained on the bare base).</p>`;

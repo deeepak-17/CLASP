@@ -76,6 +76,7 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .cascade import apply_cascade, plan_cascade, write_cascade_files
+from .config import RUN_DELTA, RUN_EPSILON_BUDGET, RUN_ROUNDS
 from .composition import (
     CompositionError,
     PlannedComposite,
@@ -194,6 +195,46 @@ def _read_capped(file: UploadFile) -> bytes:
     return payload
 
 
+def _parse_client_privacy(raw) -> list[dict] | None:
+    """The cluster's ``client_privacy`` rows (D7), validated; ``None`` when absent.
+
+    One row per aggregated client: ``client_id`` plus ``epsilon_round``,
+    ``epsilon_cumulative`` (the client's whole run so far) and
+    ``rounds_accounted``, each null for a client that trained without DP.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("client_privacy must be a list")
+    rows, seen = [], set()
+    for entry in raw:
+        if not isinstance(entry, dict) or not isinstance(entry.get("client_id"), str) \
+                or not entry["client_id"]:
+            raise ValueError("client_privacy: every row needs a client_id")
+        client_id = entry["client_id"]
+        if client_id in seen:
+            raise ValueError(f"client_privacy names {client_id!r} twice")
+        seen.add(client_id)
+        row = {"client_id": client_id}
+        for key in ("epsilon_round", "epsilon_cumulative"):
+            value = entry.get(key)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not 0 <= value < float("inf")):
+                raise ValueError(f"client_privacy: {key} of {client_id!r} must be a number >= 0")
+            row[key] = None if value is None else float(value)
+        rounds = entry.get("rounds_accounted")
+        if rounds is not None and (isinstance(rounds, bool) or not isinstance(rounds, int)
+                                   or rounds < 1):
+            raise ValueError(f"client_privacy: rounds_accounted of {client_id!r} must be >= 1")
+        row["rounds_accounted"] = rounds
+        if (row["epsilon_round"] is not None and row["epsilon_cumulative"] is not None
+                and row["epsilon_cumulative"] < row["epsilon_round"] - 1e-6):
+            raise ValueError(f"client_privacy: {client_id!r} reports a cumulative epsilon "
+                             f"below its round's epsilon")
+        rows.append(row)
+    return rows or None
+
+
 def _parse_save_meta(raw: str) -> dict:
     """Decode the save envelope into ``RegistryStore.save`` keyword arguments."""
     try:
@@ -217,6 +258,7 @@ def _parse_save_meta(raw: str) -> dict:
             "source_clients": tuple(m.get("source_clients", ())),
             "set_active": m.get("set_active", False),
             "composed_from": CompositeProvenance.from_json(composed) if composed else None,
+            "client_privacy": _parse_client_privacy(m.get("client_privacy")),
         }
     except (KeyError, TypeError, ValueError) as e:
         raise HTTPException(422, f"invalid meta: {e}") from e
@@ -606,6 +648,21 @@ def list_promotions(name: str) -> dict:
         "name": name,
         "decisions": [_promotion_decision_to_dict(d) for d in store.list_promotions(name)],
     }
+
+
+@app.get("/privacy/ledger")
+def privacy_ledger(cluster_id: str | None = None) -> dict:
+    """D7: what each client's run has spent, as recorded with each cluster version.
+
+    One row per client and version, oldest first: ``client_id``, ``cluster_id``,
+    ``adapter`` / ``version`` (null once that version was deleted), ``round``,
+    ``epsilon_round``, ``epsilon_cumulative`` (the client's whole run up to and
+    including that round), ``rounds_accounted``, ``delta``, ``recorded_at``.
+    ``?cluster_id=`` keeps one cluster's rows. ``budget``, ``delta`` and
+    ``rounds_total`` are the run's limits the rows are read against.
+    """
+    return {"budget": RUN_EPSILON_BUDGET, "delta": RUN_DELTA, "rounds_total": RUN_ROUNDS,
+            "rows": get_store().repo.privacy_ledger(cluster_id)}
 
 
 @app.get("/sync/pending")

@@ -271,13 +271,16 @@ class RegistryStore:
         payload: bytes,
         *,
         set_active: bool = False,
+        client_privacy: list[dict] | None = None,
         **fields,
     ) -> AdapterMetadata:
         """Write a new immutable version and register it. Assigns the next version number.
 
         ``fields`` are ``write_version_files``'s keyword arguments. The version
         is an inactive candidate unless ``set_active`` is true (operator use);
-        a promote is what normally makes it live.
+        a promote is what normally makes it live. ``client_privacy`` (the
+        cluster's per-client run spend, D7) goes on the privacy ledger in the
+        same transaction: a version is never registered without its rows.
         """
         meta = self.write_version_files(name, payload, **fields)
         # The version exists once its metadata row commits. If that fails, the
@@ -285,6 +288,8 @@ class RegistryStore:
         try:
             with self.repo.transaction():
                 self.repo.add_version(meta)
+                if client_privacy:
+                    self.repo.add_privacy_rows(name, meta.ref.version, client_privacy)
                 if set_active:
                     self.repo.set_active(name, meta.ref.version)
         except BaseException:
