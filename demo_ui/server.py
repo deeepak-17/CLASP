@@ -619,7 +619,41 @@ async def live_state() -> dict:
                 "evaluated_version": _evaluated(cid, reg),
             }
     return {"clusters": out, "cluster_sync": sync["pending"],
-            "cluster_sync_error": sync["error"]}
+            "cluster_sync_error": sync["error"],
+            "recluster_ready": _recluster_ready(listing)}
+
+
+#: Rounds in a run (U3). Re-clustering is computed after the last one (U7).
+RUN_ROUNDS = 2
+#: What the panel asks the cluster for, always: a dry run, with the similarity
+#: matrix, on a fixed seed. Nothing the browser sends can change it.
+RECLUSTER_REQUEST = {"apply": False, "include_similarity": True, "seed": 0}
+
+
+def _recluster_ready(listing: dict) -> bool:
+    """True when every cluster that has members has merged the run's last round
+    (its ``round_id``, the round now buffering, has reached ``RUN_ROUNDS``)."""
+    with_members = [c for c in listing.values() if c.get("members")]
+    return bool(with_members) and all(int(c.get("round_id", 0)) >= RUN_ROUNDS
+                                      for c in with_members)
+
+
+@app.post("/api/live/recluster")
+async def live_recluster() -> dict:
+    """D4 (U7): the grouping the cluster would choose from the last round's
+    updates (k-means on the cosine similarity of the clients' updates), as a
+    **dry run**. The request body is ignored: the panel always asks for
+    ``apply: false`` and never moves a client. Applying a grouping would start
+    a new run with a new privacy budget, which is not something a button does.
+
+    Returns the cluster's answer unchanged, plus ``"applied": false``. A 409
+    from the cluster (nothing merged yet, or fewer than two clusters) comes
+    back as a 409 with the cluster's own sentence."""
+    async with _client(120.0) as client:
+        r = await _send(client, "POST", f"{CLUSTER_BASE}/recluster", json=dict(RECLUSTER_REQUEST))
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, _detail(r))
+    return {**r.json(), "applied": False}
 
 
 def _digest(reg: dict, version: int | None) -> str | None:

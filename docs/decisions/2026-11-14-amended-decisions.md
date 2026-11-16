@@ -47,6 +47,29 @@ code win.
   edge, and describe the registry's composite code as present, tested and
   unused.
 
+## D4 — re-clustering (user decision U7)
+
+- **As written:** clients are re-clustered dynamically during the federation, by
+  the similarity of their updates.
+- **As built:** rounds 1–2 use the project grouping. After the final round the
+  cluster computes k-means (k = 2) on the cosine similarity of the clients'
+  updates and reports the grouping it would choose. Applying it is the start of a
+  new run.
+- **How it is shown:** the demo panel has a "Re-cluster (dry run)" button,
+  enabled once every cluster with members has merged round 2. It calls the
+  panel's `POST /api/live/recluster`, which calls the cluster's `POST /recluster`
+  with `apply: false` whatever the browser sends, and shows the current and the
+  proposed membership side by side, the clients that would move, the similarity
+  matrix, and the cluster's own sentence when it falls back to the project
+  grouping (too few updates, or groups not separated enough). Nothing moves.
+- **Why not apply it inside a run:** a client that changes cluster starts
+  training on a different cluster adapter; that is a new run, and a new run has a
+  new privacy budget (D7). The cluster's `apply: true` path exists and is tested,
+  and nothing in the demo calls it.
+- **Who may call it:** the panel route needs the `operator` login; the cluster's
+  `/recluster` route is for the `svc:evaluation` and `admin` roles.
+- **Reason:** U7 in the design spec.
+
 ## D7 — DP unit (user decision U2)
 
 - **As written:** client-level DP (the privacy unit is a client's whole

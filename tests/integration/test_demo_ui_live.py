@@ -1100,3 +1100,147 @@ def test_the_panels_audit_trail_names_the_operator_and_never_a_password(logins, 
     for secret in (PANEL_PASSWORD, "a wrong pass phrase", headers["Authorization"].split()[1],
                    JWT_SECRET):
         assert secret not in text
+
+
+# --------------------------------------------------------------------------- #
+# U7 (D4): the re-clustering the cluster would choose after round 2, as a dry run
+# --------------------------------------------------------------------------- #
+TWO_CLUSTERS = {"web": ["client-flask", "client-requests"],
+                "scientific": ["client-numpy", "client-pandas"]}
+
+
+def _plain_adapter(root: Path, cluster: str, client: str, seed: int) -> Path:
+    """A non-DP adapter of ``cluster`` (these tests are about grouping, not budgets)."""
+    adapter = _adapter(root, client, seed)
+    manifest = adapter.parent / "manifest.json"
+    doc = json.loads(manifest.read_text(encoding="utf-8"))
+    doc["client_id"], doc["privacy"] = f"{cluster}/{client}", None
+    manifest.write_text(json.dumps(doc), encoding="utf-8")
+    return adapter
+
+
+def _two_cluster_round(ui, cluster_url, root: Path, seed: int) -> None:
+    """Every client of both clusters uploads, both clusters aggregate, and both
+    merges are promoted on the cluster (so the next round can be merged)."""
+    import requests
+
+    for c_index, (cluster, clients) in enumerate(TWO_CLUSTERS.items()):
+        for i, client in enumerate(clients):
+            upload.upload_adapter(_plain_adapter(root, cluster, client, seed + 10 * c_index + i),
+                                  cluster_url=cluster_url, allow_reset=True, log=lambda *_: None)
+        merged = ui.post(f"/api/live/aggregate/{cluster}")
+        assert merged.status_code == 200, merged.text
+        sha = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"][cluster][
+            "candidate_sha256"]
+        assert requests.post(f"{cluster_url}/clusters/{cluster}/adapters/candidate/promote",
+                             json={"sha256": sha}, timeout=10).status_code == 200
+
+
+@pytest.fixture
+def two_clusters(stack, monkeypatch):
+    monkeypatch.setattr(panel, "LIVE_CLUSTERS", {k: list(v) for k, v in TWO_CLUSTERS.items()})
+    ui = stack[0]
+    assert ui.post("/api/live/register").status_code == 200
+    return stack
+
+
+def _ready(ui) -> bool:
+    return ui.get("/api/live/state").json()["recluster_ready"]
+
+
+def test_recluster_is_ready_only_after_both_clusters_merged_round_two(two_clusters, tmp_path):
+    ui, cluster_url, _ = two_clusters
+    assert _ready(ui) is False                    # nothing merged
+    _two_cluster_round(ui, cluster_url, tmp_path / "r1", seed=1)
+    assert _ready(ui) is False                    # round 1 only
+    # round 2 merged for web but not yet for scientific: still not ready
+    import requests
+
+    for i, client in enumerate(TWO_CLUSTERS["web"]):
+        upload.upload_adapter(_plain_adapter(tmp_path / "r2", "web", client, 50 + i),
+                              cluster_url=cluster_url, allow_reset=True, log=lambda *_: None)
+    assert ui.post("/api/live/aggregate/web").status_code == 200
+    assert _ready(ui) is False
+    sha = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]["web"][
+        "candidate_sha256"]
+    requests.post(f"{cluster_url}/clusters/web/adapters/candidate/promote", json={"sha256": sha},
+                  timeout=10)
+    for i, client in enumerate(TWO_CLUSTERS["scientific"]):
+        upload.upload_adapter(_plain_adapter(tmp_path / "r2", "scientific", client, 60 + i),
+                              cluster_url=cluster_url, allow_reset=True, log=lambda *_: None)
+    assert ui.post("/api/live/aggregate/scientific").status_code == 200
+    assert _ready(ui) is True
+
+
+def test_the_dry_run_reports_a_grouping_and_moves_nothing(two_clusters, tmp_path):
+    import requests
+
+    ui, cluster_url, _ = two_clusters
+    for round_no in (1, 2):
+        _two_cluster_round(ui, cluster_url, tmp_path / f"r{round_no}", seed=round_no * 100)
+    before = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]
+    r = ui.post("/api/live/recluster")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["applied"] is False
+    assert body["method"] in ("dynamic", "static_fallback") and body["reason"]
+    assert set(body["assignment"]) == {c for cs in TWO_CLUSTERS.values() for c in cs}
+    assert set(body["assignment"].values()) <= set(TWO_CLUSTERS)
+    # the similarity matrix came with it: square, one row per clustered client
+    clients = body["clients_clustered"]
+    assert sorted(clients) == sorted(body["assignment"])
+    assert len(body["similarity"]) == len(clients) == 4
+    assert all(len(row) == 4 for row in body["similarity"])
+    assert all(abs(body["similarity"][i][i] - 1.0) < 1e-6 for i in range(4))
+    assert body["completed_rounds"] == 2 and body["clusters"] == ["scientific", "web"]
+    after = requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"]
+    assert {c: after[c]["members"] for c in after} == {c: before[c]["members"] for c in before}
+    # and the evidence is still there: asking twice gives the same answer
+    assert ui.post("/api/live/recluster").json()["assignment"] == body["assignment"]
+
+
+def test_the_panel_never_applies_whatever_the_browser_sends(two_clusters, tmp_path, monkeypatch):
+    ui, cluster_url, _ = two_clusters
+    for round_no in (1, 2):
+        _two_cluster_round(ui, cluster_url, tmp_path / f"r{round_no}", seed=round_no * 100)
+    sent = _spy_sends(monkeypatch)
+    for body in ({"apply": True}, {"apply": True, "include_similarity": False, "seed": 99},
+                 {"apply": "yes", "min_separation": 0.0}, None):
+        r = ui.post("/api/live/recluster", json=body) if body is not None             else ui.post("/api/live/recluster")
+        assert r.status_code == 200 and r.json()["applied"] is False
+    forwarded = [j for m, u, j in sent if u.endswith("/recluster")]
+    assert forwarded == [{"apply": False, "include_similarity": True, "seed": 0}] * 4
+
+
+def test_before_any_merge_the_clusters_answer_is_shown_as_a_409(two_clusters):
+    ui = two_clusters[0]
+    r = ui.post("/api/live/recluster")
+    assert r.status_code == 409
+    assert r.json()["detail"] == "no completed aggregation round to cluster: upload and aggregate first"
+
+
+def test_with_one_cluster_the_clusters_own_reason_comes_back(stack):
+    ui = stack[0]                                   # the default fixture: only "web"
+    assert ui.post("/api/live/register").status_code == 200
+    r = ui.post("/api/live/recluster")
+    assert r.status_code == 409 and "needs >= 2 clusters" in r.json()["detail"]
+    assert ui.get("/api/live/state").json()["recluster_ready"] is False
+
+
+def test_the_recluster_route_needs_the_operator_login(logins):
+    ui = logins[0]
+    assert ui.post("/api/live/recluster").status_code == 401
+    dev = _bearer(ui, username="dev-flask", password="developer pass phrase")
+    assert ui.post("/api/live/recluster", headers=dev).status_code == 403
+    assert ui.post("/api/live/recluster", headers=_bearer(ui)).status_code == 409   # reached the cluster
+
+
+def test_the_page_has_the_dry_run_button_and_says_nothing_moves():
+    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    js = (panel.STATIC_DIR / "live.js").read_text(encoding="utf-8")
+    assert 'id="recluster"' in html and "Re-cluster (dry run)" in html
+    assert ("Computed from round 2's updates. Nothing has been moved: applying a new grouping "
+            "starts a new run with a new privacy budget.") in html + js
+    assert "recluster_ready" in js and "/api/live/recluster" in js
+    assert "similarityTable(r.similarity, r.clients_clustered)" in js
+    assert '"apply"' not in js and "apply:" not in js       # the page has no way to apply
