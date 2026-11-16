@@ -23,6 +23,17 @@
   </div>
 </header>
 
+<section class="login" id="login" hidden>
+  <h2>Log in</h2>
+  <p>The round keeps running on this laptop. Log in as the operator to see and drive it.</p>
+  <form id="login-form">
+    <label>Username<input type="text" id="login-user" autocomplete="username" required /></label>
+    <label>Password<input type="password" id="login-pass" autocomplete="current-password" required /></label>
+    <button type="submit">Log in</button>
+    <span class="login-note" id="login-note" role="alert"></span>
+  </form>
+</section>
+
 <main id="lanes" aria-live="polite"></main>
 
 <section class="journal">
@@ -48,7 +59,8 @@ const errText = (b) => typeof b.detail === "string" ? b.detail : JSON.stringify(
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 async function plan() {
-  const { body } = await apiGet("/api/live/plan");
+  const { ok, body } = await apiGet("/api/live/plan");
+  if (!ok) return;
   document.getElementById("transport").innerHTML = body.mtls
     ? "Every link is <b>mutual TLS</b>: each laptop proves who it is with its own certificate."
     : "Links are <b>plain HTTP</b> on the private hotspot.";
@@ -202,8 +214,31 @@ function announce(state) {
   }
 }
 
+// U5: any 401 shows the login form; nothing on the server is lost meanwhile.
+let needLogin = false;
+function showLogin(on) {
+  needLogin = on;
+  document.getElementById("login").hidden = !on;
+  document.getElementById("lanes").hidden = on;
+  document.getElementById("register").disabled = on;
+  if (on) document.getElementById("login-user").focus();
+}
+window.addEventListener("clasp-login-required", () => showLogin(true));
+document.getElementById("login-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const noteEl = document.getElementById("login-note");
+  const r = await apiLogin(document.getElementById("login-user").value,
+                           document.getElementById("login-pass").value);
+  document.getElementById("login-pass").value = "";
+  if (!r.ok) { noteEl.textContent = errText(r.body); return; }
+  noteEl.textContent = "";
+  showLogin(false); plan(); refresh();
+};
+
 async function refresh() {
+  if (needLogin) return;
   const r = await apiGet("/api/live/state");
+  if (r.status === 401) return;   // the login form is showing
   if (!r.ok) {
     document.getElementById("lanes").innerHTML = `<div class="problem"><b>Can't read the round.</b><p>${esc(errText(r.body))}</p><p>Check that the cluster and registry are running on this laptop.</p></div>`;
     return;

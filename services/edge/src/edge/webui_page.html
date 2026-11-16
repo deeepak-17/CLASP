@@ -83,6 +83,12 @@ details.train p { color: var(--ink-2); max-width: 64ch; }
 .fields label.check { display: flex; align-items: center; gap: 8px; }
 input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--rule); background: var(--paper); color: var(--ink); }
 
+.login { max-width: 460px; background: var(--sheet); border-radius: 10px; padding: 20px 24px; }
+.login form { display: grid; gap: 12px; }
+.login label { display: grid; gap: 4px; font-weight: 700; font-size: 15px; }
+.login input { font: 400 16px var(--font); padding: 9px 10px; border-radius: 6px; border: 1.5px solid var(--rule); background: var(--paper); color: var(--ink); }
+.login .verdict { min-height: 1.4em; }
+
 .log { background: var(--sheet); border-radius: 10px; padding: 12px 14px; max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: 14.5px; color: var(--ink-2); }
 
 @media (max-width: 760px) {
@@ -102,7 +108,18 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
   <div class="link" id="where">Checking the cluster…</div>
 </header>
 
-<main>
+<section class="login" id="login" hidden style="margin: 24px 40px;">
+  <h2>Log in</h2>
+  <p class="sub">This page sends this laptop's adapter. Log in as its developer to use it.</p>
+  <form id="login-form">
+    <label>Username<input type="text" id="login-user" autocomplete="username" required /></label>
+    <label>Password<input type="password" id="login-pass" autocomplete="current-password" required /></label>
+    <button type="submit">Log in</button>
+    <span class="verdict bad" id="login-note" role="alert"></span>
+  </form>
+</section>
+
+<main id="app">
   <section>
     <h2>Send an adapter</h2>
     <p class="sub">Your source code never leaves this laptop. What travels is the adapter trained on it: a few million numbers that describe how to steer the shared model. <span id="dponly">Only adapters trained with differential privacy are listed.</span></p>
@@ -143,11 +160,30 @@ input[type=text], input[type=number] { font: 400 16px var(--font); padding: 8px 
 let picked = null, me = null, lastLines = 0, jobRunning = false, jobKind = null, lastStatus = null, adapterList = [], lastActive;
 const activeSha = (s) => s && s.reachable && s.my_cluster && s.clusters[s.my_cluster] ? s.clusters[s.my_cluster].active_sha256 : null;
 
-async function get(path) { const r = await fetch(path); return r.json(); }
+// U5: the login token lives in sessionStorage (it goes with the tab), rides on
+// every call, and any 401 brings the login form back. Jobs on this laptop keep
+// running meanwhile.
+const TOKEN_KEY = "clasp-edge-token";
+let needLogin = false;
+const auth = () => { const t = sessionStorage.getItem(TOKEN_KEY); return t ? { Authorization: `Bearer ${t}` } : {}; };
+function showLogin(on) {
+  needLogin = on;
+  document.getElementById("login").hidden = !on;
+  document.getElementById("app").hidden = on;
+  if (on) { sessionStorage.removeItem(TOKEN_KEY); document.getElementById("login-user").focus(); }
+}
+class LoginRequired extends Error {}
+async function get(path) {
+  const r = await fetch(path, { headers: auth() });
+  if (r.status === 401) { showLogin(true); throw new LoginRequired(path); }
+  return r.json();
+}
 async function post(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", ...auth() }, body: JSON.stringify(body) });
+  if (r.status === 401 && path !== "/api/login") showLogin(true);
   return { ok: r.ok, body: await r.json().catch(() => ({})) };
 }
+window.addEventListener("unhandledrejection", (e) => { if (e.reason instanceof LoginRequired) e.preventDefault(); });
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function myCluster() {
@@ -392,9 +428,21 @@ document.getElementById("train").onclick = async () => {
   refreshJob();
 };
 
+document.getElementById("login-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const noteEl = document.getElementById("login-note");
+  const r = await post("/api/login", { username: document.getElementById("login-user").value, password: document.getElementById("login-pass").value });
+  document.getElementById("login-pass").value = "";
+  if (!r.ok) { noteEl.textContent = r.body.detail || "Could not log in."; return; }
+  noteEl.textContent = "";
+  sessionStorage.setItem(TOKEN_KEY, r.body.token);
+  showLogin(false);
+  loadAdapters().then(refreshStatus); refreshJob();
+};
+
 loadAdapters().then(refreshStatus); refreshJob();
-setInterval(refreshStatus, 3000);
-setInterval(refreshJob, 1000);
+setInterval(() => { if (!needLogin) refreshStatus(); }, 3000);
+setInterval(() => { if (!needLogin) refreshJob(); }, 1000);
 </script>
 </body>
 </html>

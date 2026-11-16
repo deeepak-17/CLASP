@@ -13,6 +13,14 @@ from .hmac_signer import (
     verify_signature,
 )
 from .jwt_handler import JWTConfig, TokenError, create_token, verify_token
+from .users import (
+    LOGIN_LIFETIME_MINUTES,
+    UserStore,
+    UserStoreError,
+    bearer_claims,
+    issue_token,
+    jwt_config_from_env,
+)
 from .roles import (
     DEFAULT_ROLES,
     ROLE_ADMIN,
@@ -36,12 +44,18 @@ __all__ = [
     "ROLE_UNKNOWN",
     "APIKeyStore",
     "JWTConfig",
+    "LOGIN_LIFETIME_MINUTES",
     "SecretConfigError",
     "TokenError",
+    "UserStore",
+    "UserStoreError",
+    "bearer_claims",
     "create_token",
     "evaluation_message",
     "generate_api_key",
     "hash_api_key",
+    "issue_token",
+    "jwt_config_from_env",
     "load_role_table",
     "require_roles",
     "role_of",

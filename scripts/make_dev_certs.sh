@@ -90,12 +90,16 @@ printf '{%s}\n' "$upload_keys" > cluster/upload_hmac.json
 # verifies them on /promote (CLASP_EVAL_HMAC_SECRET_FILE on both).
 mkdir -p secrets
 [ -s secrets/eval_hmac.key ] || openssl rand -hex 32 > secrets/eval_hmac.key
+# jwt.key: signs the panel's login tokens (CLASP_JWT_SECRET_FILE), so a login
+# survives a panel restart. Without it the panel makes a key per process.
+[ -s secrets/jwt.key ] || openssl rand -hex 32 > secrets/jwt.key
 
 echo "wrote $(pwd):"
 echo "  registry/  cluster/  demo-ui/   mounted into the containers on laptop A"
 echo "  admin/                          the operator's certificate (CN clasp-admin); keep it on laptop A"
 echo "  edges/<client_id>/              ca.pem client.pem client.key hmac.key — copy to that edge laptop"
 echo "  cluster/upload_hmac.json        every edge's upload key, for the cluster to verify uploads"
+echo "  secrets/jwt.key                 signs the panel's login tokens"
 echo "  secrets/eval_hmac.key           signs evaluation results (evaluator) and verifies them (registry)"
 echo "  SANs: registry, cluster, localhost, 127.0.0.1${lan_sans//,/ }"
 echo "ca-private/ca.key stays on this machine — no container or laptop ever needs the CA key"

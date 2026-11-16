@@ -3,8 +3,24 @@
 // backend (demo_ui/server.py), which itself only reads real files or proxies
 // to the real Cluster/Registry FastAPI apps.
 
+// The login token lives in sessionStorage: it goes with the tab, is sent on
+// every call, and any 401 (no token, an expired one) asks the page to show its
+// login form ("clasp-login-required"). The server keeps the round either way.
+const TOKEN_KEY = "clasp-token";
+const authHeaders = () => {
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+function loginRequired(res, path) {
+  if (res.status === 401 && path !== "/api/login") {
+    sessionStorage.removeItem(TOKEN_KEY);
+    window.dispatchEvent(new Event("clasp-login-required"));
+  }
+}
+
 async function apiGet(path) {
-  const res = await fetch(path);
+  const res = await fetch(path, { headers: authHeaders() });
+  loginRequired(res, path);
   const body = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, body };
 }
@@ -12,11 +28,18 @@ async function apiGet(path) {
 async function apiPost(path, json) {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: json ? JSON.stringify(json) : undefined,
   });
+  loginRequired(res, path);
   const body = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, body };
+}
+
+async function apiLogin(username, password) {
+  const r = await apiPost("/api/login", { username, password });
+  if (r.ok) sessionStorage.setItem(TOKEN_KEY, r.body.token);
+  return r;
 }
 
 function fmt(n, digits = 3) {

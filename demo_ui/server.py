@@ -15,6 +15,14 @@ laptop A shows during the multi-laptop demo (docs/multi-laptop-demo.md). It
   4. proxies ``/api/cluster/*`` and ``/api/registry/*`` straight through, for
      inspection.
 
+People log in (U5): with a users file configured (``CLASP_USERS_FILE``, written
+by ``scripts/make_users.py``) every ``/api/*`` route except ``/api/health`` and
+``/api/login`` needs ``Authorization: Bearer <token>`` for a user whose role is
+``operator``. ``POST /api/login`` gives the token; it lasts 8 hours and is
+signed with ``CLASP_JWT_SECRET`` (or the file ``CLASP_JWT_SECRET_FILE`` names;
+with neither, a key made for this process). With no users file the panel runs
+open, and says so when it starts (the fall-back, C11).
+
 The edge laptops upload their own trained adapters (``edge.webui``); nothing
 here makes up tensors or metrics. The panel pages that did (synthetic
 uploads, hardcoded promote metrics, a staged regression) were removed.
@@ -26,7 +34,9 @@ running on :8002/:8004) — or ``python scripts/run_services.py --ui``.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -35,9 +45,21 @@ import time
 from pathlib import Path
 
 import httpx
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from security.auth.hmac_signer import SecretConfigError
+from security.auth.jwt_handler import JWTConfig, TokenError, verify_token
+from security.auth.users import (
+    ROLE_OPERATOR,
+    UserStore,
+    UserStoreError,
+    bearer_claims,
+    issue_token,
+    jwt_config_from_env,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -80,7 +102,107 @@ CLUSTER_OF = {
     "client-scikit-learn": "scientific",
 }
 
-app = FastAPI(title="CLASP Panel Demo UI")
+_log = logging.getLogger("demo_ui")
+
+# --------------------------------------------------------------------------- #
+# Logins (U5)
+# --------------------------------------------------------------------------- #
+USERS_ENV = "CLASP_USERS_FILE"
+#: ``/api`` routes that need no token: liveness, and the login itself.
+OPEN_API_PATHS = frozenset({"/api/health", "/api/login"})
+_login_cache: dict = {}
+
+
+def _login_settings() -> tuple[UserStore, JWTConfig] | None:
+    """The users and token settings, or ``None`` when no users file is
+    configured (the page then runs open). Raises ``UserStoreError`` /
+    ``SecretConfigError`` when what is configured cannot be used.
+
+    The users file is re-read when it changes; the signing key is kept for as
+    long as its configuration is the same, so tokens survive a users edit.
+    """
+    path = os.environ.get(USERS_ENV)
+    if not path:
+        return None
+    key = (os.environ.get("CLASP_JWT_SECRET"), os.environ.get("CLASP_JWT_SECRET_FILE"))
+    if _login_cache.get("jwt_key") != key:
+        config, generated = jwt_config_from_env()
+        if generated:
+            _log.warning("CLASP_JWT_SECRET is not set: logins are signed with a key made for "
+                         "this process and end when it stops")
+        _login_cache.update(jwt_key=key, jwt=config)
+    try:
+        stat = os.stat(path)
+        stamp = (path, stat.st_mtime_ns, stat.st_size)
+    except OSError as e:
+        raise UserStoreError(f"{USERS_ENV}={path} cannot be read ({type(e).__name__})") from e
+    if _login_cache.get("stamp") != stamp:
+        _login_cache.update(stamp=stamp, users=UserStore(Path(path)))
+    return _login_cache["users"], _login_cache["jwt"]
+
+
+def _unauthorized(detail: str) -> JSONResponse:
+    return JSONResponse({"detail": detail}, status_code=401,
+                        headers={"WWW-Authenticate": "Bearer"})
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    if not os.environ.get(USERS_ENV):
+        _log.warning("%s is not set: the panel runs without a login; anyone who can reach "
+                     "this port can drive the round (scripts/make_users.py writes a users file)",
+                     USERS_ENV)
+    yield
+
+
+app = FastAPI(title="CLASP Panel Demo UI", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """Every ``/api/*`` call except health and login needs an operator's token."""
+    path = request.url.path
+    if not path.startswith("/api/") or path in OPEN_API_PATHS:
+        return await call_next(request)
+    try:
+        settings = _login_settings()
+    except (UserStoreError, SecretConfigError) as e:
+        return _unauthorized(f"logins are misconfigured: {e}")
+    if settings is None:
+        return await call_next(request)
+    try:
+        claims = bearer_claims(request.headers.get("authorization"), settings[1])
+    except TokenError as e:
+        return _unauthorized(str(e))
+    if claims.get("role") != ROLE_OPERATOR:
+        return JSONResponse(
+            {"detail": f"this panel is for the operator role; {claims.get('sub')!r} is "
+                       f"{claims.get('role')!r}"}, status_code=403)
+    return await call_next(request)
+
+
+@app.post("/api/login")
+async def login(request: Request) -> dict:
+    """``{"username", "password"}`` -> ``{"token", "role", "expires_at"}``, or 401."""
+    try:
+        settings = _login_settings()
+    except (UserStoreError, SecretConfigError) as e:
+        raise HTTPException(500, f"logins are misconfigured: {e}") from e
+    if settings is None:
+        raise HTTPException(404, "logins are not enabled on this page (no users file)")
+    users, config = settings
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    username, password = (body or {}).get("username"), (body or {}).get("password")
+    token = (issue_token(users, username, password, config)
+             if isinstance(username, str) and isinstance(password, str) else None)
+    if token is None:
+        raise HTTPException(401, "wrong username or password")
+    claims = verify_token(token, config)
+    expires = datetime.datetime.fromtimestamp(claims["exp"], datetime.timezone.utc)
+    return {"token": token, "role": claims["role"], "expires_at": expires.isoformat()}
 
 
 # --------------------------------------------------------------------------- #
@@ -133,7 +255,7 @@ async def proxy_registry(path: str, request: Request) -> Response:
 async def health() -> dict:
     """Liveness of the two real backing services, for the pre-demo checklist."""
     out = {"cluster": "unreachable", "registry": "unreachable",
-           "mtls": _VERIFY is not True}
+           "mtls": _VERIFY is not True, "login_required": bool(os.environ.get(USERS_ENV))}
     async with _client(3.0) as client:
         for name, base in (("cluster", CLUSTER_BASE), ("registry", REGISTRY_BASE)):
             try:

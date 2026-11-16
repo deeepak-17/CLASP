@@ -3,7 +3,10 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY demo_ui/requirements.txt /app/demo_ui/requirements.txt
-RUN pip install --no-cache-dir -r /app/demo_ui/requirements.txt
+# P3's library (logins, signatures), without its DP extra: no torch in this image
+COPY contracts /app/contracts
+COPY security /app/security
+RUN pip install --no-cache-dir -r /app/demo_ui/requirements.txt -e /app/contracts -e /app/security
 COPY demo_ui /app/demo_ui
 EXPOSE 8010
 CMD ["uvicorn", "demo_ui.server:app", "--host", "0.0.0.0", "--port", "8010"]

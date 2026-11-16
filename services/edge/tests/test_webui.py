@@ -476,3 +476,109 @@ def test_the_page_signs_its_uploads_with_the_edges_key(tmp_path):
     assert len(fake.uploads[0]["signature"]) == 64
     # the key is not in the job log or the status the browser reads
     assert "k" * 64 not in json.dumps(job) + json.dumps(page.status(), default=str)
+
+# --------------------------------------------------------------------------- #
+# U5: the developer logs in to the edge page (JWT)
+# --------------------------------------------------------------------------- #
+DEV_PASSWORD = "developer pass phrase"
+
+
+def _request(url, method="GET", body=None, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+@pytest.fixture
+def login_page(tmp_path):
+    security_users = pytest.importorskip("security.auth.users")
+    from tests.test_upload import FakeCluster
+
+    users = security_users.UserStore(tmp_path / "users.json")
+    users.add("dev-flask", DEV_PASSWORD, "developer", subject="client-flask")
+    users.add("dev-numpy", DEV_PASSWORD, "developer", subject="client-numpy")
+    users.add("operator", DEV_PASSWORD, "operator")
+    _adapter(tmp_path / "live-1", "client-flask", seed=1, epsilon=3.2254)
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster(), users=users)
+    httpd = webui.serve(page, "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}", page, users
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def _token(url, username="dev-flask", password=DEV_PASSWORD):
+    status, body = _request(f"{url}/api/login", "POST", {"username": username,
+                                                         "password": password})
+    assert status == 200, body
+    return body["token"]
+
+
+def test_the_edge_page_logs_a_developer_in(login_page):
+    url, _, _ = login_page
+    status, body = _request(f"{url}/api/login", "POST",
+                            {"username": "dev-flask", "password": DEV_PASSWORD})
+    assert status == 200 and body["role"] == "developer" and body["expires_at"]
+    for bad in ({"username": "dev-flask", "password": "wrong"}, {"username": "ghost",
+                                                                 "password": DEV_PASSWORD}, {}):
+        assert _request(f"{url}/api/login", "POST", bad)[0] == 401
+
+
+def test_the_edge_pages_api_needs_the_token(login_page):
+    url, page, _ = login_page
+    for method, path, body in (("GET", "/api/status", None), ("GET", "/api/adapters", None),
+                               ("GET", "/api/job", None),
+                               ("POST", "/api/upload", {"adapter": "live-1/client-flask"}),
+                               ("POST", "/api/pull", {}),
+                               ("POST", "/api/train", {"client": "web/client-flask"})):
+        assert _request(f"{url}{path}", method, body)[0] == 401, path
+    assert page.job.snapshot()["kind"] is None          # nothing was started
+    with urllib.request.urlopen(url, timeout=10) as r:   # the page itself loads: it shows the form
+        assert b"CLASP Edge" in r.read()
+    assert _request(f"{url}/api/health")[1] == {"status": "ok", "login_required": True}
+    token = _token(url)
+    status, adapters = _request(f"{url}/api/adapters", token=token)
+    assert status == 200 and [a["id"] for a in adapters["adapters"]] == ["live-1/client-flask"]
+    assert _request(f"{url}/api/status", token=token)[0] == 200
+
+
+def test_another_clients_developer_or_an_operator_gets_403(login_page):
+    url, _, _ = login_page
+    for who in ("dev-numpy", "operator"):
+        status, body = _request(f"{url}/api/adapters", token=_token(url, who))
+        assert status == 403, who
+        assert "client-flask" in body["detail"]
+
+
+def test_an_expired_or_tampered_token_is_401_on_the_edge_page(login_page):
+    from security.auth.jwt_handler import JWTConfig
+    from security.auth.users import issue_token
+
+    url, page, users = login_page
+    expired = issue_token(users, "dev-flask", DEV_PASSWORD,
+                          JWTConfig(secret_key=page.jwt.secret_key, token_expiry_minutes=-1))
+    status, body = _request(f"{url}/api/status", token=expired)
+    assert status == 401 and "expired" in body["detail"]
+    assert _request(f"{url}/api/status", token=_token(url)[:-3] + "abc")[0] == 401
+
+
+def test_without_a_users_file_the_edge_page_runs_open(page_url):
+    url, _ = page_url
+    assert _request(f"{url}/api/adapters")[0] == 200
+    assert _request(f"{url}/api/health")[1] == {"status": "ok", "login_required": False}
+    status, body = _request(f"{url}/api/login", "POST", {"username": "x", "password": "y"})
+    assert status == 404 and "not enabled" in body["detail"]
+
+
+def test_the_edge_page_has_a_login_form():
+    html = webui.PAGE.read_text(encoding="utf-8")
+    assert 'id="login"' in html and 'type="password"' in html and "sessionStorage" in html
+    assert "localStorage" not in html

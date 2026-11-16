@@ -13,6 +13,8 @@ commands already use, so it unzips straight into the checkout:
     datasets/materialized/<cluster>/<client>/            (--with-corpus) for a live fine-tune
     edge-certs/<client>/                                 (--certs) ca.pem client.pem client.key,
                                                          and hmac.key (this edge's upload key)
+    edge-users/<client>.json                             that edge page's users (scripts/make_users.py),
+                                                         when .runtime/users/<client>.json exists
     EDGE_<client>.md, start_edge_<client>.ps1            what to run on that laptop
 
 Uploading needs no GPU and no model: ``edge.upload`` only reads the adapter
@@ -30,6 +32,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = REPO_ROOT / "services" / "edge" / "artifacts"
 CORPUS = REPO_ROOT / "datasets" / "materialized"
+USERS_DIR = REPO_ROOT / ".runtime" / "users"
 DEFAULT_SETS = ("round2_d3", "dp_smoke", "round1")
 MODEL_ID = "deepseek-ai/deepseek-coder-1.3b-base"
 
@@ -47,7 +50,8 @@ def cluster_of(client: str) -> str:
     raise SystemExit(f"cannot tell which cluster {client} belongs to")
 
 
-def run_steps(client: str, cluster: str, cluster_url: str, sets, certs: bool, corpus: bool) -> str:
+def run_steps(client: str, cluster: str, cluster_url: str, sets, certs: bool, corpus: bool,
+              users: bool = False) -> str:
     mtls = f" --mtls-dir edge-certs/{client}" if certs else ""
     adapter = f"services/edge/artifacts/{sets[0]}/{client}/adapter"
     train = (f"""
@@ -96,7 +100,7 @@ Uploading needs no GPU and no model weights.{keys_note}
    .\\start_edge_{client}.ps1
    ```
 
-   Pick the adapter, press **Upload to cluster**. Laptop A's panel shows `{client}` arrive.
+   {"The page asks you to log in (the username and password laptop A's operator set for this laptop). " if users else ""}Pick the adapter, press **Upload to cluster**. Laptop A's panel shows `{client}` arrive.
 
 Command-line equivalent:
 
@@ -110,8 +114,9 @@ Adapters in this bundle: {", ".join(f"`{s}`" for s in sets)}.
 """
 
 
-def start_script(client: str, cluster_url: str, certs: bool) -> str:
+def start_script(client: str, cluster_url: str, certs: bool, users: bool = False) -> str:
     mtls = f" --mtls-dir edge-certs/{client}" if certs else ""
+    mtls += f" --users edge-users/{client}.json" if users else ""
     return (f"# Start {client}'s edge page (http://127.0.0.1:8020) against laptop A's cluster.\n"
             f"$here = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
             f"Set-Location $here\n"
@@ -119,7 +124,8 @@ def start_script(client: str, cluster_url: str, certs: bool) -> str:
             f"python -m edge.webui --cluster-url {cluster_url} --client-id {client}{mtls}\n")
 
 
-def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus: bool) -> Path:
+def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus: bool,
+          users_dir: Path | None = None) -> Path:
     cluster = cluster_of(client)
     found = [s for s in sets if (ARTIFACTS / s / client / "adapter" / "adapter_model.safetensors").exists()]
     if not found:
@@ -154,9 +160,16 @@ def build(client: str, cluster_url: str, out: Path, sets, certs_dir, with_corpus
             # upload and the page pick it up from the certificate directory.
             if (edge_certs / "hmac.key").exists():
                 add(edge_certs / "hmac.key", f"edge-certs/{client}/hmac.key")
+        # U5: this edge page's users (scrypt hashes, no passwords) and no other page's
+        users_file = Path(users_dir if users_dir is not None else USERS_DIR) / f"{client}.json"
+        has_users = users_file.is_file()
+        if has_users:
+            add(users_file, f"edge-users/{client}.json")
         z.writestr(f"EDGE_{client}.md",
-                   run_steps(client, cluster, cluster_url, found, bool(certs_dir), with_corpus))
-        z.writestr(f"start_edge_{client}.ps1", start_script(client, cluster_url, bool(certs_dir)))
+                   run_steps(client, cluster, cluster_url, found, bool(certs_dir), with_corpus,
+                             users=has_users))
+        z.writestr(f"start_edge_{client}.ps1",
+                   start_script(client, cluster_url, bool(certs_dir), users=has_users))
     print(f"{out}  ({added / 1e6:.1f} MB before compression)")
     print(f"  client {client}, cluster {cluster}, adapters {found}"
           f"{', corpus' if with_corpus else ''}{', certs' if certs_dir else ''}")
@@ -176,10 +189,13 @@ def main(argv=None) -> int:
     ap.add_argument("--certs", type=Path, default=None,
                     help="make_dev_certs.sh output dir; adds edges/<client>/ for mTLS")
     ap.add_argument("--with-corpus", action="store_true", help="add the client's corpus for a live fine-tune")
+    ap.add_argument("--users-dir", type=Path, default=None,
+                    help="where scripts/make_users.py wrote <client>.json (default .runtime/users); "
+                         "the edge page then asks for a login")
     args = ap.parse_args(argv)
     for client in args.clients:
         build(client, args.cluster_url, args.out_dir / f"edge-{client}.zip", args.sets,
-              args.certs, args.with_corpus)
+              args.certs, args.with_corpus, users_dir=args.users_dir)
     return 0
 
 

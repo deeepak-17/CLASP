@@ -866,3 +866,160 @@ def test_a_signed_edge_upload_is_accepted_and_a_wrong_key_is_refused(stack, tmp_
     # a refused DP upload was not charged to the laptop's privacy ledger
     ledger = upload.DEFAULT_LEDGER_ROOT / "client-requests"
     assert not ledger.exists() or not any(ledger.iterdir())
+
+# --------------------------------------------------------------------------- #
+# U5: people log in to the panel (JWT); tokens carry a role
+# --------------------------------------------------------------------------- #
+PANEL_PASSWORD = "panel pass phrase"
+JWT_SECRET = "j" * 48
+
+
+@pytest.fixture
+def logins(stack, tmp_path, monkeypatch):
+    """The stack with a users file configured: (ui, cluster_url, registry_url, users)."""
+    from security.auth.users import UserStore
+
+    users = UserStore(tmp_path / "users" / "panel.json")
+    users.add("operator", PANEL_PASSWORD, "operator")
+    users.add("dev-flask", "developer pass phrase", "developer", subject="client-flask")
+    monkeypatch.setenv("CLASP_USERS_FILE", str(users.path))
+    monkeypatch.setenv("CLASP_JWT_SECRET", JWT_SECRET)
+    return (*stack, users)
+
+
+def _login(ui, username="operator", password=PANEL_PASSWORD):
+    return ui.post("/api/login", json={"username": username, "password": password})
+
+
+def _bearer(ui, **kw):
+    r = _login(ui, **kw)
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def test_login_gives_an_operator_token_and_a_wrong_password_does_not(logins):
+    ui = logins[0]
+    r = _login(ui)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["role"] == "operator" and body["token"].count(".") == 2
+    import datetime as dt
+
+    expires = dt.datetime.fromisoformat(body["expires_at"])
+    left = expires - dt.datetime.now(dt.timezone.utc)
+    assert dt.timedelta(hours=7, minutes=59) < left <= dt.timedelta(hours=8)
+    for bad in ({"username": "operator", "password": "wrong"},
+                {"username": "nobody", "password": PANEL_PASSWORD},
+                {"username": "operator"}, {}):
+        refused = ui.post("/api/login", json=bad)
+        assert refused.status_code == 401, bad
+        assert "token" not in refused.json()
+
+
+def test_every_api_route_needs_a_token_except_health_and_login(logins):
+    ui = logins[0]
+    for method, path in (("GET", "/api/live/state"), ("GET", "/api/live/plan"),
+                         ("POST", "/api/live/register"), ("POST", "/api/live/aggregate/web"),
+                         ("POST", "/api/live/publish/web"), ("POST", "/api/live/promote/web"),
+                         ("POST", "/api/live/evaluate/web"), ("GET", "/api/live/evaluate/web"),
+                         ("GET", "/api/cluster/clusters"), ("GET", "/api/registry/adapters")):
+        r = ui.request(method, path)
+        assert r.status_code == 401, (method, path, r.status_code)
+        assert r.headers["www-authenticate"].startswith("Bearer")
+    assert ui.get("/api/health").status_code == 200
+    assert ui.get("/").status_code == 200 and ui.get("/static/common.js").status_code == 200
+    headers = _bearer(ui)
+    assert ui.get("/api/live/plan", headers=headers).status_code == 200
+    assert ui.post("/api/live/register", headers=headers).status_code == 200
+    assert ui.get("/api/cluster/clusters", headers=headers).status_code == 200
+
+
+def test_a_refused_call_does_nothing(logins):
+    ui, cluster_url, _, _ = logins
+    assert ui.post("/api/live/register").status_code == 401
+    import requests
+
+    assert requests.get(f"{cluster_url}/clusters", timeout=10).json()["clusters"].get("web") is None
+
+
+def test_a_developer_token_is_not_an_operator(logins):
+    ui = logins[0]
+    headers = _bearer(ui, username="dev-flask", password="developer pass phrase")
+    r = ui.get("/api/live/state", headers=headers)
+    assert r.status_code == 403 and "operator" in r.json()["detail"]
+
+
+def test_a_tampered_or_foreign_token_is_401(logins):
+    from security.auth.jwt_handler import JWTConfig
+    from security.auth.users import issue_token
+
+    ui, _, _, users = logins
+    good = _bearer(ui)["Authorization"]
+    assert ui.get("/api/live/plan", headers={"Authorization": good[:-3] + "abc"}).status_code == 401
+    forged = issue_token(users, "operator", PANEL_PASSWORD, JWTConfig(secret_key="x" * 48))
+    assert ui.get("/api/live/plan",
+                  headers={"Authorization": f"Bearer {forged}"}).status_code == 401
+    assert ui.get("/api/live/plan", headers={"Authorization": "Basic b3A6cHc="}).status_code == 401
+
+
+def test_an_expired_token_mid_round_is_401_and_the_round_is_still_there(logins, tmp_path):
+    """Review Focus 4: the page loses its login, the server loses nothing."""
+    from security.auth.jwt_handler import JWTConfig
+    from security.auth.users import issue_token
+
+    ui, cluster_url, _, users = logins
+    headers = _bearer(ui)
+    assert ui.post("/api/live/register", headers=headers).status_code == 200
+    for i, client in enumerate(CLIENTS):
+        upload.upload_adapter(_adapter(tmp_path / "r0", client, 1 + i), cluster_url=cluster_url,
+                              log=lambda *_: None)
+    assert ui.post("/api/live/aggregate/web", headers=headers).status_code == 200
+    assert ui.post("/api/live/publish/web", headers=headers).status_code == 200
+    before = ui.get("/api/live/state", headers=headers).json()
+    assert before["clusters"]["web"]["registry"]["candidate"] == 1
+
+    expired = issue_token(users, "operator", PANEL_PASSWORD,
+                          JWTConfig(secret_key=JWT_SECRET, token_expiry_minutes=-1))
+    stale = {"Authorization": f"Bearer {expired}"}
+    for method, path in (("GET", "/api/live/state"), ("GET", "/api/live/plan"),
+                         ("POST", "/api/live/promote/web"), ("POST", "/api/live/aggregate/web")):
+        r = ui.request(method, path, headers=stale)
+        assert r.status_code == 401 and "expired" in r.json()["detail"], (method, path)
+
+    after = ui.get("/api/live/state", headers=_bearer(ui)).json()
+    web_before, web_after = before["clusters"]["web"], after["clusters"]["web"]
+    for key in ("registered", "cluster", "candidate_sha256", "registry", "last", "privacy"):
+        assert web_after[key] == web_before[key], key
+
+
+def test_without_a_users_file_the_panel_runs_open(stack, monkeypatch):
+    ui = stack[0]
+    monkeypatch.delenv("CLASP_USERS_FILE", raising=False)
+    assert ui.get("/api/live/plan").status_code == 200
+    assert ui.post("/api/live/register").status_code == 200
+    r = ui.post("/api/login", json={"username": "operator", "password": PANEL_PASSWORD})
+    assert r.status_code == 404 and "not enabled" in r.json()["detail"]
+    assert ui.get("/api/health").json()["login_required"] is False
+
+
+def test_health_says_whether_a_login_is_required(logins):
+    assert logins[0].get("/api/health").json()["login_required"] is True
+
+
+def test_a_users_file_that_cannot_be_read_closes_the_panel(stack, tmp_path, monkeypatch):
+    """Configured but broken is not "open"."""
+    ui = stack[0]
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("CLASP_USERS_FILE", str(bad))
+    assert ui.get("/api/live/plan").status_code == 401
+    assert ui.post("/api/login", json={"username": "operator",
+                                       "password": PANEL_PASSWORD}).status_code == 500
+
+
+def test_the_page_has_a_login_form_and_keeps_the_token_for_the_session():
+    html = (panel.STATIC_DIR / "live.html").read_text(encoding="utf-8")
+    js = (panel.STATIC_DIR / "common.js").read_text(encoding="utf-8")
+    assert 'id="login"' in html and 'type="password"' in html
+    assert "sessionStorage" in js and "Authorization" in js and "401" in js
+    assert "localStorage" not in js and "localStorage" not in html
