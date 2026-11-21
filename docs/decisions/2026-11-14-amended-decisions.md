@@ -28,9 +28,7 @@ code win.
   `ŵ` its normalised FedProx weight. Edges train with the FedProx proximal
   term, μ = 0.01 (`μ = 0` disables it and the manifest says so).
 - **Reason:** user decision of 2026-10-14, "cluster adds round N's learning on
-  top (FedProx-exact)", which departs from D2/D3 as literally written. Recorded
-  in `docs/superpowers/plans/2026-10-14-federated-loop-audit-fedprox.md`
-  (Spec line and Global Constraints).
+  top (FedProx-exact)", which departs from D2/D3 as literally written.
 
 ## D6 — where the composite is merged (user decision U1)
 
@@ -42,7 +40,7 @@ code win.
   (`GET /clusters/{id}/adapters/active`) and merges it with its own client
   layer locally. The registry's `/compose` path and the `composite` block of
   `/promote` exist, are tested, and are not called by the live loop.
-- **Reason:** U1 in `docs/superpowers/specs/2026-11-14-panel-completion-design.md`:
+- **Reason:** U1 in `2026-11-14-panel-completion-decisions.md`:
   keep merging on the edge, so the developer's client layer never leaves the
   edge, and describe the registry's composite code as present, tested and
   unused.
@@ -68,7 +66,7 @@ code win.
   and nothing in the demo calls it.
 - **Who may call it:** the panel route needs the `operator` login; the cluster's
   `/recluster` route is for the `svc:evaluation` and `admin` roles.
-- **Reason:** U7 in the design spec.
+- **Reason:** U7 in the panel-completion decisions.
 
 ## D7 — DP unit (user decision U2)
 
@@ -80,7 +78,7 @@ code win.
 - **Consequence:** this is weaker than client-level DP, because one developer
   contributes many blocks, so the guarantee covers a single block, not a
   developer's whole contribution.
-- **Reason:** U2 in the design spec: reword to "example-level DP applied on
+- **Reason:** U2 in the panel-completion decisions: reword to "example-level DP applied on
   each client"; no mechanism change. Client-level DP was rejected for this
   project.
 
@@ -120,7 +118,7 @@ code win.
 - **Not yet measured:** whether the adapter still learns at the noise two rounds
   within epsilon 8 require. That needs a GPU round and is recorded in
   `experiments/d3-round2-dp/RESULTS.md` when it has been run.
-- **Reason:** U3 and calls C8, C9 in the design spec.
+- **Reason:** U3 and calls C8, C9 in the panel-completion decisions.
 
 ## D7 — transport, as built (user decisions U4, U5, U6)
 
@@ -150,7 +148,7 @@ code win.
 - **Not done here:** the Docker bring-up of the default-mTLS stack and a
   three-laptop round over it need Docker Desktop and the laptops; see
   `docs/mtls_setup.md` for what to check.
-- **Reason:** U4, U5, U6 and calls C1–C3, C10, C11 in the design spec.
+- **Reason:** U4, U5, U6 and calls C1–C3, C10, C11 in the panel-completion decisions.
 
 ## D5 — promotion guard
 

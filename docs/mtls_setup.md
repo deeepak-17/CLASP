@@ -1,7 +1,7 @@
 # CLASP transport security: mTLS, HTTPS pages, roles, signatures
 
 How the services and the pages talk to each other, as built. Decisions: U4–U6 and
-C1–C3, C10, C11 in `docs/superpowers/specs/2026-11-14-panel-completion-design.md`.
+C1–C3, C10, C11 in `docs/decisions/2026-11-14-panel-completion-decisions.md`.
 
 ## Summary
 
@@ -97,6 +97,7 @@ The table can be replaced with a JSON file named in `CLASP_ROLE_TABLE`.
 | `clasp-admin` | `admin` |
 | a name starting `client-` | `edge` |
 | any other CA-signed name | `unknown` (refused by every restricted route) |
+| a CA-signed certificate with no CN | `unknown` (never read as "no TLS") |
 | no certificate (plain HTTP) | `open` (the fall-back: everything allowed) |
 
 **Registry**
@@ -129,10 +130,14 @@ cluster only.
   `/promote`: a wrong or missing signature is 401 and nothing is recorded; a
   `candidate_sha256` that is not the stored version's is 409 ("evaluation was run
   on different bytes").
-- **Edge uploads.** Each edge signs its upload (every tensor's raw bytes and the
-  rest of the body) with its own key (`edges/<client_id>/hmac.key`). The cluster
-  verifies with its copy (`CLASP_UPLOAD_HMAC_SECRETS`): a changed tensor or sample
-  count is 401 `upload_signature_invalid` and the upload is not buffered.
+- **Edge uploads.** Each edge signs its upload (every tensor's raw bytes, dtype
+  and shape, and the rest of the body) with its own key
+  (`edges/<client_id>/hmac.key`). Edge and cluster use the one recipe in
+  `security.auth.hmac_signer` (`sign_upload_body` / `verify_upload_body`). The
+  cluster verifies with its copy (`CLASP_UPLOAD_HMAC_SECRETS`): a changed tensor,
+  a relabelled shape or a changed sample count is 401 `upload_signature_invalid`
+  and the upload is not buffered. Once that file is configured, a client it holds
+  no key for is refused too (401 `upload_key_unknown`): it cannot be checked.
 
 ## Logins (JWT)
 

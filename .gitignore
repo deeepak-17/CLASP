@@ -88,3 +88,6 @@ demo_ui/RUNBOOK.md
 
 datasets/
 .runtime/
+
+# --- agent working plans (local only, never committed) ---
+docs/superpowers/

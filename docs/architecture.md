@@ -149,12 +149,14 @@ serving; the next non-dry-run GC sweeps again.
 candidate or drop a rejected one, and that crosses services, so it cannot be
 part of the registry's transaction. Instead the promotion transaction writes a
 `cluster_sync` row (`pending`, with the cluster id, the version's sha256 and
-`promote` or `reject`). The caller applies the step and reports back:
+`promote` or `reject`); an operator restore of a cluster adapter writes a
+`restore` row the same way, naming the version restored to, so the cluster
+serves what the registry does. The caller applies the step and reports back:
 `GET /sync/pending` lists open rows, `POST /sync/{id}/done` marks one done or
 counts a failed attempt. The demo panel does this at the end of Promote and at
 the start of every state poll, so a cluster that was down, or a panel that was
 restarted, catches up. A cluster 409 counts as done when the cluster already
-serves the row's sha256 (promote) or has no such pending candidate (reject).
+serves the row's sha256 (promote, restore) or has no such pending candidate (reject).
 
 ### Data model
 
