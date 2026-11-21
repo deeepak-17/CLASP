@@ -241,6 +241,30 @@ def test_a_promote_leaves_the_cluster_serving_the_new_merge(stack, tmp_path, mon
     assert _cluster_web(cluster_url)["active_sha256"] == v2["sha256"]
 
 
+def test_a_registry_restore_reaches_the_cluster_on_the_next_state_call(stack, tmp_path,
+                                                                       monkeypatch):
+    """A restore of cluster-web in the registry is recorded with a cluster step;
+    the panel replays it on the cluster, so the edges pull the restored merge
+    and the next round builds on it, not on the one restored away from."""
+    import requests
+
+    ui, cluster_url, registry_url = stack
+    v1, v2 = _two_published_rounds(ui, cluster_url, tmp_path, monkeypatch)
+    monkeypatch.setattr("demo_ui.evidence.evidence_for", _evidence(0.50, 0.45))
+    assert ui.post("/api/live/promote/web").json()["decision"]["action"] == "promote"
+    assert _cluster_web(cluster_url)["active_sha256"] == v2["sha256"]
+    r = requests.post(f"{registry_url}/adapters/cluster-web/restore",
+                      json={"reason": "drill"}, timeout=10)
+    assert r.status_code == 200 and r.json()["cluster_sync_id"] is not None, r.text
+    sent = _spy_sends(monkeypatch)
+    state = ui.get("/api/live/state").json()
+    assert state["cluster_sync"] == [] and state["cluster_sync_error"] is None
+    assert ("POST", f"{cluster_url}/clusters/web/adapters/active/restore",
+            {"version": 1, "adapter_name": "cluster-web"}) in sent
+    assert _cluster_web(cluster_url)["active_sha256"] == v1["sha256"]
+    assert _registry_pending(registry_url) == []
+
+
 def test_live_state_shows_the_candidate_until_it_is_decided(stack, tmp_path, monkeypatch):
     ui, cluster_url, _ = stack
     v1, pulled = _first_round_promoted(ui, cluster_url, tmp_path, monkeypatch)

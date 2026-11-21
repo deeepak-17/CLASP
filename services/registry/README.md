@@ -96,9 +96,10 @@ The response is the decision plus `cluster_sync_id`. For a `cluster` adapter the
 promotion transaction also writes a `cluster_sync` row (the cluster service must
 switch to the candidate, or drop it); for any other kind it is null. Client
 adapters carry their cluster's `cluster_id` too, but their decisions are not
-cluster steps. `GET /sync/pending` lists the rows still to apply (`id`,
-`adapter`, `version`, `cluster_id`, `sha256`, `action`, `attempts`,
-`last_error`, `superseded_by`); `POST /sync/{id}/done` marks one applied
+cluster steps (a restore of a `cluster` adapter writes a `restore` row too).
+`GET /sync/pending` lists the rows still to apply (`id`, `adapter`, `version`,
+`active_version_after`, `cluster_id`, `sha256`, `action`: `promote`, `reject` or
+`restore`, `attempts`, `last_error`, `superseded_by`); `POST /sync/{id}/done` marks one applied
 (`ok: true`) or counts a failed attempt (`ok: false`). The demo panel retries
 until it lands.
 
@@ -123,10 +124,15 @@ either part lacks DP. Re-composing identical inputs reuses the existing version.
 
 `POST /adapters/{name}/restore` `{"reason": "...", "to_version"?: n}` repoints
 `active` by hand and records it in the audit trail. `to_version` defaults to the
-highest version below the active one that was live (promoted, or the target of a
-recorded decision); with none, 409. An explicit `to_version` that was refused
-(see `rejected` above) is a 409; an undecided one is the operator's choice. It
-is the only way `active` moves backwards. Every composite whose active version
+highest version below the active one that was live (promoted, the target of a
+recorded decision, or a version a restore moved away from); with none, 409. An
+explicit `to_version` that was refused (see `rejected` above) is a 409. One that
+was never live is a 409 above the active version (D5: a candidate goes live only
+through `/promote`) and, below it, is for the `admin` role only (403 otherwise;
+that is how a version an older volume activated without a record is reached).
+It is the only way `active` moves backwards. For a `cluster` adapter the
+response's `cluster_sync_id` names the `restore` row the panel replays on the
+cluster. Every composite whose active version
 was built from the current version moves with it: an existing composite is
 reused, otherwise it is rebuilt; each move is recorded and listed under
 `composites`; if a replacement cannot be built, 409 and nothing changes. This is

@@ -199,3 +199,25 @@ def test_the_audit_file_can_be_placed_with_an_env_variable(api, tmp_path, monkey
 
     audit.close_audit()
     assert "AUTH_FAILURE" in Path(target).read_text(encoding="utf-8")
+
+
+def test_the_access_log_keeps_only_its_newest_rows(tmp_path):
+    """Every request is a row; a panel polls several times a minute, so the
+    table is capped: past the cap the oldest rows go."""
+    from registry import db
+    from registry.repository import SqlMetadataRepository
+
+    engine = db.make_engine(f"sqlite:///{(tmp_path / 'r.db').as_posix()}")
+    db.create_all(engine)
+    repo = SqlMetadataRepository(engine, access_log_max_rows=5, access_log_prune_every=1)
+    for i in range(12):
+        repo.add_access({"at": f"t{i:02d}", "identity": None, "role": "open", "method": "GET",
+                         "path": f"/p{i}", "status": 200})
+    assert [r["path"] for r in repo.access_log()] == [f"/p{i}" for i in range(11, 6, -1)]
+    engine.dispose()
+
+
+def test_the_default_cap_is_generous():
+    from registry.repository import ACCESS_LOG_MAX_ROWS, ACCESS_LOG_PRUNE_EVERY
+
+    assert ACCESS_LOG_MAX_ROWS >= 100_000 and 1 <= ACCESS_LOG_PRUNE_EVERY <= 10_000

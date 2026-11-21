@@ -202,9 +202,9 @@ def test_promoting_a_version_that_does_not_exist_is_404(client):
 def test_an_operator_restore_does_not_block_deciding_that_version(client):
     _upload(client, "cand")
     client.post("/adapters/cand/promote", json=_promote_body("cand", 1, good=True))
-    _upload(client, "cand")  # v2: a candidate nobody has decided
-    # the operator moves to v2 and back; the back-move records a decision on v2
-    assert client.post("/adapters/cand/restore", json={"reason": "go", "to_version": 2}).status_code == 200
+    # v2: live without a decision (a set_active upload, as on an older volume)
+    _upload(client, "cand", meta={"kind": "client", "set_active": True})
+    # the operator moves back to v1; that restore records a decision naming v2
     assert client.post("/adapters/cand/restore", json={"reason": "back", "to_version": 1}).status_code == 200
     assert client.get("/adapters/cand/promotions").json()["decisions"][-1]["adapter"]["version"] == 2
     r = client.post("/adapters/cand/promote", json=_promote_body("cand", 2, good=True))

@@ -128,12 +128,14 @@ def restore_decision(
 def live_versions(decisions: list[PromotionDecision]) -> set[int]:
     """Versions that were active at some point, as far as the audit trail knows.
 
-    A version is live if it was promoted, or it is where the pointer went after
-    any recorded decision (operator restores included). Versions activated
-    without a decision record (older volumes, ``set_active`` uploads) are absent.
+    A version is live if it was promoted, it is where the pointer went after
+    any recorded decision (operator restores included), or an operator restore
+    moved the pointer away from it (it was active then). Versions activated
+    without any such record (older volumes, ``set_active`` uploads) are absent.
     """
     live = {d.adapter.version for d in decisions if d.action == PromotionAction.PROMOTE}
     live |= {d.active_version_after for d in decisions if d.active_version_after > 0}
+    live |= {d.adapter.version for d in decisions if d.reason.startswith(RESTORE_REASON_PREFIX)}
     return live
 
 

@@ -59,10 +59,21 @@ class MetadataRepository(Protocol):
     def access_log(self, limit: int = 200, identity: str | None = None) -> list[dict]: ...
 
 
+#: The access log keeps this many of its newest rows (one row per request).
+ACCESS_LOG_MAX_ROWS = 200_000
+#: ... and drops the older ones once every this many inserts.
+ACCESS_LOG_PRUNE_EVERY = 1_000
+
+
 class SqlMetadataRepository:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, *, access_log_max_rows: int = ACCESS_LOG_MAX_ROWS,
+                 access_log_prune_every: int = ACCESS_LOG_PRUNE_EVERY) -> None:
+        if access_log_max_rows < 1 or access_log_prune_every < 1:
+            raise ValueError("the access log cap and its prune interval must be >= 1")
         self._engine = engine
         self._local = threading.local()
+        self._access_cap = access_log_max_rows
+        self._access_prune_every = access_log_prune_every
 
     # -- transactions ----------------------------------------------------
 
@@ -322,14 +333,15 @@ class SqlMetadataRepository:
             ).inserted_primary_key[0]
 
     def pending_cluster_sync(self) -> list[dict[str, Any]]:
-        """Pending rows, oldest first, each with the ``adapter`` and ``version`` decided
-        and ``superseded_by``: the id of a later *done* row for the same cluster, if any."""
+        """Pending rows, oldest first, each with the ``adapter`` and ``version`` decided,
+        the ``active_version_after`` it (a restore's target), and ``superseded_by``: the id of a later *done* row for the same cluster, if any."""
         with self._connection() as conn:
             rows = conn.execute(
                 select(
                     *cluster_sync.c,
                     adapters.c.name.label("adapter"),
                     promotion_decisions.c.version.label("version"),
+                    promotion_decisions.c.active_version_after,
                 )
                 .select_from(cluster_sync)
                 .join(promotion_decisions, promotion_decisions.c.id == cluster_sync.c.decision_id)
@@ -433,10 +445,15 @@ class SqlMetadataRepository:
 
     def add_access(self, row: dict) -> None:
         """Record one request: ``at``, ``identity``, ``role``, ``method``,
-        ``path``, ``adapter``, ``version``, ``status``."""
+        ``path``, ``adapter``, ``version``, ``status``. Every
+        ``access_log_prune_every`` rows, rows older than the newest
+        ``access_log_max_rows`` are deleted."""
         keys = ("at", "identity", "role", "method", "path", "adapter", "version", "status")
         with self._connection() as conn:
-            conn.execute(insert(access_log).values(**{k: row.get(k) for k in keys}))
+            row_id = conn.execute(
+                insert(access_log).values(**{k: row.get(k) for k in keys})).inserted_primary_key[0]
+            if row_id % self._access_prune_every == 0:
+                conn.execute(delete(access_log).where(access_log.c.id <= row_id - self._access_cap))
 
     def access_log(self, limit: int = 200, identity: str | None = None) -> list[dict[str, Any]]:
         """The newest ``limit`` rows, newest first; with ``identity``, only that caller's."""

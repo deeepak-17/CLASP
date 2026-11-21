@@ -24,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    text,
 )
 
 from registry.config import data_root
@@ -98,7 +99,7 @@ cluster_sync = Table(
     Column("attempts", Integer, nullable=False, server_default="0"),
     Column("last_error", Text),
     Column("updated_at", String),
-    CheckConstraint("action IN ('promote','reject')", name="ck_cluster_sync_action"),
+    CheckConstraint("action IN ('promote','reject','restore')", name="ck_cluster_sync_action"),
     CheckConstraint("status IN ('pending','done')", name="ck_cluster_sync_status"),
 )
 
@@ -167,6 +168,27 @@ def make_engine(url: str) -> Engine:
     return engine
 
 
+def _upgrade_cluster_sync(engine: Engine) -> None:
+    """Rebuild a SQLite ``cluster_sync`` table written before the ``restore``
+    step existed, keeping its rows. SQLite cannot alter a CHECK constraint, so
+    the table is renamed, created again from the schema above and refilled, in
+    one transaction. (No PostgreSQL database predates the step.)"""
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as conn:
+        ddl = conn.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cluster_sync'")).scalar()
+        if ddl is None or "'restore'" in ddl:
+            return
+        conn.execute(text("ALTER TABLE cluster_sync RENAME TO cluster_sync_before_restore"))
+        cluster_sync.create(conn)
+        columns = ", ".join(c.name for c in cluster_sync.c)
+        conn.execute(text(f"INSERT INTO cluster_sync ({columns}) "
+                          f"SELECT {columns} FROM cluster_sync_before_restore"))
+        conn.execute(text("DROP TABLE cluster_sync_before_restore"))
+
+
 def create_all(engine: Engine) -> None:
-    """Create any missing tables (idempotent)."""
+    """Create any missing tables and bring older ones up to this schema (idempotent)."""
     metadata.create_all(engine)
+    _upgrade_cluster_sync(engine)

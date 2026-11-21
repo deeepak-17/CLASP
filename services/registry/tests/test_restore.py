@@ -115,13 +115,60 @@ def test_explicit_restore_to_a_rejected_version_is_409(client):
     assert client.get("/adapters/flask/active").json()["ref"]["version"] == 3
 
 
-def test_explicit_restore_to_an_undecided_version_is_allowed(client):
+def test_a_restore_never_puts_an_unevaluated_candidate_live(client):
+    """D5: a candidate goes live only through /promote. A forward restore
+    re-activates a version that was live before; it never skips the rule."""
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 1)
+    _upload(client, "flask", active=False)  # v2: never decided, never live
+    r = client.post("/adapters/flask/restore", json={"reason": "operator choice", "to_version": 2})
+    assert r.status_code == 409
+    assert "never live" in r.json()["detail"] and "/promote" in r.json()["detail"]
+    listing = client.get("/adapters/flask/versions").json()
+    assert listing["active"] == 1 and listing["candidate"] == 2
+    assert len(client.get("/adapters/flask/promotions").json()["decisions"]) == 1
+
+
+def test_a_forward_restore_to_a_version_that_was_live_is_allowed(client):
+    _live_history(client, "flask", n=2)
+    client.post("/adapters/flask/restore", json={"reason": "drill"})  # back to v1
+    fwd = client.post("/adapters/flask/restore", json={"reason": "fixed", "to_version": 2})
+    assert fwd.status_code == 200, fwd.text
+    assert fwd.json()["action"] == "promote" and "not a D5 decision" in fwd.json()["reason"]
+
+
+@pytest.fixture
+def as_cn(client):
+    """Send requests as a certificate name (the x-test-cn header), as test_authz does."""
+    import registry.app as appmod
+
+    appmod.configure_identity(lambda request: request.headers.get("x-test-cn"))
+    yield lambda name: {"x-test-cn": name}
+    appmod.configure_identity(None)
+
+
+@pytest.mark.parametrize("cn, status", [("demo-ui", 403), ("clasp-admin", 200)])
+def test_only_an_admin_restores_back_to_a_version_that_was_never_live(client, as_cn, cn, status):
+    """Backwards, a never-live version is an undecided candidate or a version
+    from an older volume that went live without a record. Only an admin may
+    name one: for the evaluator's certificate it would be the same bypass."""
     _upload(client, "flask", active=False)
     _promote(client, "flask", 1)
     _upload(client, "flask", active=False)  # v2: never decided
-    r = client.post("/adapters/flask/restore", json={"reason": "operator choice", "to_version": 2})
-    assert r.status_code == 200
-    assert client.get("/adapters/flask/active").json()["ref"]["version"] == 2
+    _upload(client, "flask", active=False)
+    _promote(client, "flask", 3)
+    r = client.post("/adapters/flask/restore", json={"reason": "x", "to_version": 2},
+                    headers=as_cn(cn))
+    assert r.status_code == status, r.text
+    expected = 2 if status == 200 else 3
+    assert client.get("/adapters/flask/active").json()["ref"]["version"] == expected
+
+
+def test_the_evaluator_may_restore_back_to_a_live_version(client, as_cn):
+    _live_history(client, "flask", n=2)
+    r = client.post("/adapters/flask/restore", json={"reason": "drill"}, headers=as_cn("demo-ui"))
+    assert r.status_code == 200, r.text
+    assert r.json()["active_version_after"] == 1
 
 
 def test_an_earlier_operator_restore_target_counts_as_live(client):

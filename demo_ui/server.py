@@ -11,7 +11,8 @@ laptop A shows during the multi-laptop demo (docs/multi-laptop-demo.md). It
      constants, and carries the registry's decision on the candidate back to
      the cluster the edges pull from (``candidate/promote`` or
      ``candidate/reject``): a published version is a candidate, a promotion
-     makes it live, a rejected candidate is never served;
+     makes it live, a rejected candidate is never served. A registry restore
+     of a cluster adapter is replayed the same way (``active/restore``);
   4. proxies ``GET /api/cluster/*`` and ``GET /api/registry/*`` straight
      through, for inspection (read-only: nothing can be changed through them).
 
@@ -487,24 +488,35 @@ def _step_error(what: str, resp: httpx.Response | None = None, exc: Exception | 
 
 
 def _already_done(row: dict, cluster: dict | None) -> bool:
-    """A cluster 409 means the step is already in effect when, for a promote,
-    the cluster serves the row's sha256, or, for a reject, it has no pending
-    candidate or its pending candidate is another one."""
+    """A cluster 409 means the step is already in effect when, for a promote or
+    a restore, the cluster serves the row's sha256, or, for a reject, it has no
+    pending candidate or its pending candidate is another one."""
     if cluster is None:
         return False
-    if row["action"] == "promote":
+    if row["action"] in ("promote", "restore"):
         return cluster.get("active_sha256") == row["sha256"]
     return cluster.get("candidate_sha256") in (None, "") or cluster["candidate_sha256"] != row["sha256"]
+
+
+def _cluster_step_request(row: dict) -> tuple[str, str, dict]:
+    """``(label, url, body)`` of one row's step on its cluster. A promote or a
+    reject names the candidate by sha256; a restore (``POST .../restore`` in
+    the registry) has the cluster serve the version the registry moved to,
+    fetched from the registry the cluster is configured with."""
+    clusters = f"{CLUSTER_BASE}/clusters/{row['cluster_id']}/adapters"
+    if row["action"] == "restore":
+        return ("cluster active/restore", f"{clusters}/active/restore",
+                {"version": row["active_version_after"], "adapter_name": row["adapter"]})
+    return (f"cluster candidate/{row['action']}", f"{clusters}/candidate/{row['action']}",
+            {"sha256": row["sha256"]})
 
 
 async def _apply_cluster_step(client: httpx.AsyncClient, row: dict) -> tuple[bool, dict]:
     """Send one row's step to its cluster: (landed, result or ``{"error": ...}``).
     An error with ``conflict`` is a 409 that does not show the step as in effect."""
-    what = f"cluster candidate/{row['action']}"
+    what, url, step_body = _cluster_step_request(row)
     try:
-        cr = await _send(client, "POST",
-                         f"{CLUSTER_BASE}/clusters/{row['cluster_id']}/adapters/candidate/{row['action']}",
-                         json={"sha256": row["sha256"]})
+        cr = await _send(client, "POST", url, json=step_body)
         if cr.status_code == 200:
             return True, cr.json()
         if cr.status_code == 409:

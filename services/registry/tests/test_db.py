@@ -132,6 +132,46 @@ def test_cluster_sync_checks_and_unique(seeded):
     _rejects(eng, db.cluster_sync, _sync(did))
 
 
+def test_cluster_sync_accepts_a_restore_step(seeded):
+    eng, (_aid, _vid, did) = seeded
+    with eng.begin() as conn:
+        conn.execute(insert(db.cluster_sync).values(**_sync(did, action="restore")))
+
+
+#: cluster_sync as the first database registry wrote it: no 'restore' step.
+_OLD_CLUSTER_SYNC = """
+CREATE TABLE cluster_sync (
+    id INTEGER NOT NULL, decision_id INTEGER NOT NULL, cluster_id VARCHAR NOT NULL,
+    sha256 VARCHAR NOT NULL, action VARCHAR NOT NULL,
+    status VARCHAR DEFAULT 'pending' NOT NULL, attempts INTEGER DEFAULT '0' NOT NULL,
+    last_error TEXT, updated_at VARCHAR,
+    PRIMARY KEY (id), UNIQUE (decision_id),
+    FOREIGN KEY(decision_id) REFERENCES promotion_decisions (id),
+    CONSTRAINT ck_cluster_sync_action CHECK (action IN ('promote','reject')),
+    CONSTRAINT ck_cluster_sync_status CHECK (status IN ('pending','done'))
+)"""
+
+
+def test_create_all_upgrades_an_older_cluster_sync_table_and_keeps_its_rows(seeded):
+    eng, (aid, _vid, did) = seeded
+    with eng.begin() as conn:
+        conn.execute(text("DROP TABLE cluster_sync"))
+        conn.execute(text(_OLD_CLUSTER_SYNC))
+        conn.execute(insert(db.cluster_sync).values(**_sync(did, attempts=2, last_error="e")))
+        did2 = conn.execute(insert(db.promotion_decisions).values(
+            adapter_id=aid, version=1, action="rollback", active_version_after=1,
+            decision_json="{}")).inserted_primary_key[0]
+    _rejects(eng, db.cluster_sync, _sync(did2, action="restore"))
+    db.create_all(eng)
+    db.create_all(eng)  # idempotent once upgraded
+    with eng.begin() as conn:
+        conn.execute(insert(db.cluster_sync).values(**_sync(did2, action="restore")))
+        rows = conn.execute(db.cluster_sync.select().order_by(db.cluster_sync.c.id)).all()
+    assert [(r.decision_id, r.action, r.attempts, r.last_error) for r in rows] == [
+        (did, "promote", 2, "e"), (did2, "restore", 0, None)]
+    _rejects(eng, db.cluster_sync, _sync(did2, action="bogus"))
+
+
 def test_cluster_sync_unknown_decision_rejected(seeded):
     eng, _ = seeded
     _rejects(eng, db.cluster_sync, _sync(999))

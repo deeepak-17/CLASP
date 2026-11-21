@@ -116,3 +116,44 @@ def test_a_pending_row_names_the_later_done_row_that_supersedes_it(client):
     client.post(f"/sync/{second}/done", json={"ok": True})
     (row,) = _pending(client)
     assert row["id"] == first and row["superseded_by"] == second
+
+
+def _done(client, sync_id):
+    assert client.post(f"/sync/{sync_id}/done", json={"ok": True}).status_code == 200
+
+
+def _promoted_cluster_versions(client, n=2):
+    """n cluster versions, each published as a candidate, promoted, and synced."""
+    for v in range(1, n + 1):
+        _save(client, "cluster-web", make_adapter(v), kind="cluster", cluster_id="web",
+              set_active=False)
+        _done(client, _decide(client, version=v)["cluster_sync_id"])
+
+
+def test_every_row_names_the_version_active_after_its_decision(client):
+    _candidate(client)
+    _decide(client)
+    (row,) = _pending(client)
+    assert row["active_version_after"] == 1
+
+
+def test_a_restore_of_a_cluster_adapter_creates_a_pending_restore_row(client):
+    """The cluster serves what the edges train on: a registry restore that it
+    never hears about would leave it serving the version restored away from."""
+    _promoted_cluster_versions(client)
+    sha1 = client.get("/adapters/cluster-web/versions/1").json()["sha256"]
+    r = client.post("/adapters/cluster-web/restore", json={"reason": "drill"})
+    assert r.status_code == 200, r.text
+    (row,) = _pending(client)
+    assert r.json()["cluster_sync_id"] == row["id"]
+    assert row["action"] == "restore" and row["cluster_id"] == "web"
+    assert row["version"] == 2 and row["active_version_after"] == 1 and row["sha256"] == sha1
+
+
+def test_a_restore_of_a_client_adapter_creates_no_row(client):
+    for v in (1, 2):
+        _save(client, "flask", make_adapter(v), kind="client", cluster_id="web", set_active=False)
+        _decide(client, "flask", kind="client", version=v)
+    r = client.post("/adapters/flask/restore", json={"reason": "drill"})
+    assert r.status_code == 200, r.text
+    assert r.json()["cluster_sync_id"] is None and _pending(client) == []

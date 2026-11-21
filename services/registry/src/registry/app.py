@@ -31,8 +31,11 @@ exempt), and the access/audit recorder (``registry.audit``).
 ``POST /adapters/{name}/promote`` answers with the decision plus ``cluster_sync_id``,
 the id of the ``cluster_sync`` row written in its transaction (null unless the
 version is a ``cluster`` adapter: client adapters carry their cluster's
-``cluster_id`` too, but their decisions are not cluster steps). Each ``/sync/pending`` row carries ``id``,
-``adapter``, ``version``, ``cluster_id``, ``sha256``, ``action``, ``attempts``,
+``cluster_id`` too, but their decisions are not cluster steps); so does
+``POST .../restore``. Each ``/sync/pending`` row carries ``id``, ``adapter``,
+``version`` (the version the decision names), ``active_version_after``,
+``cluster_id``, ``sha256`` (of the version the cluster is to serve or drop),
+``action`` (``promote``, ``reject`` or ``restore``), ``attempts``,
 ``last_error`` (why the last attempt failed) and ``superseded_by`` (the id of a
 later row of the same cluster that is already done, else null).
 
@@ -43,7 +46,7 @@ were refused: a REJECT, or a D5 ROLLBACK recorded before the candidate flow).
 A refused version is never a candidate and never a restore target.
 
 A decision on a cluster adapter also has to reach the cluster service (switch
-to the candidate, or drop it), which cannot share the registry's database
+to the candidate, drop it, or serve a restored version), which cannot share the registry's database
 transaction. The promotion transaction therefore writes a ``cluster_sync`` row;
 ``GET /sync/pending`` lists the rows still to apply and ``POST /sync/{id}/done``
 marks one applied (``ok: true``) or counts a failed attempt (``ok: false``,
@@ -100,7 +103,13 @@ from security.middleware import (
     SecurityHeadersMiddleware,
     rate_limit_from_env,
 )
-from security.auth.roles import ROLE_ADMIN, ROLE_CLUSTER, ROLE_EVALUATION, require_roles
+from security.auth.roles import (
+    ROLE_ADMIN,
+    ROLE_CLUSTER,
+    ROLE_EVALUATION,
+    ROLE_OPEN,
+    require_roles,
+)
 from security.mtls.peer import peer_identity
 
 from . import __version__
@@ -655,25 +664,46 @@ def _promote(name: str, body: dict) -> dict:
     return result
 
 
-@app.post("/adapters/{name}/restore", dependencies=[Depends(DECIDERS)])
-def restore(name: str, body: dict = Body(...)) -> dict:
+@app.post("/adapters/{name}/restore")
+def restore(name: str, body: dict = Body(...), role: str = Depends(DECIDERS)) -> dict:
     """Repoint ``active`` by hand — the rollback drill and the D11 restore path.
 
     Body: ``{"reason": str, "to_version"?: int}``. ``to_version`` defaults to
-    the highest version below the active one that *was live* (promoted, or the
-    target of a recorded decision, operator restores included); with none, 409.
-    Versions activated without a decision record (older volumes) are not
-    default targets, but an operator can still name one. An explicit
-    ``to_version`` that was rejected is refused (409); an undecided one is the
-    operator's choice and allowed. Recorded in the audit trail. Composites
-    built from the current active version follow the pointer; the moves are
-    listed in ``composites``.
+    the highest version below the active one that *was live* (promoted, the
+    target of a recorded decision, or a version an operator restore moved
+    away from); with none, 409. An explicit ``to_version`` that was rejected
+    is refused (409). One that was never live is refused above the active
+    version (409: a candidate goes live only through ``/promote``, D5) and,
+    below it, is for the ``admin`` role only (403 otherwise): that is how a
+    version from an older volume, activated without a record, is reached.
+    Recorded in the audit trail. Composites built from the current active
+    version follow the pointer; the moves are listed in ``composites``. For a
+    cluster adapter the cluster must serve the restored version too: the
+    transaction writes a ``restore`` row for ``/sync/pending``, and its id is
+    ``cluster_sync_id`` (null for other adapters).
     """
     with _WRITE_LOCK:
-        return _restore(name, body)
+        return _restore(name, body, role)
 
 
-def _restore(name: str, body: dict) -> dict:
+def _check_restore_target(to_version: int, active: int, decisions: list, role: str) -> None:
+    """D5 holds on the restore path too: a never-live version is not a restore target
+    upwards (409), and downwards only an admin may name one (403)."""
+    if to_version in rejected_versions(decisions):
+        raise HTTPException(409, f"v{to_version} was rejected and cannot be restored")
+    if to_version in live_versions(decisions):
+        return
+    if to_version > active:
+        raise HTTPException(
+            409, f"v{to_version} was never live: a forward restore only re-activates a version "
+                 f"that was live before; a candidate goes live through /promote (D5)")
+    if role not in (ROLE_ADMIN, ROLE_OPEN):
+        raise HTTPException(
+            403, f"v{to_version} was never live; only the admin role may restore to such a "
+                 f"version (one from an older volume), not {role!r}")
+
+
+def _restore(name: str, body: dict, role: str) -> dict:
     reason, to_version = body.get("reason"), body.get("to_version")
     if not isinstance(reason, str) or not reason.strip():
         raise HTTPException(422, "reason is required (it goes in the audit trail)")
@@ -695,22 +725,27 @@ def _restore(name: str, body: dict) -> dict:
     if to_version == active:
         raise HTTPException(409, f"{name} v{to_version} is already active")
 
-    store.get_metadata(name, to_version)  # 404 if that version does not exist
-    if to_version in rejected_versions(decisions):
-        raise HTTPException(409, f"v{to_version} was rejected and cannot be restored")
+    target = store.get_metadata(name, to_version)  # 404 if that version does not exist
+    _check_restore_target(to_version, active, decisions, role)
     candidate = store.get_metadata(name, active).ref
     decision = restore_decision(candidate, to_version=to_version, reason=reason.strip())
-    # rebuilt composites' files first; the pointer, decision and every
-    # composite move then commit together (unregistered files: orphan sweep)
+    # rebuilt composites' files first; the pointer, decision, every composite
+    # move and the cluster step then commit together (unregistered files: orphan sweep)
     cascade = write_cascade_files(store, _plan_cascade(name, active, to_version))
     written = _newly_written(store, [s.written for s in cascade if s.written is not None])
+    sync_id = None
     with _discard_on_failure(store, written), store.repo.transaction():
         store.set_active(name, to_version)
-        store.record_promotion(name, decision)
+        decision_id = store.record_promotion(name, decision)
         moved = apply_cascade(store, cascade, action=decision.action,
                               reason=f"{name} {decision.reason}")
+        if target.ref.kind is AdapterKind.CLUSTER and target.ref.cluster_id:
+            # the cluster serves what the edges train on: it must serve the restored version
+            sync_id = store.repo.add_cluster_sync(decision_id, target.ref.cluster_id,
+                                                  target.sha256, "restore")
     result = _promotion_decision_to_dict(decision)
     result["composites"] = moved
+    result["cluster_sync_id"] = sync_id
     return result
 
 
@@ -821,8 +856,8 @@ def access_log(limit: int = 200, identity: str | None = None) -> dict:
 @app.get("/sync/pending", dependencies=[Depends(READERS)])
 def sync_pending() -> dict:
     """Cluster promote/reject steps recorded with a decision and not yet applied."""
-    keys = ("id", "adapter", "version", "cluster_id", "sha256", "action", "attempts", "last_error",
-            "superseded_by")
+    keys = ("id", "adapter", "version", "active_version_after", "cluster_id", "sha256", "action",
+            "attempts", "last_error", "superseded_by")
     return {"pending": [{k: row[k] for k in keys}
                         for row in get_store().repo.pending_cluster_sync()]}
 
