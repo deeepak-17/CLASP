@@ -61,6 +61,27 @@ def test_the_table_can_come_from_a_json_file(tmp_path, monkeypatch):
     assert load_role_table() == {"panel-2": "svc:evaluation"}
 
 
+def test_the_table_file_is_read_again_only_when_it_changes(tmp_path, monkeypatch):
+    import os
+
+    import security.auth.roles as roles
+
+    path = tmp_path / "roles.json"
+    path.write_text(json.dumps({"panel-2": "svc:evaluation"}), encoding="utf-8")
+    env = {ROLE_TABLE_ENV: str(path)}
+    reads = []
+    real = roles._parse_role_table
+    monkeypatch.setattr(roles, "_parse_role_table", lambda p: reads.append(p) or real(p))
+    for _ in range(3):
+        assert load_role_table(env) == {"panel-2": "svc:evaluation"}
+    assert len(reads) == 1
+    path.write_text(json.dumps({"panel-3": "admin"}), encoding="utf-8")
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    assert load_role_table(env) == {"panel-3": "admin"}
+    assert len(reads) == 2
+
+
 @pytest.mark.parametrize("content", ["{not json", "[1, 2]", '{"x": 3}', '{"x": "root"}'])
 def test_a_bad_table_file_is_an_error_not_an_open_door(tmp_path, content):
     path = tmp_path / "roles.json"

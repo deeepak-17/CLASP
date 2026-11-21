@@ -23,9 +23,11 @@ from security.mtls.certs import generate_client_cert, generate_service_cert
 from security.mtls.context import client_ssl_context
 from security.mtls.peer import (
     SCOPE_KEY,
+    UNNAMED_PEER,
     PeerCertH11Protocol,
     common_name_from_peercert,
     peer_identity,
+    peer_name_for,
 )
 
 uvicorn = pytest.importorskip("uvicorn")
@@ -42,6 +44,21 @@ def test_peer_identity_reads_the_scope_key():
     assert SCOPE_KEY == "clasp.peer_common_name"
     assert peer_identity(SimpleNamespace(scope={SCOPE_KEY: "client-flask"})) == "client-flask"
     assert peer_identity(SimpleNamespace(scope={})) is None
+
+
+def test_a_verified_certificate_without_a_name_is_not_the_no_tls_case():
+    """``None`` means "no TLS" and opens every route (U6). A TLS peer whose
+    certificate carries no CN must not be read as that: it gets a name that
+    maps to no role, so restricted routes refuse it."""
+    from security.auth.roles import ROLE_UNKNOWN, role_of
+
+    no_cn = SimpleNamespace(getpeercert=lambda: {"subject": ((("countryName", "IN"),),)})
+    named = SimpleNamespace(getpeercert=lambda: {"subject": ((("commonName", "cluster"),),)})
+    assert peer_name_for(None) is None
+    assert peer_name_for(no_cn) == UNNAMED_PEER
+    assert peer_name_for(SimpleNamespace(getpeercert=lambda: None)) == UNNAMED_PEER
+    assert peer_name_for(named) == "cluster"
+    assert role_of(UNNAMED_PEER) == ROLE_UNKNOWN
 
 
 def test_the_package_exports_the_helpers():

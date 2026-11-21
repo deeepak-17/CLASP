@@ -14,8 +14,11 @@ from security.auth.api_key import (
 from security.auth.hmac_signer import (
     sign_adapter_upload,
     sign_payload,
+    sign_upload_body,
+    upload_signing_parts,
     verify_adapter_upload,
     verify_signature,
+    verify_upload_body,
 )
 
 # JWT tests require PyJWT
@@ -117,23 +120,84 @@ class TestSignPayload:
 
 
 class TestSignAdapterUpload:
+    LAYOUT = {"layer.weight": ("float32", (2,)), "layer.bias": ("uint8", (1,))}
+
     def test_round_trip(self) -> None:
         tensors = {"layer.weight": b"\x01\x02", "layer.bias": b"\x03"}
         meta = {"round": 1}
-        sig = sign_adapter_upload(tensors, meta, "s")
-        assert verify_adapter_upload(tensors, meta, sig, "s") is True
+        sig = sign_adapter_upload(tensors, meta, "s", layouts=self.LAYOUT)
+        assert verify_adapter_upload(tensors, meta, sig, "s", layouts=self.LAYOUT) is True
 
     def test_tampered_tensor_fails(self) -> None:
+        layouts = {"w": ("uint8", (2,))}
         tensors = {"w": b"\x01\x02"}
-        sig = sign_adapter_upload(tensors, {}, "s")
+        sig = sign_adapter_upload(tensors, {}, "s", layouts=layouts)
         tensors["w"] = b"\xff\xff"
-        assert verify_adapter_upload(tensors, {}, sig, "s") is False
+        assert verify_adapter_upload(tensors, {}, sig, "s", layouts=layouts) is False
 
     def test_length_prefix_prevents_boundary_shift(self) -> None:
         """Signature must differ when bytes move from name to data."""
-        sig_a = sign_adapter_upload({"ab": b"cd"}, {}, "s")
-        sig_b = sign_adapter_upload({"a": b"bcd"}, {}, "s")
+        layout = ("uint8", (2,))
+        sig_a = sign_adapter_upload({"ab": b"cd"}, {}, "s", layouts={"ab": layout})
+        sig_b = sign_adapter_upload({"a": b"bcd"}, {}, "s", layouts={"a": layout})
         assert sig_a != sig_b
+
+    @pytest.mark.parametrize("layout", [("float32", (4, 2)), ("int32", (2, 4)), ("float32", (8,))])
+    def test_the_signature_covers_dtype_and_shape(self, layout) -> None:
+        """The same bytes read with another dtype or shape are another tensor."""
+        tensors = {"w": bytes(32)}
+        sig = sign_adapter_upload(tensors, {}, "s", layouts={"w": ("float32", (2, 4))})
+        assert verify_adapter_upload(tensors, {}, sig, "s", layouts={"w": layout}) is False
+
+    def test_every_tensor_needs_a_layout(self) -> None:
+        with pytest.raises(ValueError, match="layout"):
+            sign_adapter_upload({"w": b"\x00"}, {}, "s", layouts={})
+
+
+def _upload_body() -> dict:
+    import base64
+
+    return {"client_id": "client-flask", "round_id": 0, "num_examples": 12,
+            "tensors": [{"name": "layers.0.q_proj.lora_A.weight", "dtype": "float32",
+                         "shape": [2, 4], "data_b64": base64.b64encode(bytes(32)).decode()}]}
+
+
+class TestUploadBody:
+    """The one recipe the edge signs with and the cluster verifies with."""
+
+    def test_round_trip_survives_json(self) -> None:
+        import json
+
+        body = _upload_body()
+        sig = sign_upload_body(body, "k")
+        carried = json.loads(json.dumps({**body, "signature": sig, "timestamp": "t"}))
+        assert verify_upload_body(carried, carried["signature"], "k") is True
+
+    @pytest.mark.parametrize("field,value", [("shape", [4, 2]), ("dtype", "int32"),
+                                             ("data_b64", "AA==")])
+    def test_a_changed_tensor_entry_fails(self, field, value) -> None:
+        body = _upload_body()
+        sig = sign_upload_body(body, "k")
+        body["tensors"][0][field] = value
+        assert verify_upload_body(body, sig, "k") is False
+
+    def test_a_changed_sample_count_fails(self) -> None:
+        body = _upload_body()
+        sig = sign_upload_body(body, "k")
+        assert verify_upload_body({**body, "num_examples": 13}, sig, "k") is False
+
+    @pytest.mark.parametrize("tensors", [None, [{"name": "w"}], [{"name": "w", "dtype": "f",
+                                         "shape": ["x"], "data_b64": ""}], "nope"])
+    def test_a_malformed_body_does_not_verify(self, tensors) -> None:
+        body = {**_upload_body(), "tensors": tensors}
+        assert verify_upload_body(body, "00" * 32, "k") is False
+
+    def test_parts_leave_out_the_unsigned_keys(self) -> None:
+        tensors, layouts, metadata = upload_signing_parts(
+            {**_upload_body(), "signature": "x", "timestamp": "y"})
+        assert set(metadata) == {"client_id", "round_id", "num_examples"}
+        name = "layers.0.q_proj.lora_A.weight"
+        assert tensors == {name: bytes(32)} and layouts == {name: ("float32", (2, 4))}
 
 
 # ── JWT ──────────────────────────────────────────────────────────────────────

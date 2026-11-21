@@ -391,10 +391,10 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
 
     ``hmac_secret`` (this edge's upload key, U4) adds ``signature``: an
     HMAC-SHA256 over every tensor's raw little-endian bytes (the bytes that are
-    base64-encoded below) and the rest of the body, built by
-    ``security.auth.hmac_signer.sign_adapter_upload``. The cluster recomputes
-    it from the body it receives, so a changed tensor or sample count is
-    refused. Without a key the body carries no signature.
+    base64-encoded below), dtype and shape, and the rest of the body, built by
+    ``security.auth.hmac_signer.sign_upload_body``. The cluster recomputes it
+    from the body it receives, so a changed tensor, a relabelled shape or a
+    changed sample count is refused. Without a key the body carries no signature.
     """
     sd = as_fp32(translate_keys(state_dict, "peft" if key_convention == "peft" else "cluster"))
     info = describe(sd)
@@ -440,21 +440,12 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
     return payload
 
 
-#: Body keys the upload signature does not cover (the tensors are signed as raw
-#: bytes; a relay may add a timestamp).
-UNSIGNED_UPLOAD_KEYS = ("tensors", "signature", "timestamp")
-
-
 def sign_upload(payload: Dict, secret: str) -> str:
-    """This edge's signature over an upload body (see :func:`upload_payload`)."""
-    import base64
+    """This edge's signature over an upload body (see :func:`upload_payload`):
+    the security library's recipe, the one the cluster verifies with."""
+    from security.auth.hmac_signer import sign_upload_body
 
-    from security.auth.hmac_signer import sign_adapter_upload
-
-    tensors = {t["name"]: base64.b64decode(t["data_b64"]) for t in payload["tensors"]}
-    metadata = {k: v for k, v in payload.items() if k not in UNSIGNED_UPLOAD_KEYS}
-    # through JSON once, so tuples and floats are what the cluster will read
-    return sign_adapter_upload(tensors, json.loads(json.dumps(metadata)), secret)
+    return sign_upload_body(payload, secret)
 
 
 def upload_payload_from_dir(adapter_dir: Path | str, **kw) -> Dict:

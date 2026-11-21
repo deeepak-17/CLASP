@@ -343,22 +343,28 @@ def _tiny_adapter():
     return sd, {"r": 4, "lora_alpha": 4, "target_modules": list(wire.TARGET_MODULES)}
 
 
-def test_upload_payload_is_signed_over_the_tensor_bytes_and_the_rest_of_the_body():
+def test_upload_payload_is_signed_over_the_tensors_and_the_rest_of_the_body():
     import base64
 
     signer = pytest.importorskip("security.auth.hmac_signer")
     payload = _signed_payload()
     # verified with the recipe the cluster uses, written out independently
     tensors = {t["name"]: base64.b64decode(t["data_b64"]) for t in payload["tensors"]}
+    layouts = {t["name"]: (t["dtype"], tuple(t["shape"])) for t in payload["tensors"]}
     metadata = {k: v for k, v in payload.items() if k not in ("tensors", "signature", "timestamp")}
-    assert signer.verify_adapter_upload(tensors, metadata, payload["signature"], "k" * 64)
-    assert not signer.verify_adapter_upload(tensors, metadata, payload["signature"], "x" * 64)
-    assert not signer.verify_adapter_upload(tensors, {**metadata, "num_examples": 13},
-                                            payload["signature"], "k" * 64)
+
+    def ok(meta, secret="k" * 64, lay=layouts):
+        return signer.verify_adapter_upload(tensors, meta, payload["signature"], secret, layouts=lay)
+
+    assert ok(metadata)
+    assert not ok(metadata, secret="x" * 64)
+    assert not ok({**metadata, "num_examples": 13})
+    # a tensor's shape is signed: the same bytes read transposed are refused
+    name, (dtype, shape) = next(iter(layouts.items()))
+    assert not ok(metadata, lay={**layouts, name: (dtype, tuple(reversed(shape)))})
     # the body the cluster receives is this one after a JSON round trip
     carried = json.loads(json.dumps(payload))
-    metadata = {k: v for k, v in carried.items() if k not in ("tensors", "signature", "timestamp")}
-    assert signer.verify_adapter_upload(tensors, metadata, carried["signature"], "k" * 64)
+    assert signer.verify_upload_body(carried, carried["signature"], "k" * 64)
 
 
 def test_the_signature_covers_the_privacy_block_and_the_base():

@@ -8,7 +8,14 @@ from .certs import (
     verify_cert,
 )
 from .context import client_ssl_context, server_ssl_context
-from .peer import SCOPE_KEY, PeerCertH11Protocol, common_name_from_peercert, peer_identity
+from .peer import (
+    SCOPE_KEY,
+    UNNAMED_PEER,
+    PeerCertH11Protocol,
+    common_name_from_peercert,
+    peer_identity,
+    peer_name_for,
+)
 from .rotation import CertStatus, check_expiry
 
 # Backward-compat alias: PR #17 (edge) used create_client_ssl_context
@@ -16,6 +23,7 @@ create_client_ssl_context = client_ssl_context
 
 __all__ = [
     "SCOPE_KEY",
+    "UNNAMED_PEER",
     "CertStatus",
     "PeerCertH11Protocol",
     "check_expiry",
@@ -26,6 +34,7 @@ __all__ = [
     "generate_client_cert",
     "generate_service_cert",
     "peer_identity",
+    "peer_name_for",
     "server_ssl_context",
     "setup_all_certs",
     "verify_cert",

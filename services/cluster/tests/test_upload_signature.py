@@ -3,10 +3,12 @@
 Each edge holds its own HMAC key (``edges/<client_id>/hmac.key`` from
 ``scripts/make_dev_certs.sh``); the cluster holds all of them in the JSON file
 ``CLASP_UPLOAD_HMAC_SECRETS`` names (client id -> key). The signature covers
-every tensor's raw bytes and the whole upload body except ``tensors``,
-``signature`` and ``timestamp``, so a flipped byte or a changed sample count is
-refused (401 ``upload_signature_invalid``) and never buffered. A client with no
-configured key is accepted with a warning (the fall-back, C11).
+every tensor's raw bytes, dtype and shape, and the whole upload body except
+``tensors``, ``signature`` and ``timestamp``, so a flipped byte, a relabelled
+shape or a changed sample count is refused (401 ``upload_signature_invalid``)
+and never buffered. Once a secrets file is configured, a client it holds no
+key for is refused too (401 ``upload_key_unknown``); with no file at all
+nothing is checked (the fall-back, C11).
 """
 from __future__ import annotations
 
@@ -36,8 +38,9 @@ UNSIGNED_KEYS = ("tensors", "signature", "timestamp")
 def sign(body: dict, secret: str) -> str:
     """The edge's recipe (``edge.wire.upload_payload``), written out independently."""
     tensors = {t["name"]: base64.b64decode(t["data_b64"]) for t in body["tensors"]}
+    layouts = {t["name"]: (t["dtype"], tuple(t["shape"])) for t in body["tensors"]}
     metadata = {k: v for k, v in body.items() if k not in UNSIGNED_KEYS}
-    return sign_adapter_upload(tensors, metadata, secret)
+    return sign_adapter_upload(tensors, metadata, secret, layouts=layouts)
 
 
 def _body(who="a", seed=1, **extra):
@@ -90,6 +93,16 @@ def test_one_flipped_tensor_byte_is_401_and_not_buffered():
     assert _buffered() == []
 
 
+def test_a_relabelled_tensor_shape_is_401_and_not_buffered():
+    """The same bytes read as [cols, rows] are another matrix."""
+    body = _signed()
+    body["tensors"][0]["shape"] = list(reversed(body["tensors"][0]["shape"]))
+    r = _post(body)
+    assert r.status_code == 401, r.text
+    assert r.json()["detail"]["error"] == "upload_signature_invalid"
+    assert _buffered() == []
+
+
 def test_a_changed_sample_count_is_401():
     body = _signed()
     body["num_examples"] = 10_000   # a heavier FedAvg weight than the edge signed
@@ -117,17 +130,22 @@ def test_a_signature_made_with_another_clients_key_is_401():
     assert _buffered() == []
 
 
-def test_a_client_without_a_secret_is_accepted_with_a_warning(caplog):
+def test_a_client_without_a_secret_is_refused(caplog):
+    """With a secrets file configured, a client it has no key for cannot be checked:
+    it is refused rather than waved through unsigned."""
     with caplog.at_level(logging.WARNING, logger="cluster"):
         r = _post(_body("c", 3))
-    assert r.status_code == 201 and _buffered() == ["c"]
-    assert any("'c'" in rec.getMessage() and "unsigned" in rec.getMessage()
-               for rec in caplog.records)
+    assert r.status_code == 401, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "upload_key_unknown" and "'c'" in detail["hint"]
+    assert _buffered() == []
+    assert any("'c'" in rec.getMessage() for rec in caplog.records)
 
 
-def test_a_signature_from_a_client_without_a_secret_is_not_an_error():
+def test_a_signature_from_a_client_without_a_secret_is_refused_too():
     """An edge that signs before laptop A has its key: nothing to check it against."""
-    assert _post(_signed("c", 3, secret="cc" * 32)).status_code == 201
+    r = _post(_signed("c", 3, secret="cc" * 32))
+    assert r.status_code == 401 and r.json()["detail"]["error"] == "upload_key_unknown"
 
 
 def test_with_no_secrets_file_configured_every_upload_is_accepted(monkeypatch):

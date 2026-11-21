@@ -8,9 +8,12 @@ from .hmac_signer import (
     sign_adapter_upload,
     sign_evaluation,
     sign_payload,
+    sign_upload_body,
+    upload_signing_parts,
     verify_adapter_upload,
     verify_evaluation,
     verify_signature,
+    verify_upload_body,
 )
 from .jwt_handler import JWTConfig, TokenError, create_token, verify_token
 from .users import (
@@ -63,9 +66,12 @@ __all__ = [
     "sign_adapter_upload",
     "sign_evaluation",
     "sign_payload",
+    "sign_upload_body",
+    "upload_signing_parts",
     "verify_adapter_upload",
     "verify_api_key",
     "verify_evaluation",
     "verify_signature",
     "verify_token",
+    "verify_upload_body",
 ]

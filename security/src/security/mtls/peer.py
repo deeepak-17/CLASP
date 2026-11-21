@@ -8,7 +8,9 @@ socket and adds it to the scope of every request on that connection under
 
 The cluster and the registry both serve with this protocol under mTLS, so the
 name a route sees is always one the handshake verified against the CLASP CA.
-Without TLS the name is ``None``.
+Without TLS the name is ``None``. A TLS peer whose verified certificate has no
+CN gets :data:`UNNAMED_PEER` instead: ``None`` means "no TLS", which opens
+every route (``security.auth.roles``), and a nameless certificate must not.
 """
 from __future__ import annotations
 
@@ -18,6 +20,9 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 
 #: Where :class:`PeerCertH11Protocol` puts the verified client CN in the ASGI scope.
 SCOPE_KEY = "clasp.peer_common_name"
+#: The name of a TLS peer whose verified certificate carries no CN. It maps to
+#: no role (``unknown``), so every restricted route refuses it.
+UNNAMED_PEER = ""
 
 
 def common_name_from_peercert(peercert: dict[str, Any] | None) -> str | None:
@@ -31,13 +36,22 @@ def common_name_from_peercert(peercert: dict[str, Any] | None) -> str | None:
     return None
 
 
+def peer_name_for(ssl_object) -> str | None:
+    """The name a connection's requests carry: ``None`` without TLS, else the
+    verified certificate's CN, or :data:`UNNAMED_PEER` when it has none."""
+    if ssl_object is None:
+        return None
+    name = common_name_from_peercert(ssl_object.getpeercert())
+    return UNNAMED_PEER if name is None else name
+
+
 class PeerCertH11Protocol(H11Protocol):
     """uvicorn's h11 protocol, plus the verified client CN in each request's scope."""
 
     def connection_made(self, transport) -> None:  # type: ignore[override]
         super().connection_made(transport)
         ssl_object = transport.get_extra_info("ssl_object")
-        peer = common_name_from_peercert(ssl_object.getpeercert()) if ssl_object else None
+        peer = peer_name_for(ssl_object)
         inner = self.app
 
         async def app(scope, receive, send):

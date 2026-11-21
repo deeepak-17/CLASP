@@ -44,14 +44,12 @@ ROLE_TABLE_ENV = "CLASP_ROLE_TABLE"
 EDGE_PREFIX = "client-"
 
 
-def load_role_table(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
-    """``DEFAULT_ROLES``, or the JSON object ``{certificate name: role}`` in the
-    file ``CLASP_ROLE_TABLE`` names. A file that cannot be read as that is an
-    error: a broken table must not quietly become the default one."""
-    env = os.environ if env is None else env
-    path = env.get(ROLE_TABLE_ENV)
-    if not path:
-        return DEFAULT_ROLES
+#: The last table file read, under ``"entry"``: ``((path, mtime_ns, size), table)``.
+#: Routes check a role on every request; the file is parsed again only when it changes.
+_table_cache: dict = {}
+
+
+def _parse_role_table(path: str) -> Mapping[str, str]:
     try:
         table = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -60,6 +58,31 @@ def load_role_table(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
             isinstance(k, str) and v in GRANTABLE for k, v in table.items()):
         raise ValueError(f"{ROLE_TABLE_ENV}={path}: must be an object mapping certificate "
                          f"names to one of {sorted(GRANTABLE)}")
+    return table
+
+
+def load_role_table(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    """``DEFAULT_ROLES``, or the JSON object ``{certificate name: role}`` in the
+    file ``CLASP_ROLE_TABLE`` names. A file that cannot be read as that is an
+    error: a broken table must not quietly become the default one.
+
+    The file is parsed once and again only when its modification time or size
+    changes, so an edited table needs no restart and a request costs one stat.
+    """
+    env = os.environ if env is None else env
+    path = env.get(ROLE_TABLE_ENV)
+    if not path:
+        return DEFAULT_ROLES
+    try:
+        stat = os.stat(path)
+    except OSError as exc:
+        raise ValueError(f"{ROLE_TABLE_ENV}={path}: cannot read the role table ({exc})") from exc
+    stamp = (path, stat.st_mtime_ns, stat.st_size)
+    cached = _table_cache.get("entry")
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    table = _parse_role_table(path)
+    _table_cache["entry"] = (stamp, table)
     return table
 
 

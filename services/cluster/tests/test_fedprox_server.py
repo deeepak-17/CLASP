@@ -404,6 +404,17 @@ def test_restore_only_talks_to_the_configured_registry(monkeypatch):
     assert r.status_code == 422 and "registry" in r.text
 
 
+def test_restore_without_a_registry_url_reads_the_configured_registry(monkeypatch):
+    """The panel replays a registry restore without knowing the URL the cluster
+    reaches the registry at: an omitted ``registry_url`` is the configured one."""
+    _, active0, _ = _two_rounds(monkeypatch)
+    monkeypatch.setenv("CLASP_REGISTRY_URL", "http://registry.internal:8004")
+    r = client.post("/clusters/web/adapters/active/restore",
+                    json={"adapter_name": "cluster-web", "version": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["restored"]["sha256"] == active0["sha256"]
+
+
 def test_restored_tensors_pass_the_security_screen(monkeypatch):
     registry, _, active1 = _two_rounds(monkeypatch)
     monkeypatch.setattr(server, "validate_adapter_integrity",

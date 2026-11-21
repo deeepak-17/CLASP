@@ -14,7 +14,6 @@ network or ray.
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import hashlib
 import json
@@ -41,7 +40,7 @@ from flwr.server.strategy import FedAvg
 from pydantic import BaseModel as _BaseModel
 from pydantic import Field as _Field
 from security.audit import AccessAuditMiddleware, SecurityEvent, ServiceAudit
-from security.auth.hmac_signer import verify_adapter_upload
+from security.auth.hmac_signer import verify_upload_body
 from security.auth.roles import ROLE_ADMIN, ROLE_EVALUATION, require_roles
 from security.dp.ledger import BUDGET_TOLERANCE, RUN_EPSILON_BUDGET, RUN_ROUNDS
 from security.middleware import (
@@ -796,11 +795,10 @@ def _upload_locked(
 # key in the JSON file ``CLASP_UPLOAD_HMAC_SECRETS`` names ({client id: key},
 # written by scripts/make_dev_certs.sh as cluster/upload_hmac.json). mTLS says
 # which laptop is on the other end of the connection; the signature says the
-# body is the one that laptop built: tensors and sample count unchanged.
+# body is the one that laptop built: tensors (bytes, dtype and shape) and
+# sample count unchanged. The recipe is the security library's
+# (``security.auth.hmac_signer.verify_upload_body``), the one the edge signs with.
 UPLOAD_SECRETS_ENV = "CLASP_UPLOAD_HMAC_SECRETS"
-#: Body keys the signature does not cover: the payload itself (signed as raw
-#: bytes), the signature, and a timestamp a relay may add.
-UNSIGNED_UPLOAD_KEYS = ("tensors", "signature", "timestamp")
 _upload_secrets_cache: dict[str, object] = {}
 _log = logging.getLogger("cluster")
 
@@ -849,38 +847,33 @@ async def _raw_upload(request: Request) -> dict:
 
 
 def _check_upload_signature(client_id: str, raw: dict | None) -> None:
-    """Refuse (401) an upload whose signature is missing or wrong, for a client
-    the cluster holds a key for. Called before the upload is buffered.
+    """Refuse (401) an upload that cannot be shown to come from its client.
+    Called before the upload is buffered.
 
-    A client with no configured key is accepted with a warning (C11); with no
-    secrets file at all nothing is checked.
+    With a secrets file configured, a client it holds no key for is refused
+    (``upload_key_unknown``: its upload cannot be checked), and a missing or
+    wrong signature is refused (``upload_signature_invalid``). With no secrets
+    file at all nothing is checked (C11).
     """
     secrets = _upload_secrets()
     if secrets is None:
         return
     secret = secrets.get(client_id)
     if secret is None:
-        _log.warning("no upload key configured for client %r: its upload is accepted unsigned",
-                     client_id)
-        return
-    refused = HTTPException(status_code=401, detail={
-        "error": "upload_signature_invalid",
-        "hint": (f"the upload from {client_id!r} is not signed with the key laptop A holds for "
-                 f"it: copy the current edge bundle (edge-certs/{client_id}/hmac.key) to that "
-                 f"laptop, or pass --hmac-key"),
-    })
-    signature = (raw or {}).get("signature")
-    if not isinstance(signature, str) or not signature:
-        raise refused
-    try:
-        tensors = {str(t["name"]): base64.b64decode(t["data_b64"], validate=True)
-                   for t in raw["tensors"]}
-        metadata = {k: v for k, v in raw.items() if k not in UNSIGNED_UPLOAD_KEYS}
-        valid = verify_adapter_upload(tensors, metadata, signature, secret)
-    except (KeyError, TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise refused
+        _log.warning("no upload key configured for client %r: its upload is refused", client_id)
+        raise HTTPException(status_code=401, detail={
+            "error": "upload_key_unknown",
+            "hint": (f"laptop A holds no upload key for {client_id!r}: issue one with "
+                     f"scripts/make_dev_certs.sh and copy the edge bundle "
+                     f"(edge-certs/{client_id}/hmac.key) to that laptop"),
+        })
+    if not verify_upload_body(raw or {}, (raw or {}).get("signature"), secret):
+        raise HTTPException(status_code=401, detail={
+            "error": "upload_signature_invalid",
+            "hint": (f"the upload from {client_id!r} is not signed with the key laptop A holds "
+                     f"for it: copy the current edge bundle (edge-certs/{client_id}/hmac.key) "
+                     f"to that laptop, or pass --hmac-key"),
+        })
 
 
 def _check_budget(upload: AdapterUpload) -> None:
@@ -1735,7 +1728,8 @@ class RestoreRequest(_BaseModel):
     """``POST /clusters/{id}/adapters/active/restore``: serve a registry version again."""
 
     version: int = _Field(ge=1)
-    registry_url: str = DEFAULT_REGISTRY_URL
+    #: Omitted: the registry this cluster is configured with (``CLASP_REGISTRY_URL``).
+    registry_url: str | None = None
     adapter_name: str | None = None  # defaults to the cluster id, as /publish does
     timeout_s: float = 120.0
 
@@ -1820,16 +1814,17 @@ def restore_active_adapter(cluster_id: str, body: RestoreRequest) -> dict[str, o
 
     state = _cluster(cluster_id)
     configured = _os.environ.get("CLASP_REGISTRY_URL", DEFAULT_REGISTRY_URL).rstrip("/")
-    if body.registry_url.rstrip("/") != configured:
+    registry = configured if body.registry_url is None else body.registry_url.rstrip("/")
+    if registry != configured:
         # This endpoint changes what every edge trains on: it only reads the
         # registry the cluster itself is configured with (no caller-chosen URL).
         raise HTTPException(status_code=422,
                             detail=f"restore reads only the configured registry ({configured})")
     name = body.adapter_name or cluster_id
-    base = f"{body.registry_url.rstrip('/')}/adapters/{name}/versions/{body.version}"
-    tls = outbound_ssl_context(_os.environ) if body.registry_url.startswith("https") else None
+    base = f"{registry}/adapters/{name}/versions/{body.version}"
+    tls = outbound_ssl_context(_os.environ) if registry.startswith("https") else None
     with httpx.Client(timeout=body.timeout_s, verify=tls if tls is not None else True) as http:
-        listing = _registry_get(http, f"{body.registry_url.rstrip('/')}/adapters/{name}/versions",
+        listing = _registry_get(http, f"{registry}/adapters/{name}/versions",
                                 f"{name}'s versions").json()
         if body.version in (listing.get("rejected") or ()):
             raise HTTPException(status_code=409, detail={
