@@ -1,0 +1,44 @@
+# Phase III · P1 Edge — rank sweep: serving latency per LoRA rank (pilot).
+# Design note: DESIGN.md (same folder). Run:
+#   python -m edge.rank_bench --config experiments/rank-sweep-latency/config.yaml
+name: rank-sweep-latency
+owner: P1 Adithyaa (latency per rank)
+base_model: deepseek-ai/deepseek-coder-1.3b-base   # dev profile, RTX 2050 4 GB
+profile: dev
+seed: 0
+gpu_hours_estimate: 0.08     # per rank point; measured 0.074 on 2026-11-21
+gpus: 1
+budget:
+  gpu_hours_total: 0.5
+clients: 1
+rank: 16                     # current pinned rank (D8 cap)
+seq_len: 1024
+max_steps: 30
+rounds: 1
+sweep:
+  rank: [4, 8, 16, 32]
+caps_override:
+  rank: 32
+  justification: >-
+    Same single point above the D8 rank cap as experiments/rank-sweep, so the
+    latency curve covers every rank the quality sweep trains.
+
+# --- what is held fixed across ranks ---
+target_modules: [q_proj, k_proj, v_proj, o_proj]
+lora_alpha: equal-to-rank    # scaling alpha/r = 1.0 at every rank
+lr: 2.0e-4
+corpus_root: datasets/materialized
+pilot_client: web/client-requests
+
+# --- bench settings (edge.rank_bench) ---
+bench:
+  pilot_steps: 30            # enough for s/step + peak VRAM, NOT for quality
+  ttft_repeats: 20
+  ttft_warmup: 3
+  decode_tokens: 64
+  decode_repeats: 5
+  swap_repeats: 5
+notes: >
+  Pilot only. Measures the serving cost of rank, which depends on adapter
+  shape, not on what it learned. Quality per rank is the 12-run
+  experiments/rank-sweep (P2 runs, P5 scores).

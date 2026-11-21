@@ -1,0 +1,512 @@
+{
+  "utc": "2026-11-21T06:19:41.056969+00:00",
+  "config": {
+    "name": "rank-sweep-latency",
+    "owner": "P1 Adithyaa (latency per rank)",
+    "base_model": "deepseek-ai/deepseek-coder-1.3b-base",
+    "profile": "dev",
+    "seed": 0,
+    "gpu_hours_estimate": 0.05,
+    "gpus": 1,
+    "budget": {
+      "gpu_hours_total": 0.5
+    },
+    "clients": 1,
+    "rank": 16,
+    "seq_len": 1024,
+    "max_steps": 30,
+    "rounds": 1,
+    "sweep": {
+      "rank": [
+        4,
+        8,
+        16,
+        32
+      ]
+    },
+    "caps_override": {
+      "rank": 32,
+      "justification": "Same single point above the D8 rank cap as experiments/rank-sweep, so the latency curve covers every rank the quality sweep trains."
+    },
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "lora_alpha": "equal-to-rank",
+    "lr": 0.0002,
+    "corpus_root": "datasets/materialized",
+    "pilot_client": "web/client-requests",
+    "bench": {
+      "pilot_steps": 30,
+      "ttft_repeats": 20,
+      "ttft_warmup": 3,
+      "decode_tokens": 64,
+      "decode_repeats": 5,
+      "swap_repeats": 5
+    },
+    "notes": "Pilot only. Measures the serving cost of rank, which depends on adapter shape, not on what it learned. Quality per rank is the 12-run experiments/rank-sweep (P2 runs, P5 scores).\n"
+  },
+  "device": "NVIDIA GeForce RTX 2050",
+  "torch": "2.14.0+cu126",
+  "gpu_hours_actual": 0.2946,
+  "ranks": [
+    {
+      "summary": {
+        "rank": 4,
+        "trainable_params": 1572864,
+        "adapter_mb": 6.02,
+        "pilot_steps": 30,
+        "s_per_step": 3.15,
+        "loss_first_window": 0.8384,
+        "loss_last_window": 0.9054,
+        "train_peak_vram_gb": 1.7,
+        "serve_peak_vram_gb": 1.145,
+        "ttft_base_ms": 148.0,
+        "ttft_lora_ms": 202.37,
+        "ttft_overhead_ms": 54.37,
+        "ttft_lora_worst_p95_ms": 333.05,
+        "decode_base_tok_s": 6.45,
+        "decode_lora_tok_s": 4.89,
+        "swap_median_s": 0.3478,
+        "swap_p95_s": 0.4341
+      },
+      "ttft_base": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 150.75,
+            "p95_ms": 172.61,
+            "min_ms": 132.49,
+            "max_ms": 172.61,
+            "stdev_ms": 10.79,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 142.79,
+            "p95_ms": 202.29,
+            "min_ms": 117.41,
+            "max_ms": 202.29,
+            "stdev_ms": 21.27,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 150.47,
+            "p95_ms": 179.82,
+            "min_ms": 125.58,
+            "max_ms": 179.82,
+            "stdev_ms": 13.32,
+            "n": 20
+          }
+        ],
+        "headline_ms": 148.0,
+        "worst_p95_ms": 202.29
+      },
+      "ttft_lora": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 201.06,
+            "p95_ms": 244.1,
+            "min_ms": 169.86,
+            "max_ms": 244.1,
+            "stdev_ms": 22.31,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 206.61,
+            "p95_ms": 302.52,
+            "min_ms": 171.05,
+            "max_ms": 302.52,
+            "stdev_ms": 36.78,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 199.44,
+            "p95_ms": 333.05,
+            "min_ms": 174.99,
+            "max_ms": 333.05,
+            "stdev_ms": 36.54,
+            "n": 20
+          }
+        ],
+        "headline_ms": 202.37,
+        "worst_p95_ms": 333.05
+      },
+      "swap": {
+        "median_s": 0.3478,
+        "p95_s": 0.4341,
+        "max_s": 0.4341,
+        "n": 5
+      },
+      "train_convergence": {
+        "first_window": 0.8384,
+        "last_window": 0.9054,
+        "window_steps": 6,
+        "loss_slope": 0.003044,
+        "loss_decreased": false,
+        "n_steps_recorded": 30,
+        "optimizer_steps": 30,
+        "max_grad_norm": 0.1232,
+        "micro_batches": 30,
+        "n_trainable_params": 1572864,
+        "wall_seconds": 94.5,
+        "fedprox": {
+          "mu": 0.0,
+          "objective": "task_loss + (mu/2)*||w - w0||^2 (FedProx, D2: client-side)",
+          "anchor": "client adapter at round start (on top of the frozen merged cluster layer)",
+          "applied": null,
+          "final_prox_term": null,
+          "max_prox_term": null
+        }
+      }
+    },
+    {
+      "summary": {
+        "rank": 8,
+        "trainable_params": 3145728,
+        "adapter_mb": 12.02,
+        "pilot_steps": 30,
+        "s_per_step": 6.137,
+        "loss_first_window": 0.8382,
+        "loss_last_window": 0.9012,
+        "train_peak_vram_gb": 1.725,
+        "serve_peak_vram_gb": 1.152,
+        "ttft_base_ms": 107.31,
+        "ttft_lora_ms": 160.57,
+        "ttft_overhead_ms": 53.26,
+        "ttft_lora_worst_p95_ms": 578.28,
+        "decode_base_tok_s": 10.63,
+        "decode_lora_tok_s": 10.07,
+        "swap_median_s": 0.2056,
+        "swap_p95_s": 0.6146
+      },
+      "ttft_base": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 90.87,
+            "p95_ms": 117.98,
+            "min_ms": 74.3,
+            "max_ms": 117.98,
+            "stdev_ms": 11.44,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 99.72,
+            "p95_ms": 169.56,
+            "min_ms": 65.07,
+            "max_ms": 169.56,
+            "stdev_ms": 28.75,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 131.34,
+            "p95_ms": 246.62,
+            "min_ms": 82.38,
+            "max_ms": 246.62,
+            "stdev_ms": 41.17,
+            "n": 20
+          }
+        ],
+        "headline_ms": 107.31,
+        "worst_p95_ms": 246.62
+      },
+      "ttft_lora": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 244.02,
+            "p95_ms": 578.28,
+            "min_ms": 114.8,
+            "max_ms": 578.28,
+            "stdev_ms": 146.24,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 118.74,
+            "p95_ms": 167.2,
+            "min_ms": 92.04,
+            "max_ms": 167.2,
+            "stdev_ms": 17.65,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 118.95,
+            "p95_ms": 220.71,
+            "min_ms": 95.7,
+            "max_ms": 220.71,
+            "stdev_ms": 33.11,
+            "n": 20
+          }
+        ],
+        "headline_ms": 160.57,
+        "worst_p95_ms": 578.28
+      },
+      "swap": {
+        "median_s": 0.2056,
+        "p95_s": 0.6146,
+        "max_s": 0.6146,
+        "n": 5
+      },
+      "train_convergence": {
+        "first_window": 0.8382,
+        "last_window": 0.9012,
+        "window_steps": 6,
+        "loss_slope": 0.002883,
+        "loss_decreased": false,
+        "n_steps_recorded": 30,
+        "optimizer_steps": 30,
+        "max_grad_norm": 0.155,
+        "micro_batches": 30,
+        "n_trainable_params": 3145728,
+        "wall_seconds": 184.1,
+        "fedprox": {
+          "mu": 0.0,
+          "objective": "task_loss + (mu/2)*||w - w0||^2 (FedProx, D2: client-side)",
+          "anchor": "client adapter at round start (on top of the frozen merged cluster layer)",
+          "applied": null,
+          "final_prox_term": null,
+          "max_prox_term": null
+        }
+      }
+    },
+    {
+      "summary": {
+        "rank": 16,
+        "trainable_params": 6291456,
+        "adapter_mb": 24.02,
+        "pilot_steps": 30,
+        "s_per_step": 2.48,
+        "loss_first_window": 0.8378,
+        "loss_last_window": 0.897,
+        "train_peak_vram_gb": 1.772,
+        "serve_peak_vram_gb": 1.163,
+        "ttft_base_ms": 92.33,
+        "ttft_lora_ms": 235.2,
+        "ttft_overhead_ms": 142.87,
+        "ttft_lora_worst_p95_ms": 365.17,
+        "decode_base_tok_s": 6.52,
+        "decode_lora_tok_s": 5.22,
+        "swap_median_s": 0.4629,
+        "swap_p95_s": 0.4984
+      },
+      "ttft_base": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 124.23,
+            "p95_ms": 339.18,
+            "min_ms": 79.42,
+            "max_ms": 339.18,
+            "stdev_ms": 68.98,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 84.88,
+            "p95_ms": 109.83,
+            "min_ms": 57.64,
+            "max_ms": 109.83,
+            "stdev_ms": 15.77,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 67.88,
+            "p95_ms": 101.05,
+            "min_ms": 57.09,
+            "max_ms": 101.05,
+            "stdev_ms": 14.47,
+            "n": 20
+          }
+        ],
+        "headline_ms": 92.33,
+        "worst_p95_ms": 339.18
+      },
+      "ttft_lora": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 262.43,
+            "p95_ms": 365.17,
+            "min_ms": 194.71,
+            "max_ms": 365.17,
+            "stdev_ms": 45.1,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 220.97,
+            "p95_ms": 253.89,
+            "min_ms": 183.39,
+            "max_ms": 253.89,
+            "stdev_ms": 20.21,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 222.2,
+            "p95_ms": 280.77,
+            "min_ms": 198.24,
+            "max_ms": 280.77,
+            "stdev_ms": 24.03,
+            "n": 20
+          }
+        ],
+        "headline_ms": 235.2,
+        "worst_p95_ms": 365.17
+      },
+      "swap": {
+        "median_s": 0.4629,
+        "p95_s": 0.4984,
+        "max_s": 0.4984,
+        "n": 5
+      },
+      "train_convergence": {
+        "first_window": 0.8378,
+        "last_window": 0.897,
+        "window_steps": 6,
+        "loss_slope": 0.002736,
+        "loss_decreased": false,
+        "n_steps_recorded": 30,
+        "optimizer_steps": 30,
+        "max_grad_norm": 0.2318,
+        "micro_batches": 30,
+        "n_trainable_params": 6291456,
+        "wall_seconds": 74.4,
+        "fedprox": {
+          "mu": 0.0,
+          "objective": "task_loss + (mu/2)*||w - w0||^2 (FedProx, D2: client-side)",
+          "anchor": "client adapter at round start (on top of the frozen merged cluster layer)",
+          "applied": null,
+          "final_prox_term": null,
+          "max_prox_term": null
+        }
+      }
+    },
+    {
+      "summary": {
+        "rank": 32,
+        "trainable_params": 12582912,
+        "adapter_mb": 48.02,
+        "pilot_steps": 30,
+        "s_per_step": 2.503,
+        "loss_first_window": 0.837,
+        "loss_last_window": 0.8929,
+        "train_peak_vram_gb": 1.866,
+        "serve_peak_vram_gb": 1.187,
+        "ttft_base_ms": 153.39,
+        "ttft_lora_ms": 213.06,
+        "ttft_overhead_ms": 59.67,
+        "ttft_lora_worst_p95_ms": 270.82,
+        "decode_base_tok_s": 6.59,
+        "decode_lora_tok_s": 4.82,
+        "swap_median_s": 0.7495,
+        "swap_p95_s": 0.8343
+      },
+      "ttft_base": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 146.8,
+            "p95_ms": 168.86,
+            "min_ms": 127.43,
+            "max_ms": 168.86,
+            "stdev_ms": 12.68,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 159.16,
+            "p95_ms": 210.8,
+            "min_ms": 137.97,
+            "max_ms": 210.8,
+            "stdev_ms": 15.5,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 154.22,
+            "p95_ms": 175.66,
+            "min_ms": 123.52,
+            "max_ms": 175.66,
+            "stdev_ms": 14.13,
+            "n": 20
+          }
+        ],
+        "headline_ms": 153.39,
+        "worst_p95_ms": 210.8
+      },
+      "ttft_lora": {
+        "per_prompt": [
+          {
+            "prompt_tokens": 2,
+            "median_ms": 208.97,
+            "p95_ms": 246.51,
+            "min_ms": 193.24,
+            "max_ms": 246.51,
+            "stdev_ms": 13.62,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 9,
+            "median_ms": 215.0,
+            "p95_ms": 252.09,
+            "min_ms": 181.85,
+            "max_ms": 252.09,
+            "stdev_ms": 16.32,
+            "n": 20
+          },
+          {
+            "prompt_tokens": 30,
+            "median_ms": 215.22,
+            "p95_ms": 270.82,
+            "min_ms": 190.77,
+            "max_ms": 270.82,
+            "stdev_ms": 18.57,
+            "n": 20
+          }
+        ],
+        "headline_ms": 213.06,
+        "worst_p95_ms": 270.82
+      },
+      "swap": {
+        "median_s": 0.7495,
+        "p95_s": 0.8343,
+        "max_s": 0.8343,
+        "n": 5
+      },
+      "train_convergence": {
+        "first_window": 0.837,
+        "last_window": 0.8929,
+        "window_steps": 6,
+        "loss_slope": 0.002584,
+        "loss_decreased": false,
+        "n_steps_recorded": 30,
+        "optimizer_steps": 30,
+        "max_grad_norm": 0.3287,
+        "micro_batches": 30,
+        "n_trainable_params": 12582912,
+        "wall_seconds": 75.1,
+        "fedprox": {
+          "mu": 0.0,
+          "objective": "task_loss + (mu/2)*||w - w0||^2 (FedProx, D2: client-side)",
+          "anchor": "client adapter at round start (on top of the frozen merged cluster layer)",
+          "applied": null,
+          "final_prox_term": null,
+          "max_prox_term": null
+        }
+      }
+    }
+  ]
+}

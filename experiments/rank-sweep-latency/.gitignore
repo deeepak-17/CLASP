@@ -1,0 +1,3 @@
+# Small, human-readable outputs of this pilot are tracked (override of the
+# repo-wide experiments/**/results/* ignore).
+!results/*
