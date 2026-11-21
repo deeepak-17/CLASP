@@ -2,22 +2,40 @@
 
     Promote iff:
       1. in-project quality improved beyond the measured noise band, AND
-      2. HumanEval pass@1 did not regress by more than 2 points absolute.
-    Otherwise: rollback to the previous version. Never gate on pass@k alone.
+      2. next-line completion edit similarity on the frozen guard set
+         (benchmark ``LineCompletion``) did not drop against the baseline by
+         more than 2 points absolute.
+    Otherwise: reject the candidate. Never gate on one side alone.
 
-The registry always activates a version on save (see storage.save); this rule
-runs *after* the fact, on whatever is currently active, and either confirms
-that choice (PROMOTE) or reverts it (ROLLBACK to the previous version). It is
-a pure function — no filesystem access — so it's cheap to unit test the D5
+The guard replaced HumanEval pass@1 (contracts >= 1.2.0 carries edit_similarity
+on GuardMetrics). A guard without ``LineCompletion`` edit similarity on both
+sides is not a pass: the rule refuses to promote, and the API answers 422
+before anything is recorded.
+
+An uploaded version is an inactive *candidate* (see storage.save): the live
+pointer does not move on upload. This rule runs on that candidate and either
+makes it active (PROMOTE) or records REJECT and leaves the pointer where it
+was, so a failed candidate never goes live. It is a pure function — no filesystem access — so it's cheap to unit test the D5
 math in isolation from the storage/HTTP layers.
 """
 from __future__ import annotations
 
 from contracts import AdapterRef, EvalResult, GuardMetrics, PromotionAction, PromotionDecision
 
-#: Absolute pass@1 regression tolerated before it blocks a promotion (D5),
-#: expressed as a fraction since GuardMetrics.pass_at_k is 0..1 (e.g. 0.31 = 31%).
-GUARD_PASS_AT_1_TOLERANCE = 0.02
+#: The benchmark name the guard is reported under (evaluation's line guard).
+GUARD_BENCHMARK = "LineCompletion"
+
+#: Absolute edit-similarity drop tolerated before it blocks a promotion (D5),
+#: a fraction since edit similarity is 0..1 (0.02 = 2 points).
+GUARD_EDIT_SIMILARITY_TOLERANCE = 0.02
+
+#: Operator restores are recorded in the same log; their reason starts with this.
+RESTORE_REASON_PREFIX = "operator restore"
+
+GUARD_MISSING_REASON = (
+    f"{GUARD_BENCHMARK} guard metrics missing on candidate or baseline "
+    "(contracts >= 1.2.0 required)"
+)
 
 
 def _in_project_improved(eval_result: EvalResult) -> tuple[bool, str]:
@@ -31,33 +49,45 @@ def _in_project_improved(eval_result: EvalResult) -> tuple[bool, str]:
     return False, f"edit_similarity delta {delta:.4f} does not clear noise band {band:.4f}"
 
 
+def guard_present(
+    guard: tuple[GuardMetrics, ...], baseline_guard: tuple[GuardMetrics, ...]
+) -> bool:
+    """Whether both sides carry a ``LineCompletion`` entry with an edit similarity."""
+    return all(
+        entry is not None and entry.edit_similarity is not None
+        for entry in (
+            next((g for g in guard if g.benchmark == GUARD_BENCHMARK), None),
+            next((g for g in baseline_guard if g.benchmark == GUARD_BENCHMARK), None),
+        )
+    )
+
+
 def _guard_holds(
     eval_result: EvalResult, baseline_guard: tuple[GuardMetrics, ...]
 ) -> tuple[bool, str]:
-    candidate = next((g for g in eval_result.guard if g.benchmark == "HumanEval"), None)
-    baseline = next((g for g in baseline_guard if g.benchmark == "HumanEval"), None)
-    if candidate is None or baseline is None:
-        return False, "HumanEval guard metrics missing on candidate or baseline"
-    if 1 not in candidate.pass_at_k or 1 not in baseline.pass_at_k:
-        return False, "pass@1 missing from HumanEval guard metrics"
-    drop = baseline.pass_at_k[1] - candidate.pass_at_k[1]
-    if drop <= GUARD_PASS_AT_1_TOLERANCE:
-        return True, f"HumanEval pass@1 drop {drop:.4f} within {GUARD_PASS_AT_1_TOLERANCE:.2f} tolerance"
-    return False, f"HumanEval pass@1 dropped {drop:.4f}, exceeds {GUARD_PASS_AT_1_TOLERANCE:.2f} tolerance"
+    if not guard_present(eval_result.guard, baseline_guard):
+        return False, GUARD_MISSING_REASON
+    candidate = next(g for g in eval_result.guard if g.benchmark == GUARD_BENCHMARK)
+    baseline = next(g for g in baseline_guard if g.benchmark == GUARD_BENCHMARK)
+    drop = baseline.edit_similarity - candidate.edit_similarity
+    tolerance = GUARD_EDIT_SIMILARITY_TOLERANCE
+    # the epsilon absorbs float noise at exactly the tolerance (0.60 - 0.58 > 0.02 in binary)
+    if drop <= tolerance + 1e-9:
+        return True, f"{GUARD_BENCHMARK} edit similarity drop {drop:.4f} within {tolerance:.2f} tolerance"
+    return False, f"{GUARD_BENCHMARK} edit similarity dropped {drop:.4f}, exceeds {tolerance:.2f} tolerance"
 
 
 def decide(
     eval_result: EvalResult,
     *,
     baseline_guard: tuple[GuardMetrics, ...],
-    active_version_before: int,
-    previous_version: int | None,
+    active_version_before: int | None,
 ) -> PromotionDecision:
-    """Apply the D5 two-sided rule to a candidate that is currently `active`.
+    """Apply the D5 two-sided rule to an inactive candidate.
 
-    Raises ``ValueError`` if the rule says rollback but there is no previous
-    version to roll back to — that's a caller error (rollback candidates must
-    have a version to fall back to), surfaced as a clean 422 at the API layer.
+    PROMOTE makes the evaluated version active. Otherwise the decision is
+    REJECT and the pointer stays where it was: ``active_version_after`` is
+    ``active_version_before``, or 0 ("nothing active") when there is none.
     """
     improved, improved_reason = _in_project_improved(eval_result)
     guard_ok, guard_reason = _guard_holds(eval_result, baseline_guard)
@@ -66,20 +96,14 @@ def decide(
         return PromotionDecision(
             adapter=eval_result.adapter,
             action=PromotionAction.PROMOTE,
-            active_version_after=active_version_before,
+            active_version_after=eval_result.adapter.version,
             reason=f"promoted: {improved_reason}; {guard_reason}",
-        )
-
-    if previous_version is None:
-        raise ValueError(
-            f"rollback indicated ({improved_reason}; {guard_reason}) but no previous "
-            f"version exists for {eval_result.adapter.name!r} — nothing to roll back to"
         )
     return PromotionDecision(
         adapter=eval_result.adapter,
-        action=PromotionAction.ROLLBACK,
-        active_version_after=previous_version,
-        reason=f"rolled back: {improved_reason}; {guard_reason}",
+        action=PromotionAction.REJECT,
+        active_version_after=active_version_before if active_version_before is not None else 0,
+        reason=f"rejected: {improved_reason}; {guard_reason}",
     )
 
 
@@ -97,5 +121,49 @@ def restore_decision(
         adapter=candidate,
         action=PromotionAction.ROLLBACK if backwards else PromotionAction.PROMOTE,
         active_version_after=to_version,
-        reason=f"operator restore v{candidate.version} -> v{to_version}{gate}: {reason}",
+        reason=f"{RESTORE_REASON_PREFIX} v{candidate.version} -> v{to_version}{gate}: {reason}",
     )
+
+
+def live_versions(decisions: list[PromotionDecision]) -> set[int]:
+    """Versions that were active at some point, as far as the audit trail knows.
+
+    A version is live if it was promoted, or it is where the pointer went after
+    any recorded decision (operator restores included). Versions activated
+    without a decision record (older volumes, ``set_active`` uploads) are absent.
+    """
+    live = {d.adapter.version for d in decisions if d.action == PromotionAction.PROMOTE}
+    live |= {d.active_version_after for d in decisions if d.active_version_after > 0}
+    return live
+
+
+#: A restore's composite moves are recorded with this prefix (``cascade.apply_cascade``).
+CASCADE_REASON_PREFIX = "cascade "
+
+
+def is_refusal(decision: PromotionDecision) -> bool:
+    """Whether ``decision`` refused the version it names — the one refusal rule.
+
+    A REJECT refuses its candidate. So did a D5 ROLLBACK from before the
+    candidate flow (uploads went live, a failing rule rolled the pointer back
+    and recorded ``rollback`` naming the refused candidate). A ROLLBACK that is
+    an operator restore, or a composite following one (cascade), refuses nothing.
+    """
+    if decision.action == PromotionAction.REJECT:
+        return True
+    return decision.action == PromotionAction.ROLLBACK and not decision.reason.startswith(
+        (RESTORE_REASON_PREFIX, CASCADE_REASON_PREFIX))
+
+
+def rejected_versions(decisions: list[PromotionDecision]) -> set[int]:
+    """Versions refused by the rule above: never a candidate, never a restore target."""
+    return {d.adapter.version for d in decisions if is_refusal(d)}
+
+
+def candidate_version(
+    versions: list[int], active: int | None, decided: set[int]
+) -> int | None:
+    """The newest version above ``active`` that has no decision yet, else None."""
+    floor = active if active is not None else 0
+    pending = [v for v in versions if v > floor and v not in decided]
+    return max(pending) if pending else None

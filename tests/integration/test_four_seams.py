@@ -1,9 +1,15 @@
 """CPU-only end-to-end proof of all four integration seams (Sprint · B8).
 
     A   Edge  -> Cluster    POST /uploads
-    B   Cluster -> Registry POST /versions
-    C1  Registry -> Edge    GET /active + /file  -> materialize -> compose
-    C2  Edge  -> Registry   POST /promote        -> D5 decision
+    B   Cluster -> Registry POST /versions          (an inactive candidate)
+    C1  Registry -> Edge    GET /versions/{n}/file -> materialize -> compose
+    C2  Edge  -> Registry   POST /promote         -> D5 decision, then the
+                            cluster's candidate/promote or candidate/reject
+
+The round is upload -> aggregate (the cluster's candidate) -> publish
+(inactive) -> evaluate -> promote -> cluster promote -> pull: nothing is
+served to an edge until the candidate is promoted, and a rejected candidate
+is never served.
 
 Everything runs in-process through FastAPI's TestClient: no sockets, no
 services to start, no GPU, no model download, no HumanEval, no training. The
@@ -107,7 +113,7 @@ def make_client_adapter(seed: int):
 
 def upload_all(cluster_client, round_id: int = 0):
     for i, (name, n) in enumerate(CLIENTS.items()):
-        sd, cfg = make_client_adapter(seed=100 + i)
+        sd, cfg = make_client_adapter(seed=100 + i + 10 * round_id)
         payload = wire.upload_payload(sd, cfg, client_id=name, cluster_id=CLUSTER_ID,
                                       round_id=round_id, num_examples=n, seed=0)
         resp = cluster_client.post("/uploads", json=payload)
@@ -119,6 +125,15 @@ def aggregate(cluster_client, method: str, retain: bool):
     resp = cluster_client.post("/aggregate", json={
         "cluster_id": CLUSTER_ID, "aggregation": method,
         "retain_uploads": retain, "include_manifest": True})
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def decide_on_cluster(cluster_client, step: str) -> dict:
+    """``candidate/promote`` or ``candidate/reject`` for the pending candidate."""
+    sha = cluster_client.get(f"/clusters/{CLUSTER_ID}/adapters/candidate").json()["sha256"]
+    resp = cluster_client.post(f"/clusters/{CLUSTER_ID}/adapters/candidate/{step}",
+                               json={"sha256": sha})
     assert resp.status_code == 200, resp.text
     return resp.json()
 
@@ -216,7 +231,7 @@ def test_published_payload_is_byte_reproducible(cluster_client):
 
     upload_all(cluster_client)
     aggregate(cluster_client, "svd", retain=False)
-    broadcast = _clusters[CLUSTER_ID].active
+    broadcast = _clusters[CLUSTER_ID].candidate  # what /publish sends
     assert len({_peft_bytes(broadcast) for _ in range(8)}) == 1
 
 
@@ -264,6 +279,7 @@ def test_lowrank_path_matches_the_reference_aggregate_svd(cluster_client):
     """The fast path is the same mathematics, not an approximation of it."""
     upload_all(cluster_client)
     fast = aggregate(cluster_client, "svd", retain=True)
+    decide_on_cluster(cluster_client, "reject")  # one candidate at a time
     ref = cluster_client.post("/aggregate", json={
         "cluster_id": CLUSTER_ID, "aggregation": "svd",
         "exact_lowrank": False, "include_manifest": True}).json()
@@ -282,6 +298,7 @@ def test_lowrank_path_matches_the_reference_aggregate_svd(cluster_client):
 def test_aggregation_is_deterministic(cluster_client):
     upload_all(cluster_client)
     first = aggregate(cluster_client, "svd", retain=True)
+    decide_on_cluster(cluster_client, "reject")  # one candidate at a time
     second = aggregate(cluster_client, "svd", retain=True)
     assert [t["data_b64"] for t in first["tensors"]] == \
            [t["data_b64"] for t in second["tensors"]]
@@ -315,6 +332,9 @@ def test_seam_b_publish_records_full_provenance(cluster_client, registry_client,
 def test_cluster_download_is_a_valid_safetensors_blob(cluster_client):
     upload_all(cluster_client)
     aggregate(cluster_client, "svd", retain=False)
+    # a candidate is not served: /download answers only once it is promoted
+    assert cluster_client.get(f"/adapters/{CLUSTER_ID}/download").status_code == 404
+    decide_on_cluster(cluster_client, "promote")
     resp = cluster_client.get(f"/adapters/{CLUSTER_ID}/download")
     assert resp.status_code == 200
     sd, cfg = wire.deserialize(resp.content)
@@ -326,30 +346,27 @@ def test_cluster_download_is_a_valid_safetensors_blob(cluster_client):
 # --------------------------------------------------------------------------- #
 # seam C1
 # --------------------------------------------------------------------------- #
-def publish_two_versions(cluster_client, registry_client, monkeypatch):
-    """v1 = naive ablation (baseline), v2 = svd-exact (candidate, auto-active).
-
-    D5 needs two versions before its first promote call can even be
-    well-formed: rollback with no previous version raises.
-    """
-    upload_all(cluster_client)
+def publish_candidate(cluster_client, registry_client, monkeypatch, round_id: int = 0) -> dict:
+    """Upload, aggregate (the cluster's candidate) and publish it: an inactive
+    registry version. Returns the registry's version metadata."""
+    upload_all(cluster_client, round_id=round_id)
     with publish_over_http(registry_client, monkeypatch):
-        aggregate(cluster_client, "naive", retain=True)
-        cluster_client.post(f"/adapters/{CLUSTER_ID}/publish",
-                            json={"registry_url": "http://r", "adapter_name": REGISTRY_NAME,
-                                  "round": 1})
         aggregate(cluster_client, "svd", retain=False)
-        cluster_client.post(f"/adapters/{CLUSTER_ID}/publish",
-                            json={"registry_url": "http://r", "adapter_name": REGISTRY_NAME,
-                                  "round": 1})
+        resp = cluster_client.post(f"/adapters/{CLUSTER_ID}/publish",
+                                   json={"registry_url": "http://r", "adapter_name": REGISTRY_NAME,
+                                         "round": round_id + 1})
+    assert resp.status_code == 201, resp.text
+    return resp.json()["version"]
 
 
 def test_seam_c1_materializes_a_loadable_peft_directory(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
-    manifest = edge_registry.materialize(REGISTRY_NAME, tmp_path / "pulled")
+    v1 = publish_candidate(cluster_client, registry_client, monkeypatch)
+    # the evaluator pulls the candidate by number: nothing is active yet
+    assert edge_registry.list_versions(REGISTRY_NAME)["active"] is None
+    manifest = edge_registry.materialize(REGISTRY_NAME, tmp_path / "pulled", version=1)
 
-    assert manifest["version"] == 2
+    assert manifest["version"] == 1 and manifest["sha256_recorded"] == v1["sha256"]
     assert manifest["sha256_verified"] == manifest["sha256_recorded"]
     assert sorted(manifest["source_clients"]) == sorted(CLIENTS)
     assert manifest["aggregation"] == "svd_exact"
@@ -373,7 +390,7 @@ def test_seam_c1_materializes_a_loadable_peft_directory(
 def test_seam_c1_rejects_a_corrupted_payload(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
     """A checksum mismatch must fail loudly, not produce a corrupt adapter."""
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
+    publish_candidate(cluster_client, registry_client, monkeypatch)
     original = edge_registry.download
 
     def flip_one_byte(name, version):
@@ -383,7 +400,7 @@ def test_seam_c1_rejects_a_corrupted_payload(
 
     monkeypatch.setattr(edge_registry, "download", flip_one_byte)
     with pytest.raises(ChecksumMismatch):
-        edge_registry.materialize(REGISTRY_NAME, tmp_path / "corrupt")
+        edge_registry.materialize(REGISTRY_NAME, tmp_path / "corrupt", version=1)
     assert not (tmp_path / "corrupt").exists()
 
 
@@ -400,8 +417,8 @@ def test_materialized_cluster_adapter_composes_with_a_client_adapter(
         validate_compatibility,
     )
 
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
-    edge_registry.materialize(REGISTRY_NAME, tmp_path / "cluster")
+    publish_candidate(cluster_client, registry_client, monkeypatch)
+    edge_registry.materialize(REGISTRY_NAME, tmp_path / "cluster", version=1)
     client_sd, client_cfg = make_client_adapter(seed=100)
     wire.save_peft_dir(tmp_path / "client", client_sd, client_cfg)
 
@@ -461,17 +478,19 @@ def test_completion_metric_produces_a_fillable_in_project_block(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# seam C2 — both D5 outcomes
+# seam C2 — both D5 outcomes, on a candidate above an active v1
 # --------------------------------------------------------------------------- #
-def _guard(candidate_pass1: float, baseline_pass1: float, tmp_path):
-    """Two anchor files shaped like ``edge.humaneval_baseline``'s output."""
-    paths = []
-    for label, value in (("candidate", candidate_pass1), ("baseline", baseline_pass1)):
-        p = tmp_path / f"{label}_anchor.json"
-        p.write_text(json.dumps({"base_pass_at_1": value, "subset": {"n": 20}}),
-                     encoding="utf-8")
-        paths.append(p)
-    return resolve_guard(*paths)
+def _guard(candidate_edit_similarity: float, baseline_edit_similarity: float, tmp_path):
+    """A line-guard evidence file shaped like ``scripts/evaluate_candidate.py``'s output."""
+    def side(es: float) -> dict:
+        return {"benchmark": "LineCompletion", "edit_similarity": es, "exact_match": 0.1,
+                "n_examples": 300}
+
+    path = tmp_path / "web-v2.json"
+    path.write_text(json.dumps({"clusters": {CLUSTER_ID: {
+        "guard": [side(candidate_edit_similarity)],
+        "baseline_guard": [side(baseline_edit_similarity)]}}}), encoding="utf-8")
+    return resolve_guard(path)
 
 
 def _metrics(edit_similarity: float):
@@ -479,10 +498,29 @@ def _metrics(edit_similarity: float):
             "perplexity": 3.0, "n_examples": 40}
 
 
+def candidate_above_an_active_v1(cluster_client, registry_client, edge_registry,
+                                 monkeypatch, tmp_path) -> dict:
+    """Round 1: v1 published, promoted (against the bare base model) and
+    served by the cluster. Round 2: v2 aggregated and published as the
+    candidate. Returns v2's registry metadata."""
+    publish_candidate(cluster_client, registry_client, monkeypatch, round_id=0)
+    first = promote_candidate(
+        edge_registry, REGISTRY_NAME, version=1, kind="cluster", cluster_id=CLUSTER_ID,
+        in_project=_metrics(0.60), baseline_in_project=_metrics(0.50),
+        guard=_guard(0.30, 0.30, tmp_path), noise_band=0.0)
+    assert first["decision"]["action"] == "promote"
+    decide_on_cluster(cluster_client, "promote")
+    v2 = publish_candidate(cluster_client, registry_client, monkeypatch, round_id=1)
+    assert v2["ref"]["version"] == 2
+    assert edge_registry.list_versions(REGISTRY_NAME)["active"] == 1
+    return v2
+
+
 def test_seam_c2_promotes_when_both_halves_of_d5_hold(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
-    guard = _guard(candidate_pass1=0.30, baseline_pass1=0.30, tmp_path=tmp_path)
+    v2 = candidate_above_an_active_v1(cluster_client, registry_client, edge_registry,
+                                      monkeypatch, tmp_path)
+    guard = _guard(candidate_edit_similarity=0.30, baseline_edit_similarity=0.30, tmp_path=tmp_path)
     assert guard.available
 
     record = promote_candidate(
@@ -497,44 +535,73 @@ def test_seam_c2_promotes_when_both_halves_of_d5_hold(
     assert "edit_similarity" in record["decision"]["reason"]
     assert edge_registry.get_active(REGISTRY_NAME)["ref"]["version"] == 2
     trail = edge_registry.list_promotions(REGISTRY_NAME)
-    assert [d["action"] for d in trail] == ["promote"]
+    assert [(d["adapter"]["version"], d["action"]) for d in trail] == [(1, "promote"), (2, "promote")]
+    # and the cluster serves it once told to
+    assert decide_on_cluster(cluster_client, "promote")["active_sha256"] == v2["sha256"]
 
 
-def test_seam_c2_rolls_back_when_the_in_project_metric_does_not_improve(
+def test_seam_c2_rejects_when_the_in_project_metric_does_not_improve(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
-    guard = _guard(candidate_pass1=0.30, baseline_pass1=0.30, tmp_path=tmp_path)
+    v2 = candidate_above_an_active_v1(cluster_client, registry_client, edge_registry,
+                                      monkeypatch, tmp_path)
+    guard = _guard(candidate_edit_similarity=0.30, baseline_edit_similarity=0.30, tmp_path=tmp_path)
+    served = cluster_client.get(f"/clusters/{CLUSTER_ID}/adapters/active").json()["sha256"]
 
     record = promote_candidate(
         edge_registry, REGISTRY_NAME, version=2, kind="cluster", cluster_id=CLUSTER_ID,
         in_project=_metrics(0.70), baseline_in_project=_metrics(0.75),
         guard=guard, noise_band=0.02)
 
-    assert record["decision"]["action"] == "rollback"
+    assert record["decision"]["action"] == "reject"
+    assert record["decision"]["reason"].startswith("rejected: ")
     assert record["decision"]["active_version_after"] == 1
     assert edge_registry.get_active(REGISTRY_NAME)["ref"]["version"] == 1
-    assert [d["action"] for d in edge_registry.list_promotions(REGISTRY_NAME)] == ["rollback"]
+    trail = edge_registry.list_promotions(REGISTRY_NAME)
+    assert [(d["adapter"]["version"], d["action"]) for d in trail] == [(1, "promote"), (2, "reject")]
+    # the cluster drops the candidate and keeps serving v1; v2 is never served
+    assert decide_on_cluster(cluster_client, "reject")["active_sha256"] == served
+    assert cluster_client.get(f"/clusters/{CLUSTER_ID}/adapters/active").json()["sha256"] == served
+    assert served != v2["sha256"]
 
 
-def test_seam_c2_rolls_back_when_the_guard_regresses(
+def test_seam_c2_rejects_when_the_guard_regresses(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    """The rule is two-sided: an in-project win does not buy a pass@1 regression."""
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
-    guard = _guard(candidate_pass1=0.20, baseline_pass1=0.30, tmp_path=tmp_path)
+    """The rule is two-sided: an in-project win does not buy a guard regression."""
+    candidate_above_an_active_v1(cluster_client, registry_client, edge_registry,
+                                 monkeypatch, tmp_path)
+    guard = _guard(candidate_edit_similarity=0.20, baseline_edit_similarity=0.30, tmp_path=tmp_path)
 
     record = promote_candidate(
         edge_registry, REGISTRY_NAME, version=2, kind="cluster", cluster_id=CLUSTER_ID,
         in_project=_metrics(0.90), baseline_in_project=_metrics(0.70),
         guard=guard, noise_band=0.0)
 
-    assert record["decision"]["action"] == "rollback"
-    assert "pass@1" in record["decision"]["reason"]
+    assert record["decision"]["action"] == "reject"
+    assert "LineCompletion edit similarity dropped" in record["decision"]["reason"]
+    assert edge_registry.get_active(REGISTRY_NAME)["ref"]["version"] == 1
 
 
-def test_seam_c2_rolls_back_when_the_guard_is_unavailable(
+def test_a_first_candidate_that_fails_leaves_nothing_active(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    """The sprint's F3 position, asserted: a missing guard is a failed guard."""
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
+    """Rejecting the very first candidate serves nothing, rather than the reject."""
+    publish_candidate(cluster_client, registry_client, monkeypatch)
+    record = promote_candidate(
+        edge_registry, REGISTRY_NAME, version=1, kind="cluster", cluster_id=CLUSTER_ID,
+        in_project=_metrics(0.40), baseline_in_project=_metrics(0.50),
+        guard=_guard(0.30, 0.30, tmp_path), noise_band=0.0)
+    assert record["decision"]["action"] == "reject"
+    assert record["decision"]["active_version_after"] == 0
+    assert record["registry_agrees_with_local_prediction"] is True
+    assert edge_registry.list_versions(REGISTRY_NAME)["active"] is None
+    assert decide_on_cluster(cluster_client, "reject")["active_sha256"] is None
+    assert cluster_client.get(f"/clusters/{CLUSTER_ID}/adapters/active").status_code == 404
+
+
+def test_seam_c2_is_not_sent_when_the_guard_is_unavailable(
+        cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
+    """A missing guard is never a pass: the registry refuses it, so the edge does not send it."""
+    candidate_above_an_active_v1(cluster_client, registry_client, edge_registry,
+                                 monkeypatch, tmp_path)
     guard = resolve_guard()
     assert not guard.available
 
@@ -543,15 +610,32 @@ def test_seam_c2_rolls_back_when_the_guard_is_unavailable(
         in_project=_metrics(0.99), baseline_in_project=_metrics(0.10),
         guard=guard, noise_band=0.0)
 
-    assert record["decision"]["action"] == "rollback"
+    assert record["decision"]["action"] == "not_sent"
+    assert record["decision"]["registry_called"] is False
+    assert record["decision"]["active_version_after"] == 1  # the pointer where it was
     assert record["decision_is_authoritative"] is False
     assert "PROVISIONAL" in record["authority_note"]
     assert "guard" in record["decision"]["reason"].lower()
+    assert record["decision"]["predicted"]["action"] == "reject"
+    assert [d["adapter"]["version"] for d in edge_registry.list_promotions(REGISTRY_NAME)] == [1]
+    assert edge_registry.get_active(REGISTRY_NAME)["ref"]["version"] == 1
+
+
+def test_a_first_candidate_not_sent_records_that_nothing_is_active(
+        cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
+    publish_candidate(cluster_client, registry_client, monkeypatch)
+    record = promote_candidate(
+        edge_registry, REGISTRY_NAME, version=1, kind="cluster", cluster_id=CLUSTER_ID,
+        in_project=_metrics(0.99), baseline_in_project=_metrics(0.10),
+        guard=resolve_guard(), noise_band=0.0)
+    assert record["decision"]["action"] == "not_sent"
+    assert record["decision"]["active_version_after"] is None  # nothing active, not "v0"
 
 
 def test_seam_c2_marks_an_unmeasured_metric_instead_of_inventing_one(
         cluster_client, registry_client, edge_registry, monkeypatch, tmp_path):
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
+    candidate_above_an_active_v1(cluster_client, registry_client, edge_registry,
+                                 monkeypatch, tmp_path)
     record = promote_candidate(
         edge_registry, REGISTRY_NAME, version=2, kind="cluster", cluster_id=CLUSTER_ID,
         in_project=None, baseline_in_project=None,
@@ -559,7 +643,7 @@ def test_seam_c2_marks_an_unmeasured_metric_instead_of_inventing_one(
 
     assert record["in_project_measured"] is False
     assert record["eval_result_sent"]["in_project"]["n_examples"] == 0
-    assert record["decision"]["action"] == "rollback"
+    assert record["decision"]["action"] == "reject"
     assert record["decision_is_authoritative"] is False
 
 
@@ -568,18 +652,22 @@ def test_seam_c2_marks_an_unmeasured_metric_instead_of_inventing_one(
 # --------------------------------------------------------------------------- #
 def test_all_four_seams_in_one_pass(cluster_client, registry_client, edge_registry,
                                     monkeypatch, tmp_path):
-    # A + B
-    publish_two_versions(cluster_client, registry_client, monkeypatch)
+    # A: upload -> aggregate (the cluster's candidate); B: publish (inactive)
+    published = publish_candidate(cluster_client, registry_client, monkeypatch)
     versions = edge_registry.list_versions(REGISTRY_NAME)
-    assert [v["ref"]["version"] for v in versions["versions"]] == [1, 2]
-    assert [v["aggregation"] for v in versions["versions"]] == ["naive_avg", "svd_exact"]
+    assert [v["ref"]["version"] for v in versions["versions"]] == [1]
+    assert [v["aggregation"] for v in versions["versions"]] == ["svd_exact"]
+    assert versions["active"] is None  # a candidate, not served
+    assert cluster_client.get(f"/clusters/{CLUSTER_ID}/adapters/active").status_code == 404
+    listing = cluster_client.get("/clusters").json()["clusters"][CLUSTER_ID]
+    assert listing["candidate_sha256"] == published["sha256"]
+    assert listing["active_sha256"] is None
 
-    # C1, both versions
-    baseline = edge_registry.materialize(REGISTRY_NAME, tmp_path / "v1", version=1)
-    candidate = edge_registry.materialize(REGISTRY_NAME, tmp_path / "v2", version=2)
-    assert baseline["sha256_verified"] != candidate["sha256_verified"]
+    # C1 for the evaluator: the candidate, by number
+    candidate = edge_registry.materialize(REGISTRY_NAME, tmp_path / "v1", version=1)
+    assert candidate["sha256_verified"] == published["sha256"]
 
-    # evaluation
+    # evaluation: the candidate against the bare base model (nothing active)
     held = tmp_path / "held_out"
     held.mkdir()
     (held / "mod.py").write_text(SAMPLE_FILE, encoding="utf-8")
@@ -590,11 +678,112 @@ def test_all_four_seams_in_one_pass(cluster_client, registry_client, edge_regist
         score([ex.target for ex in examples], examples), perplexity=3.1)
     assert cand_block["edit_similarity"] > base_block["edit_similarity"]
 
-    # C2
+    # C2: the registry promotes, then the cluster promotes the same bytes
     record = promote_candidate(
-        edge_registry, REGISTRY_NAME, version=2, kind="cluster", cluster_id=CLUSTER_ID,
+        edge_registry, REGISTRY_NAME, version=1, kind="cluster", cluster_id=CLUSTER_ID,
         in_project=cand_block, baseline_in_project=base_block,
         guard=_guard(0.30, 0.30, tmp_path), noise_band=0.0)
     assert record["decision"]["action"] == "promote"
-    assert edge_registry.get_active(REGISTRY_NAME)["ref"]["version"] == 2
+    assert edge_registry.get_active(REGISTRY_NAME)["ref"]["version"] == 1
     assert len(edge_registry.list_promotions(REGISTRY_NAME)) == 1
+    promoted = cluster_client.post(f"/clusters/{CLUSTER_ID}/adapters/candidate/promote",
+                                   json={"sha256": published["sha256"]})
+    assert promoted.status_code == 200, promoted.text
+
+    # pull: what the cluster and the registry now serve is the promoted candidate
+    served = cluster_client.get(f"/clusters/{CLUSTER_ID}/adapters/active").json()
+    assert served["sha256"] == published["sha256"]
+    pulled = edge_registry.materialize(REGISTRY_NAME, tmp_path / "pulled")
+    assert pulled["version"] == 1 and pulled["sha256_verified"] == published["sha256"]
+
+# --------------------------------------------------------------------------- #
+# Review Focus 5: a normal round of six clients, real-size uploads (192 tensors
+# each), through the security middleware of the real apps at its real limits
+# --------------------------------------------------------------------------- #
+SIX_CLIENTS = {
+    "web": {"client-flask": 80, "client-requests": 52, "client-werkzeug": 170},
+    "scientific": {"client-numpy": 292, "client-pandas": 335, "client-scikit-learn": 335},
+}
+
+
+def _full_size_adapter(seed: int, dim: int = 64):
+    """The layout of a real client adapter: 24 layers x q/k/v/o x (A, B) = 192
+    tensors at rank 16. The hidden width is 64 instead of 2048: the middleware
+    counts requests and bytes, not numbers, and the real byte size is checked
+    against the limit separately."""
+    rng = np.random.default_rng(seed)
+    sd = {}
+    for layer in range(24):
+        for module in wire.TARGET_MODULES:
+            sd[wire.peft_key(layer, module, "lora_A")] = (
+                rng.standard_normal((16, dim)) * 0.05).astype(np.float32)
+            sd[wire.peft_key(layer, module, "lora_B")] = (
+                rng.standard_normal((dim, 16)) * 0.05).astype(np.float32)
+    return sd, {"r": 16, "lora_alpha": 16, "target_modules": list(wire.TARGET_MODULES)}
+
+
+def test_a_six_client_round_of_192_tensor_uploads_passes_the_middleware(
+        cluster_client, registry_client, monkeypatch):
+    import cluster.server as cluster_server
+    import registry.app as registry_app
+    from security.middleware import RateLimitConfig, rate_limit_from_env
+
+    assert len(wire.TARGET_MODULES) == 4
+    limits = rate_limit_from_env({})
+    assert (limits.requests_per_minute, limits.burst_size) == (600, 60)
+    cluster_server.rate_limiter.reconfigure(limits)      # the real, default limits
+    registry_app.rate_limiter.reconfigure(rate_limit_from_env({}))
+    statuses = []
+    try:
+        for cluster_id, members in SIX_CLIENTS.items():
+            r = cluster_client.put(f"/clusters/{cluster_id}/members",
+                                   json={"client_ids": list(members)})
+            statuses.append(r.status_code)
+            assert r.status_code == 200, r.text
+        seed = 0
+        for cluster_id, members in SIX_CLIENTS.items():
+            for client_id, examples in members.items():
+                seed += 1
+                sd, cfg = _full_size_adapter(seed)
+                payload = wire.upload_payload(sd, cfg, client_id=client_id, cluster_id=cluster_id,
+                                              round_id=0, num_examples=examples, seed=0)
+                assert len(payload["tensors"]) == 192
+                r = cluster_client.post(f"/clusters/{cluster_id}/uploads", json=payload)
+                statuses.append(r.status_code)
+                assert r.status_code == 201, (client_id, r.status_code, r.text[:300])
+                # what the laptops' pages do meanwhile: poll the cluster
+                statuses += [cluster_client.get("/clusters").status_code for _ in range(3)]
+        for cluster_id in SIX_CLIENTS:
+            r = cluster_client.post(f"/clusters/{cluster_id}/aggregate",
+                                    json={"aggregation": "svd", "include_manifest": True})
+            statuses.append(r.status_code)
+            assert r.status_code == 200, r.text[:300]
+            assert r.json()["num_clients"] == 3
+            with publish_over_http(registry_client, monkeypatch):
+                r = cluster_client.post(
+                    f"/adapters/{cluster_id}/publish",
+                    json={"registry_url": "http://registry:8004",
+                          "adapter_name": f"cluster-{cluster_id}"})
+            statuses.append(r.status_code)
+            assert r.status_code == 201, r.text[:300]
+            # the panel's poll of the registry
+            for path in (f"/adapters/cluster-{cluster_id}/versions", "/sync/pending",
+                         "/privacy/ledger"):
+                statuses.append(registry_client.get(path).status_code)
+    finally:
+        cluster_server.rate_limiter.reconfigure(RateLimitConfig(enabled=False))
+        registry_app.rate_limiter.reconfigure(RateLimitConfig(enabled=False))
+    assert 413 not in statuses and 429 not in statuses
+    assert set(statuses) <= {200, 201}
+    assert registry_client.get("/adapters").json()["adapters"] == ["cluster-scientific",
+                                                                    "cluster-web"]
+
+
+def test_a_real_size_upload_is_far_below_every_body_limit():
+    import cluster.server as cluster_server
+    import registry.app as registry_app
+
+    as_json = 192 * 16 * 2048 * 4 * 4 // 3 + 192 * 200     # 192 fp32 tensors, base64, in JSON
+    as_safetensors = 192 * 16 * 2048 * 4 + 64 * 1024       # what the cluster publishes
+    assert as_json < cluster_server.MAX_BODY_BYTES / 10
+    assert as_safetensors < registry_app.MAX_BODY_BYTES / 10

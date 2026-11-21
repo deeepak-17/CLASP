@@ -262,7 +262,9 @@ def test_upload_carries_a_contract_privacy_block():
     payload = wire.upload_payload(tiny(), {"r": RANK, "lora_alpha": RANK},
                                   client_id="c", cluster_id="web", round_id=0,
                                   num_examples=10, privacy=spent)
-    assert payload["privacy"] == spent
+    # v1.2 PrivacySpec also emits the cumulative-budget keys (null when unset).
+    assert payload["privacy"] == {**spent, "epsilon_cumulative": None,
+                                  "rounds_accounted": None}
 
 
 def test_upload_without_dp_says_so_in_the_contracts_own_encoding():
@@ -305,3 +307,72 @@ def test_upload_payload_carries_the_base_it_was_trained_on():
                                                      "sha256": "a" * 64, "alpha": 0.5})
     assert based["base_cluster_id"] == "web" and based["base_round_id"] == 0
     assert based["base_sha256"] == "a" * 64 and based["composition_alpha"] == 0.5
+
+
+def test_privacy_block_carries_the_run_accounting_when_present():
+    sent = wire.privacy_block({
+        "epsilon": 3.2, "delta": 1e-5, "noise_multiplier": 0.6, "max_grad_norm": 1.0,
+        "epsilon_cumulative": 3.7, "rounds_accounted": 2, "sample_rate": 0.00625, "steps": 160,
+        "run_id": "run-1", "rounds_total": 2})
+    assert sent["epsilon_cumulative"] == 3.7 and sent["rounds_accounted"] == 2
+    assert sent["sample_rate"] == 0.00625 and sent["steps"] == 160
+    # the run's name and length stay on the laptop: the cluster does not use them
+    assert "run_id" not in sent and "rounds_total" not in sent
+
+
+def test_privacy_block_without_run_accounting_is_the_contract_block():
+    sent = wire.privacy_block({"epsilon": 3.2, "delta": 1e-5})
+    assert "sample_rate" not in sent and "steps" not in sent
+    assert sent["epsilon_cumulative"] is None and sent["rounds_accounted"] is None
+
+# --------------------------------------------------------------------------- #
+# U4: the edge signs its upload
+# --------------------------------------------------------------------------- #
+def _signed_payload(secret="k" * 64, **kw):
+    sd, cfg = _tiny_adapter()
+    return wire.upload_payload(sd, cfg, client_id="client-flask", cluster_id="web", round_id=1,
+                               num_examples=12, seed=0, hmac_secret=secret, **kw)
+
+
+def _tiny_adapter():
+    rng = np.random.default_rng(0)
+    sd = {}
+    for m in wire.TARGET_MODULES:
+        sd[wire.peft_key(0, m, "lora_A")] = rng.normal(size=(4, 8)).astype(np.float32)
+        sd[wire.peft_key(0, m, "lora_B")] = rng.normal(size=(8, 4)).astype(np.float32)
+    return sd, {"r": 4, "lora_alpha": 4, "target_modules": list(wire.TARGET_MODULES)}
+
+
+def test_upload_payload_is_signed_over_the_tensor_bytes_and_the_rest_of_the_body():
+    import base64
+
+    signer = pytest.importorskip("security.auth.hmac_signer")
+    payload = _signed_payload()
+    # verified with the recipe the cluster uses, written out independently
+    tensors = {t["name"]: base64.b64decode(t["data_b64"]) for t in payload["tensors"]}
+    metadata = {k: v for k, v in payload.items() if k not in ("tensors", "signature", "timestamp")}
+    assert signer.verify_adapter_upload(tensors, metadata, payload["signature"], "k" * 64)
+    assert not signer.verify_adapter_upload(tensors, metadata, payload["signature"], "x" * 64)
+    assert not signer.verify_adapter_upload(tensors, {**metadata, "num_examples": 13},
+                                            payload["signature"], "k" * 64)
+    # the body the cluster receives is this one after a JSON round trip
+    carried = json.loads(json.dumps(payload))
+    metadata = {k: v for k, v in carried.items() if k not in ("tensors", "signature", "timestamp")}
+    assert signer.verify_adapter_upload(tensors, metadata, carried["signature"], "k" * 64)
+
+
+def test_the_signature_covers_the_privacy_block_and_the_base():
+    pytest.importorskip("security.auth.hmac_signer")
+    plain = _signed_payload()
+    private = _signed_payload(privacy={"epsilon": 3.9, "epsilon_cumulative": 3.9,
+                                       "rounds_accounted": 1})
+    based = _signed_payload(base={"cluster_id": "web", "round_id": 0, "sha256": "ab" * 32,
+                                  "alpha": 0.5})
+    assert len({plain["signature"], private["signature"], based["signature"]}) == 3
+
+
+def test_without_a_key_the_payload_carries_no_signature():
+    sd, cfg = _tiny_adapter()
+    payload = wire.upload_payload(sd, cfg, client_id="client-flask", cluster_id="web",
+                                  round_id=1, num_examples=12)
+    assert "signature" not in payload

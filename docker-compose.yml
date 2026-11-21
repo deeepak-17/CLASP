@@ -1,27 +1,71 @@
-# CLASP — single-command reproducible stack.
-# Security (P3) is a library imported by edge & cluster, so it is NOT a service here.
+# CLASP — single-command reproducible stack, behind mutual TLS (D7, U6).
+# Security (P3) is a library imported by the services, so it is NOT a service here.
 #
 #   docker compose up -d                    registry + cluster (the live seams)
-#   docker compose --profile demo up        + panel demo UI on :8010, the evaluation
-#                                             dashboard on :8005, and a one-shot
-#                                             demo-seed job that drives the registry
-#                                             end to end (report -> demo-reports volume)
+#   docker compose --profile demo up        + panel demo UI on https://localhost:8010,
+#                                             the evaluation dashboard on :8005, and a
+#                                             one-shot demo-seed job that drives the
+#                                             registry end to end (report -> demo-reports)
 #   docker compose --profile train up edge  + the GPU federated round (needs NVIDIA
 #                                             runtime, trained adapters + corpus mounted)
 #
-# mTLS for the registry (D7): add -f docker-compose.mtls.yml (see that file).
+# Every connection to the registry or the cluster must present a client
+# certificate signed by the development CA and speak TLS 1.3; a request without
+# one is refused at the handshake. The certificate's name decides what the caller
+# may do (docs/mtls_setup.md). The one-shot `certs` service writes the CA, the
+# certificates and the shared keys to ./.runtime/certs the first time
+# (scripts/make_dev_certs.sh); set CLASP_LAN_IPS=<laptop A's address> before the
+# first `up` so edge laptops can dial this machine by address. The cluster binds
+# each upload's client_id to the uploader's certificate and verifies its
+# signature; the registry verifies the evaluator's signature on /promote.
+#
+# The live panel asks for a login: write the operator first,
+#   python scripts/make_users.py --out .runtime/users/panel.json --add operator:operator
+# (without that file the panel answers "logins are misconfigured" and stays shut).
+#
+# Plain HTTP, for debugging only: add -f docker-compose.insecure.yml.
 services:
+  # One-shot: the development CA, every certificate and the shared keys, written
+  # to ./.runtime/certs when ca.pem is not there yet. Never regenerates on its own.
+  certs:
+    build:
+      context: .
+      dockerfile: scripts/certs.Dockerfile
+    working_dir: /work
+    environment:
+      CLASP_LAN_IPS: ${CLASP_LAN_IPS:-}
+    # The script is read through `tr` so a Windows checkout (CRLF) still runs.
+    command:
+      - sh
+      - -c
+      - "[ -f .runtime/certs/ca.pem ] || tr -d '\\r' < scripts/make_dev_certs.sh | bash -s -- .runtime/certs"
+    volumes:
+      - ./:/work
+    restart: "no"
+
   registry:
     build:
       context: .
       dockerfile: services/registry/Dockerfile
     ports: ["8004:8004"]
+    depends_on:
+      certs: {condition: service_completed_successfully}
     # Registry is STATEFUL: versioned safetensors + metadata must survive restarts.
     environment:
       CLASP_REGISTRY_DATA: /data/registry
       CLASP_REGISTRY_KEEP_LAST: "5"
+      CLASP_TLS_CERT: /certs/registry.pem
+      CLASP_TLS_KEY: /certs/registry.key
+      CLASP_TLS_CA: /certs/ca.pem
+      # verifies the evaluator's signature on /promote
+      CLASP_EVAL_HMAC_SECRET_FILE: /secrets/eval_hmac.key
     volumes:
       - registry-data:/data/registry
+      # Only the registry's own cert/key and the CA cert — never the CA key.
+      - ./.runtime/certs/registry:/certs:ro
+      # The folder, not the key file: containers are created before `certs`
+      # writes the key, and a missing file source would be mounted as a directory.
+      - ./.runtime/certs/secrets:/secrets:ro
     healthcheck:
       # TLS-aware: probes over mTLS when CLASP_TLS_* is set.
       test: ["CMD", "python", "-m", "registry.healthcheck"]
@@ -37,11 +81,22 @@ services:
       dockerfile: services/cluster/Dockerfile
     ports: ["8002:8002"]
     depends_on:
+      certs: {condition: service_completed_successfully}
       registry: {condition: service_healthy}
     # Seam B target. On the compose network the registry answers to its service
-    # name; on the host it is localhost:8004 (cluster.server's own default).
+    # name; on the host it is localhost:8004 (cluster.server's own default). The
+    # cluster presents its own certificate to the registry (role svc:cluster).
     environment:
-      CLASP_REGISTRY_URL: http://registry:8004
+      CLASP_REGISTRY_URL: https://registry:8004
+      CLASP_TLS_CERT: /certs/cluster.pem
+      CLASP_TLS_KEY: /certs/cluster.key
+      CLASP_TLS_CA: /certs/ca.pem
+      # every edge's upload key, to verify the signature on each upload
+      CLASP_UPLOAD_HMAC_SECRETS: /certs/upload_hmac.json
+      CLASP_AUDIT_LOG: /audit/cluster.jsonl
+    volumes:
+      - ./.runtime/certs/cluster:/certs:ro
+      - audit-logs:/audit
     healthcheck:
       # TLS-aware: probes over mTLS when CLASP_TLS_* is set.
       test: ["CMD", "python", "-m", "cluster.healthcheck"]
@@ -59,10 +114,21 @@ services:
       dockerfile: services/registry/Dockerfile
     depends_on:
       registry: {condition: service_healthy}
-    command: ["python", "-m", "registry.demo", "--url", "http://registry:8004",
+    command: ["python", "-m", "registry.demo", "--url", "https://registry:8004",
               "--report", "/reports/registry-demo.json"]
+    # It saves, promotes, restores and garbage-collects, so it presents the
+    # operator's certificate (clasp-admin, role admin). It also stands in for
+    # the evaluator, so it signs its promotes with the evaluation key the
+    # registry verifies with.
+    environment:
+      CLASP_TLS_CLIENT_CERT: /certs/admin.pem
+      CLASP_TLS_CLIENT_KEY: /certs/admin.key
+      CLASP_TLS_CA: /certs/ca.pem
+      CLASP_EVAL_HMAC_SECRET_FILE: /secrets/eval_hmac.key
     volumes:
       - demo-reports:/reports
+      - ./.runtime/certs/admin:/certs:ro
+      - ./.runtime/certs/secrets:/secrets:ro
     restart: "no"
 
   demo-ui:
@@ -75,23 +141,45 @@ services:
       registry: {condition: service_healthy}
       cluster: {condition: service_healthy}
     environment:
-      CLASP_REGISTRY_URL: http://registry:8004
-      CLASP_CLUSTER_URL: http://cluster:8002
+      CLASP_REGISTRY_URL: https://registry:8004
+      CLASP_CLUSTER_URL: https://cluster:8002
+      # its calls to the cluster and the registry (role svc:evaluation)
+      CLASP_TLS_CLIENT_CERT: /certs/demo-ui.pem
+      CLASP_TLS_CLIENT_KEY: /certs/demo-ui.key
+      CLASP_TLS_CA: /certs/ca.pem
+      # the page itself: HTTPS with a server certificate; people log in
+      CLASP_PAGE_TLS_CERT: /pages/pages.pem
+      CLASP_PAGE_TLS_KEY: /pages/pages.key
+      CLASP_USERS_FILE: /users/panel.json
+      CLASP_JWT_SECRET_FILE: /secrets/jwt.key
+      # the evaluator it starts signs its results with this
+      CLASP_EVAL_HMAC_SECRET_FILE: /secrets/eval_hmac.key
+      CLASP_AUDIT_LOG: /audit/demo-ui.jsonl
     volumes:
       # Evaluation's measured results, which the live panel's Promote sends
-      # (demo_ui/evidence.py): round manifests + HumanEval anchors + noise band.
+      # (demo_ui/evidence.py): round manifests + guard scores + noise band.
       - ./experiments/w12-integration/results:/app/experiments/w12-integration/results:ro
       - ./services/evaluation/results:/app/services/evaluation/results:ro
+      - ./.runtime/certs/demo-ui:/certs:ro
+      - ./.runtime/certs/pages:/pages:ro
+      - ./.runtime/certs/secrets:/secrets:ro
+      - ./.runtime/users:/users:ro
+      - audit-logs:/audit
 
   # P5 evaluation dashboard (static React build behind nginx). Results are baked
   # in at build time from services/evaluation/results/; rebuild after
-  # re-exporting them (services/evaluation/scripts/rebuild_results.py).
+  # re-exporting them (services/evaluation/scripts/rebuild_results.py). Served
+  # over HTTPS (https://localhost:8005) when the pages certificate is mounted.
   dashboard:
     profiles: [demo]
     build:
       context: .
       dockerfile: services/evaluation/dashboard/Dockerfile
+    depends_on:
+      certs: {condition: service_completed_successfully}
     ports: ["8005:80"]
+    volumes:
+      - ./.runtime/certs/pages:/certs:ro
 
   # ---- profile: train ----------------------------------------------------- #
   edge:
@@ -103,8 +191,8 @@ services:
       registry: {condition: service_healthy}
       cluster: {condition: service_healthy}
     environment:
-      CLASP_REGISTRY_URL: http://registry:8004
-      CLASP_CLUSTER_URL: http://cluster:8002
+      CLASP_REGISTRY_URL: https://registry:8004
+      CLASP_CLUSTER_URL: https://cluster:8002
     # The adapter set and round number are configurable: round 1 uses clients
     # trained on the bare base; D3's round 2 needs clients retrained on frozen
     # (base + alpha*cluster) -- point CLASP_EDGE_ADAPTERS at that set and set
@@ -128,14 +216,22 @@ services:
     build:
       context: .
       dockerfile: services/evaluation/Dockerfile
-    # `python -m evaluation` checks the registry is reachable when this is set.
+    # `python -m evaluation` checks the registry is reachable when this is set;
+    # it presents the evaluator's certificate (demo-ui, role svc:evaluation).
     environment:
-      CLASP_REGISTRY_URL: http://registry:8004
+      CLASP_REGISTRY_URL: https://registry:8004
+      CLASP_TLS_CLIENT_CERT: /certs/demo-ui.pem
+      CLASP_TLS_CLIENT_KEY: /certs/demo-ui.key
+      CLASP_TLS_CA: /certs/ca.pem
+    volumes:
+      - ./.runtime/certs/demo-ui:/certs:ro
     depends_on:
       registry: {condition: service_healthy}
 
 # Named volumes: adapter versions persist across `compose down`/`up` (D9);
-# demo reports survive the one-shot seed container.
+# demo reports survive the one-shot seed container; the cluster's and the
+# panel's audit trails survive their containers (the registry's is in its data).
 volumes:
   registry-data:
   demo-reports:
+  audit-logs:

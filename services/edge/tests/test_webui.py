@@ -151,7 +151,11 @@ def _contract_adapter(root, client, *, seed, epsilon=8.0):
     wire.save_peft_dir(root / client / "adapter", sd,
                        {"r": 16, "lora_alpha": 16, "target_modules": list(wire.TARGET_MODULES)})
     (root / client / "manifest.json").write_text(json.dumps({
-        "client_id": f"web/{client}", "seed": 0, "privacy": {"epsilon": epsilon, "delta": 1e-5},
+        "client_id": f"web/{client}", "seed": 0,
+        # a DP round as edge.train_client records it (see tests.test_upload._adapter)
+        "privacy": {"epsilon": epsilon, "delta": 1e-5, "noise_multiplier": 0.6,
+                    "max_grad_norm": 1.0, "sample_rate": 1 / 160, "steps": 160,
+                    "run_id": "run-1", "rounds_total": 2},
         "data": {"train": {"n_chunks": 10}}}), encoding="utf-8")
     return root / client / "adapter"
 
@@ -169,7 +173,7 @@ def test_merged_adapter_comes_back_and_seeds_the_next_training(page_url, cluster
 
     # Nothing merged yet: the pull says so instead of writing anything.
     assert _post(f"{url}/api/pull", {})[0] == 202
-    assert "not merged" in _wait_job(url)["error"]
+    assert "promoted" in _wait_job(url)["error"]
 
     for client, seed in (("client-flask", 1), ("client-requests", 2)):
         upload.upload_adapter(_contract_adapter(tmp_path / "edges", client, seed=seed),
@@ -177,6 +181,12 @@ def test_merged_adapter_comes_back_and_seeds_the_next_training(page_url, cluster
     r = requests.post(f"{cluster_url}/clusters/web/aggregate", json={"aggregation": "naive"},
                       timeout=30)
     assert r.status_code == 200, r.text
+    # merged, but a candidate: nothing comes back until laptop A promotes it
+    assert _get(f"{url}/api/status")["merge"]["state"] == "awaiting"
+    assert _post(f"{url}/api/pull", {})[0] == 202
+    assert "promoted" in _wait_job(url)["error"]
+    _promote(cluster_url, r.json()["sha256"])
+    assert _get(f"{url}/api/status")["merge"]["label"] == "Merged and promoted"
 
     assert _post(f"{url}/api/pull", {})[0] == 202
     job = _wait_job(url)
@@ -245,7 +255,15 @@ def test_train_command_carries_fedprox_and_the_dp_sequence_length(tmp_path):
     assert plain[plain.index("--fedprox-mu") + 1] == "0.1" and "--seq-len" not in plain
 
 
-def _plain_round(url, root, round_id, seeds):
+def _promote(url, sha256):
+    import requests
+
+    r = requests.post(f"{url}/clusters/web/adapters/candidate/promote",
+                      json={"sha256": sha256}, timeout=10)
+    assert r.status_code == 200, r.text
+
+
+def _plain_round(url, root, round_id, seeds, *, promote=True):
     import requests
 
     from edge import upload
@@ -258,13 +276,15 @@ def _plain_round(url, root, round_id, seeds):
     r = requests.post(f"{url}/clusters/web/aggregate", json={"aggregation": "naive"},
                       timeout=30)
     assert r.status_code == 200, r.text
+    if promote:
+        _promote(url, r.json()["sha256"])
     return r.json()
 
 
 def test_the_page_follows_the_adapter_the_cluster_serves_not_the_round_number(
         page_url, cluster_url, tmp_path):  # noqa: F811
-    """A rollback (or a restarted cluster) can serve a different adapter under a
-    round number this laptop already has. The page compares digests."""
+    """An operator restore (or a restarted cluster) can serve a different adapter
+    under a round number this laptop already has. The page compares digests."""
     url, page = page_url
     _register(cluster_url, "web", ["client-flask", "client-requests"])
     first = _plain_round(cluster_url, tmp_path / "e", 0, (1, 2))
@@ -308,3 +328,333 @@ def test_cards_say_what_an_adapter_was_built_on(tmp_path):
     assert card["base_round"] == 3 and card["base_sha256"] == "ab" * 32 and card["fedprox_mu"] == 0.01
     with pytest.raises(ValueError, match="did not come from this cluster"):
         page.start_upload("round2_d3/client-flask")
+
+
+# --------------------------------------------------------------------------- #
+# step 4 of the tracker follows the candidate: awaiting, promoted or rejected
+# --------------------------------------------------------------------------- #
+def _fake_clusters(monkeypatch, page, responses):
+    """``GET /clusters`` answers each of ``responses`` in turn (web only)."""
+    from edge import upload
+
+    queue = list(responses)
+
+    def fake(http, url, timeout=5):
+        active, candidate = queue.pop(0)
+        return {"web": {"round_id": 1, "pending_uploads": 0, "members": ["client-flask"],
+                        "uploaded_clients": [], "aggregated_clients": ["client-flask"],
+                        "aggregated_round_id": 0, "has_active_adapter": active is not None,
+                        "active_sha256": active, "candidate_sha256": candidate}}
+
+    monkeypatch.setattr(upload, "list_clusters", fake)
+
+
+def _step4(page):
+    return page.status()["merge"]
+
+
+def test_the_tracker_awaits_evaluation_then_shows_the_promote(tmp_path, monkeypatch):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    a, b = "a" * 64, "b" * 64
+    _fake_clusters(monkeypatch, page, [(a, b), (a, b), (b, None), (b, None)])
+    for _ in range(2):
+        m = _step4(page)
+        assert m["state"] == "awaiting" and m["label"] == "Awaiting evaluation"
+        assert m["candidate_sha256"] == b and m["active_sha256"] == a
+    m = _step4(page)
+    assert m["state"] == "promoted" and m["label"] == "Merged and promoted"
+    assert m["active_sha256"] == b and m["decided_sha256"] == b
+    assert _step4(page)["label"] == "Merged and promoted"  # stays until the next candidate
+
+
+def test_the_tracker_shows_a_reject_and_keeps_the_previous_adapter(tmp_path, monkeypatch):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    a, b, c = "a" * 64, "b" * 64, "c" * 64
+    _fake_clusters(monkeypatch, page, [(a, b), (a, None), (a, None), (a, c)])
+    assert _step4(page)["label"] == "Awaiting evaluation"
+    m = _step4(page)
+    assert m["state"] == "rejected" and m["label"] == "Rejected, previous adapter kept"
+    assert m["active_sha256"] == a and m["decided_sha256"] == b
+    assert _step4(page)["state"] == "rejected"
+    # the next round's candidate starts the wait again
+    assert _step4(page)["state"] == "awaiting"
+
+
+def test_the_tracker_follows_the_very_first_candidate(tmp_path, monkeypatch):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path)
+    b = "b" * 64
+    _fake_clusters(monkeypatch, page, [(None, None), (None, b), (None, None)])
+    assert _step4(page)["state"] is None  # nothing merged yet
+    assert _step4(page)["state"] == "awaiting"
+    m = _step4(page)  # rejected with nothing active: still nothing to pull
+    assert m["state"] == "rejected" and m["active_sha256"] is None
+
+
+def test_a_candidate_is_never_pulled_and_a_reject_keeps_the_pulled_adapter(
+        page_url, cluster_url, tmp_path):  # noqa: F811
+    """Against the real cluster: auto-pull keys on active_sha256 only."""
+    import requests
+
+    url, page = page_url
+    _register(cluster_url, "web", ["client-flask", "client-requests"])
+    first = _plain_round(cluster_url, tmp_path / "e", 0, (1, 2))
+    _post(f"{url}/api/pull", {})
+    _wait_job(url)
+    second = _plain_round(cluster_url, tmp_path / "e", 1, (3, 4), promote=False)
+    status = _get(f"{url}/api/status")
+    assert status["merge"]["label"] == "Awaiting evaluation"
+    assert status["clusters"]["web"]["active_sha256"] == first["sha256"]
+    assert status["pulled"]["sha256"] == first["sha256"] and status["pulled"]["current"] is True
+    r = requests.post(f"{cluster_url}/clusters/web/adapters/candidate/reject",
+                      json={"sha256": second["sha256"]}, timeout=10)
+    assert r.status_code == 200, r.text
+    status = _get(f"{url}/api/status")
+    assert status["merge"]["label"] == "Rejected, previous adapter kept"
+    assert status["pulled"]["sha256"] == first["sha256"] and status["pulled"]["current"] is True
+    assert page.latest_pulled("web", second["sha256"]) is None
+
+
+# --------------------------------------------------------------------------- #
+# D7: the page shows the run's privacy budget
+# --------------------------------------------------------------------------- #
+def test_page_status_reports_the_budget_and_disables_upload_when_exhausted(tmp_path):
+    from edge import upload
+    from tests.test_upload import ONE_ROUND, TWO_ROUNDS, FakeCluster
+
+    fake = FakeCluster()
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=fake)
+    adapters = [_adapter(tmp_path / f"live-{i}", "client-flask", seed=i, epsilon=ONE_ROUND)
+                for i in (1, 2, 3)]
+    assert page.status()["privacy"] == {"run_id": "run-1", "epsilon_spent": 0.0, "budget": 8.0,
+                                        "rounds_used": 0, "rounds_total": 2}
+    assert all(a["budget_ok"] and not a["uploaded"] for a in page.adapters())
+
+    for adapter in adapters[:2]:
+        upload.upload_adapter(adapter, cluster_url="http://cluster", http=fake,
+                              ledger_root=page.ledger_root, log=lambda _m: None)
+    spent = page.status()["privacy"]
+    assert spent["rounds_used"] == 2 and spent["rounds_total"] == 2
+    assert spent["epsilon_spent"] == pytest.approx(TWO_ROUNDS, abs=1e-3)
+    by_id = {a["id"]: a for a in page.adapters()}
+    # the two that were sent may be re-sent (a retry charges nothing); the third may not
+    assert by_id["live-1/client-flask"]["uploaded"] and by_id["live-1/client-flask"]["budget_ok"]
+    assert by_id["live-2/client-flask"]["uploaded"] and by_id["live-2/client-flask"]["budget_ok"]
+    third = by_id["live-3/client-flask"]
+    assert third["budget_ok"] is False and "run-1" in third["budget_reason"]
+    with pytest.raises(ValueError, match="run-1"):
+        page.start_upload("live-3/client-flask")
+    assert page.job.snapshot()["running"] is False
+
+
+def test_the_page_trains_for_its_run(tmp_path):
+    page = webui.EdgePage(cluster_url="http://x", client_id="client-flask", adapters_root=tmp_path,
+                          python="py", run_id="check-1")
+    cmd = page.train_command(client="web/client-flask", max_steps=40, dp=True, cluster_adapter=None)
+    assert cmd[cmd.index("--run-id") + 1] == "check-1"
+    assert page.ledger_root == tmp_path / "privacy_ledger"
+
+
+def test_the_page_shows_the_budget_line():
+    html = webui.PAGE.read_text(encoding="utf-8")
+    assert 'id="budget"' in html and "Privacy budget" in html
+
+def test_the_page_signs_its_uploads_with_the_edges_key(tmp_path):
+    pytest.importorskip("security.auth.hmac_signer")
+    from tests.test_upload import FakeCluster
+
+    fake = FakeCluster()
+    _adapter(tmp_path / "live-1", "client-flask", seed=1, epsilon=3.2254)
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=fake, hmac_secret="k" * 64)
+    page.start_upload("live-1/client-flask")
+    deadline = time.monotonic() + 30
+    while page.job.snapshot()["running"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+    job = page.job.snapshot()
+    assert job["error"] is None, job
+    assert len(fake.uploads[0]["signature"]) == 64
+    # the key is not in the job log or the status the browser reads
+    assert "k" * 64 not in json.dumps(job) + json.dumps(page.status(), default=str)
+
+# --------------------------------------------------------------------------- #
+# U5: the developer logs in to the edge page (JWT)
+# --------------------------------------------------------------------------- #
+DEV_PASSWORD = "developer pass phrase"
+
+
+def _request(url, method="GET", body=None, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+@pytest.fixture
+def login_page(tmp_path):
+    security_users = pytest.importorskip("security.auth.users")
+    from tests.test_upload import FakeCluster
+
+    users = security_users.UserStore(tmp_path / "users.json")
+    users.add("dev-flask", DEV_PASSWORD, "developer", subject="client-flask")
+    users.add("dev-numpy", DEV_PASSWORD, "developer", subject="client-numpy")
+    users.add("operator", DEV_PASSWORD, "operator")
+    _adapter(tmp_path / "live-1", "client-flask", seed=1, epsilon=3.2254)
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster(), users=users)
+    httpd = webui.serve(page, "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}", page, users
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def _token(url, username="dev-flask", password=DEV_PASSWORD):
+    status, body = _request(f"{url}/api/login", "POST", {"username": username,
+                                                         "password": password})
+    assert status == 200, body
+    return body["token"]
+
+
+def test_the_edge_page_logs_a_developer_in(login_page):
+    url, _, _ = login_page
+    status, body = _request(f"{url}/api/login", "POST",
+                            {"username": "dev-flask", "password": DEV_PASSWORD})
+    assert status == 200 and body["role"] == "developer" and body["expires_at"]
+    for bad in ({"username": "dev-flask", "password": "wrong"}, {"username": "ghost",
+                                                                 "password": DEV_PASSWORD}, {}):
+        assert _request(f"{url}/api/login", "POST", bad)[0] == 401
+
+
+def test_the_edge_pages_api_needs_the_token(login_page):
+    url, page, _ = login_page
+    for method, path, body in (("GET", "/api/status", None), ("GET", "/api/adapters", None),
+                               ("GET", "/api/job", None),
+                               ("POST", "/api/upload", {"adapter": "live-1/client-flask"}),
+                               ("POST", "/api/pull", {}),
+                               ("POST", "/api/train", {"client": "web/client-flask"})):
+        assert _request(f"{url}{path}", method, body)[0] == 401, path
+    assert page.job.snapshot()["kind"] is None          # nothing was started
+    with urllib.request.urlopen(url, timeout=10) as r:   # the page itself loads: it shows the form
+        assert b"CLASP Edge" in r.read()
+    assert _request(f"{url}/api/health")[1] == {"status": "ok", "login_required": True}
+    token = _token(url)
+    status, adapters = _request(f"{url}/api/adapters", token=token)
+    assert status == 200 and [a["id"] for a in adapters["adapters"]] == ["live-1/client-flask"]
+    assert _request(f"{url}/api/status", token=token)[0] == 200
+
+
+def test_another_clients_developer_or_an_operator_gets_403(login_page):
+    url, _, _ = login_page
+    for who in ("dev-numpy", "operator"):
+        status, body = _request(f"{url}/api/adapters", token=_token(url, who))
+        assert status == 403, who
+        assert "client-flask" in body["detail"]
+
+
+def test_an_expired_or_tampered_token_is_401_on_the_edge_page(login_page):
+    from security.auth.jwt_handler import JWTConfig
+    from security.auth.users import issue_token
+
+    url, page, users = login_page
+    expired = issue_token(users, "dev-flask", DEV_PASSWORD,
+                          JWTConfig(secret_key=page.jwt.secret_key, token_expiry_minutes=-1))
+    status, body = _request(f"{url}/api/status", token=expired)
+    assert status == 401 and "expired" in body["detail"]
+    assert _request(f"{url}/api/status", token=_token(url)[:-3] + "abc")[0] == 401
+
+
+def test_without_a_users_file_the_edge_page_runs_open(page_url):
+    url, _ = page_url
+    assert _request(f"{url}/api/adapters")[0] == 200
+    assert _request(f"{url}/api/health")[1] == {"status": "ok", "login_required": False}
+    status, body = _request(f"{url}/api/login", "POST", {"username": "x", "password": "y"})
+    assert status == 404 and "not enabled" in body["detail"]
+
+
+def test_the_edge_page_has_a_login_form():
+    html = webui.PAGE.read_text(encoding="utf-8")
+    assert 'id="login"' in html and 'type="password"' in html and "sessionStorage" in html
+    assert "localStorage" not in html
+
+# --------------------------------------------------------------------------- #
+# C1: the edge page over HTTPS (a server certificate; people log in)
+# --------------------------------------------------------------------------- #
+def test_the_edge_page_serves_https_when_given_a_page_certificate(tmp_path):
+    import ssl
+
+    pytest.importorskip("cryptography")
+    ca_mod = pytest.importorskip("security.mtls.ca")
+    certs_mod = pytest.importorskip("security.mtls.certs")
+    from cryptography.hazmat.primitives import serialization
+
+    from tests.test_upload import FakeCluster
+
+    ca_key, ca_cert = ca_mod.create_ca(common_name="clasp-dev-ca", key_size=2048)
+    key, cert = certs_mod.generate_service_cert(ca_key, ca_cert, "client-flask-page",
+                                                sans=["localhost", "127.0.0.1"])
+    (tmp_path / "ca.pem").write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "page.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "page.key").write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster())
+    httpd = webui.serve(page, "127.0.0.1", 0, tls=(tmp_path / "page.pem", tmp_path / "page.key"))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        port = httpd.server_address[1]
+        ctx = ssl.create_default_context(cafile=str(tmp_path / "ca.pem"))   # no client certificate
+        with urllib.request.urlopen(f"https://localhost:{port}/api/health", timeout=10,
+                                    context=ctx) as r:
+            assert json.loads(r.read())["status"] == "ok"
+        with pytest.raises(OSError):                                        # plain HTTP is refused
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5)
+        # ... and a client that says nothing does not stall the page for others
+        import socket
+
+        idle = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            with urllib.request.urlopen(f"https://localhost:{port}/api/health", timeout=10,
+                                        context=ctx) as r:
+                assert r.status == 200
+        finally:
+            idle.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_page_tls_comes_from_flags_or_the_environment_and_is_all_or_nothing(tmp_path, monkeypatch):
+    cert, key = tmp_path / "page.pem", tmp_path / "page.key"
+    cert.write_text("x", encoding="utf-8")
+    key.write_text("x", encoding="utf-8")
+    assert webui.page_tls(None, None, {}) is None
+    assert webui.page_tls(cert, key, {}) == (cert, key)
+    assert webui.page_tls(None, None, {"CLASP_PAGE_TLS_CERT": str(cert),
+                                       "CLASP_PAGE_TLS_KEY": str(key)}) == (cert, key)
+    with pytest.raises(ValueError, match="both"):
+        webui.page_tls(cert, None, {})
+    with pytest.raises(ValueError, match="not found"):
+        webui.page_tls(tmp_path / "no.pem", key, {})
+
+
+def test_a_second_page_on_the_same_port_is_refused(tmp_path):
+    """On Windows a reusable listening socket lets two pages share one port, and
+    requests land on either: the second page must fail to start instead."""
+    from tests.test_upload import FakeCluster
+
+    page = webui.EdgePage(cluster_url="http://cluster", client_id="client-flask",
+                          adapters_root=tmp_path, http=FakeCluster())
+    first = webui.serve(page, "127.0.0.1", 0)
+    try:
+        with pytest.raises(OSError):
+            webui.serve(page, "127.0.0.1", first.server_address[1]).server_close()
+    finally:
+        first.server_close()

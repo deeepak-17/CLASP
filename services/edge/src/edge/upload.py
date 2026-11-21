@@ -20,6 +20,19 @@ What it does, in order:
 3. ``POST /clusters/{id}/uploads`` — the cluster-addressed route, which answers
    404 for an unregistered cluster instead of opening a new one.
 
+A differentially private adapter is charged to this laptop's privacy ledger
+(D7, U3: epsilon at most 8 over the whole run of 2 rounds, per client). Before
+anything is sent, the round is composed with the run's earlier uploads
+(``security.BudgetLedger``); a round that does not fit is refused here, with no
+network call. The upload carries the run's cumulative epsilon, and the ledger
+is charged only once the cluster has accepted it (C8: the cost is incurred by
+what leaves the laptop, so a rehearsal training or a refused upload is free).
+Sending the same adapter again charges nothing.
+
+With this edge's upload key (``--hmac-key``, by default ``hmac.key`` in
+``--mtls-dir``) the body is signed (U4, ``edge.wire.sign_upload``) and the
+cluster refuses it if a tensor or the sample count was changed on the way.
+
 Over mTLS (``--mtls-dir``, the per-edge directory ``scripts/make_dev_certs.sh``
 writes) the cluster checks that ``client_id`` is the CN of this edge's
 certificate, so the certificate decides who may upload as whom.
@@ -31,6 +44,7 @@ not registered yet), 409 (stale round: someone aggregated in between), 403
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -43,8 +57,13 @@ from typing import Dict, Optional
 import requests
 
 from edge import transport, wire
+from edge.config import REPO_ROOT
 
 DEFAULT_CLUSTER_URL = os.environ.get("CLASP_CLUSTER_URL", "http://localhost:8002")
+#: This laptop's privacy ledgers: ``<root>/<client_id>/<run_id>.json``.
+DEFAULT_LEDGER_ROOT = Path(os.environ.get(
+    "CLASP_PRIVACY_LEDGER", REPO_ROOT / "services" / "edge" / "artifacts" / "privacy_ledger"))
+DEFAULT_RUN_ID = "run-1"
 
 
 class UploadError(RuntimeError):
@@ -118,6 +137,130 @@ def manifest_num_examples(manifest: Dict) -> Optional[int]:
     return int(n) if n else None
 
 
+def adapter_sha256(adapter_dir: Path | str) -> str:
+    """Digest of the adapter's weights file: what the ledger knows an upload by."""
+    digest = hashlib.sha256()
+    with open(Path(adapter_dir) / "adapter_model.safetensors", "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class BudgetPlan:
+    """What sending one DP adapter does to the run's privacy budget."""
+    ledger: object            # security.BudgetLedger
+    record: object            # security.RoundRecord
+    run_id: str
+    epsilon_cumulative: float  # the run's epsilon once this adapter is counted
+    rounds_accounted: int
+    already_charged: bool      # this very adapter was accepted before: a retry
+
+
+def run_accounting(manifest: Dict) -> Dict:
+    """The manifest's ``privacy`` block with one round of accountant history.
+
+    ``edge.train_client`` records ``sample_rate`` and ``steps`` in the block.
+    Manifests written before it did keep the same two numbers under
+    ``results`` (``results.dp.sample_rate``, ``results.optimizer_steps``), so an
+    adapter trained then is still a known DP round and is composed like any
+    other. A round calibrated to the whole budget on its own simply leaves no
+    room for a second one.
+    """
+    recorded = dict(manifest.get("privacy") or {})
+    results = manifest.get("results") or {}
+    if recorded.get("sample_rate") is None:
+        recorded["sample_rate"] = (results.get("dp") or {}).get("sample_rate")
+    if recorded.get("steps") is None:
+        recorded["steps"] = results.get("optimizer_steps")
+    return recorded
+
+
+def budget_plan(adapter_dir: Path | str, manifest: Dict, client_id: str,
+                ledger_root: Optional[Path] = None) -> Optional[BudgetPlan]:
+    """Fit a DP adapter into its run's budget, or raise :class:`UploadError`.
+
+    ``None`` for an adapter trained without DP: it spends nothing. Nothing is
+    written and nothing is sent here; ``plan.ledger.charge(plan.record)``
+    records the round once the cluster has accepted it.
+    """
+    recorded = run_accounting(manifest)
+    if recorded.get("epsilon") is None:
+        return None
+    try:
+        from security import BudgetExhaustedError, BudgetLedger, LedgerError, RoundRecord, ledger_path
+    except ImportError as exc:
+        raise UploadError(
+            "a differentially private adapter needs the security library's privacy ledger "
+            "(security.BudgetLedger)", hint="update this checkout and reinstall `security`") from exc
+    missing = [k for k in ("noise_multiplier", "sample_rate", "steps") if recorded.get(k) is None]
+    if missing:
+        raise UploadError(
+            f"{adapter_dir} was trained before the run's privacy budget was recorded "
+            f"(its manifest has no {', '.join(missing)})",
+            hint="train it again with this version: the upload composes each round's "
+                 "noise, sample rate and steps into the run's epsilon")
+    run_id = str(recorded.get("run_id") or DEFAULT_RUN_ID)
+    root = Path(ledger_root) if ledger_root is not None else DEFAULT_LEDGER_ROOT
+    try:
+        ledger = BudgetLedger(ledger_path(root, client_id, run_id),
+                              rounds_total=int(recorded.get("rounds_total") or 2))
+    except (LedgerError, ValueError) as exc:
+        raise UploadError(str(exc)) from exc
+    sha = adapter_sha256(adapter_dir)
+    records = ledger.records()
+    epsilon_round = float(recorded["epsilon"])
+    for position, charged in enumerate(records, start=1):
+        if charged.adapter_sha256 == sha:
+            # a retry: re-send what was recorded for it, charge nothing
+            history = [(r.noise_multiplier, r.sample_rate, r.steps) for r in records[:position]]
+            from security.dp.ledger import _compose
+
+            cumulative = max(_compose(history, ledger.delta, ledger.accountant), epsilon_round)
+            return BudgetPlan(ledger, charged, run_id, round(cumulative, 6), position, True)
+    record = RoundRecord(
+        round=len(records) + 1, noise_multiplier=float(recorded["noise_multiplier"]),
+        sample_rate=float(recorded["sample_rate"]), steps=int(recorded["steps"]),
+        epsilon_round=epsilon_round, adapter_sha256=sha,
+        uploaded_at=datetime.now(timezone.utc).isoformat())
+    try:
+        ledger.check(record)
+    except BudgetExhaustedError as exc:
+        raise UploadError(
+            f"{client_id}'s privacy budget for run {run_id!r} does not allow this upload: {exc}",
+            hint=f"epsilon {ledger.cumulative_epsilon():.2f} of {ledger.budget:g} is spent in "
+                 f"run {run_id!r}. A new run has a new budget: train with "
+                 f"--run-id <new name> (edge.train_client) and upload that adapter") from exc
+    # never below the round's own epsilon (the two come from differently rounded inputs)
+    cumulative = max(ledger.cumulative_epsilon(record), epsilon_round)
+    return BudgetPlan(ledger, record, run_id, round(cumulative, 6), len(records) + 1, False)
+
+
+HMAC_KEY_NAME = "hmac.key"
+
+
+def read_hmac_key(explicit: Optional[Path], mtls_dir: Optional[Path]) -> Optional[str]:
+    """This edge's upload key: ``--hmac-key`` if given, else ``hmac.key`` beside
+    the certificates when it is there, else ``None`` (the upload goes unsigned).
+
+    A key file that was named but is missing or empty is an error: an upload
+    meant to be signed must not quietly go unsigned.
+    """
+    path = Path(explicit) if explicit is not None else (
+        Path(mtls_dir) / HMAC_KEY_NAME if mtls_dir is not None else None)
+    if path is None or (explicit is None and not path.exists()):
+        return None
+    try:
+        key = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise UploadError(f"--hmac-key {path} cannot be read ({type(exc).__name__})",
+                          hint="copy this edge's hmac.key from its bundle (edge-certs/<client>/)") from exc
+    if not key:
+        raise UploadError(f"upload key file {path} is empty",
+                          hint="copy this edge's hmac.key from its bundle (edge-certs/<client>/)")
+    return key
+
+
 def _http_error(r: requests.Response) -> str:
     try:
         detail = r.json().get("detail", r.text)
@@ -126,14 +269,61 @@ def _http_error(r: requests.Response) -> str:
     return detail if isinstance(detail, str) else json.dumps(detail)
 
 
+def certificate_names(http, cluster_url: str, timeout: float = 5.0) -> Optional[list]:
+    """The names and addresses the cluster's certificate lists (its SANs), read
+    with this edge's own certificate but without checking the address; ``None``
+    when they cannot be read (no mTLS session, or the handshake fails anyway)."""
+    import socket
+    import ssl
+    from urllib.parse import urlsplit
+
+    files = getattr(http, "clasp_mtls", None)
+    target = urlsplit(cluster_url)
+    if not files or not target.hostname:
+        return None
+    try:
+        context = ssl.create_default_context(cafile=str(files["ca_cert"]))
+        context.check_hostname = False  # the chain is still verified against the CLASP CA
+        context.load_cert_chain(str(files["client_cert"]), str(files["client_key"]))
+        with socket.create_connection((target.hostname, target.port or 443), timeout=timeout) as raw:
+            with context.wrap_socket(raw) as tls:
+                peer = tls.getpeercert() or {}
+    except (OSError, ValueError):
+        return None
+    return [value for _kind, value in peer.get("subjectAltName", ())]
+
+
+def tls_failure_hint(http, cluster_url: str, exc: Exception) -> str:
+    """What to do about a failed TLS handshake.
+
+    The common case on demo day: the certificates were made for another
+    address (yesterday's hotspot), so the cluster's certificate does not list
+    the address this laptop dialled. Then the hint names that address, what the
+    certificate does list, and the command that issues new certificates.
+    """
+    from urllib.parse import urlsplit
+
+    general = ("check --mtls-dir (this edge's ca.pem/client.pem/client.key) "
+               "and that laptop A's IP is in the cluster certificate's SANs")
+    text = str(exc).lower()
+    if "mismatch" not in text and "doesn't match" not in text and "not valid for" not in text:
+        return general
+    address = urlsplit(cluster_url).hostname
+    names = certificate_names(http, cluster_url)
+    if not address or names is None:
+        return general
+    return (f"{address} is not in the cluster's certificate (it lists: {', '.join(names) or 'nothing'}). "
+            f"On laptop A run: CLASP_LAN_IPS={address} scripts/make_dev_certs.sh, "
+            f"restart the services, and copy the new edge bundle.")
+
+
 def list_clusters(http: requests.Session, cluster_url: str, timeout: float = 15.0) -> Dict:
     url = f"{cluster_url.rstrip('/')}/clusters"
     try:
         r = http.get(url, timeout=timeout)
     except requests.exceptions.SSLError as exc:
         raise UploadError(f"TLS handshake with {cluster_url} failed: {exc}",
-                          hint="check --mtls-dir (this edge's ca.pem/client.pem/client.key) "
-                               "and that laptop A's IP is in the cluster certificate's SANs") from exc
+                          hint=tls_failure_hint(http, cluster_url, exc)) from exc
     except requests.exceptions.ConnectionError as exc:
         raise UploadError(f"cluster not reachable at {cluster_url}: {exc}",
                           hint="is laptop A's stack up, on the same network, and is port 8002 "
@@ -175,8 +365,16 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                    seed: Optional[int] = None, http: Optional[requests.Session] = None,
                    timeout: float = transport.DEFAULT_UPLOAD_TIMEOUT,
                    allow_foreign_base: bool = False, allow_reset: bool = False,
-                   log=print) -> Dict:
-    """Upload one adapter directory; returns the cluster's answer plus what was sent."""
+                   ledger_root: Optional[Path] = None,
+                   hmac_secret: Optional[str] = None, log=print) -> Dict:
+    """Upload one adapter directory; returns the cluster's answer plus what was sent.
+
+    ``hmac_secret`` is this edge's upload key (:func:`read_hmac_key`); with it
+    the body is signed.
+
+    ``ledger_root`` holds this laptop's privacy ledgers (default
+    ``DEFAULT_LEDGER_ROOT``); see the module docstring for when it is charged.
+    """
     adapter_dir = Path(adapter_dir)
     if not (adapter_dir / "adapter_model.safetensors").exists():
         raise UploadError(f"{adapter_dir} has no adapter_model.safetensors",
@@ -198,6 +396,8 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
                      "default) or on the bare base; --allow-foreign-base sends it as a full "
                      "adapter anyway") from exc
         base = None
+    # D7: a DP round must fit the run's budget before anything goes on the wire.
+    plan = budget_plan(adapter_dir, manifest, client_id, ledger_root)
 
     clusters = list_clusters(http, cluster_url)
     target = resolve_target(clusters, client_id, cluster_id, manifest_cluster(manifest))
@@ -215,14 +415,26 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
         f"({target.how}) at {cluster_url}")
 
     privacy = wire.privacy_from_training_manifest(adapter_dir)
+    if plan is not None:
+        privacy = wire.privacy_block({**privacy, "epsilon_cumulative": plan.epsilon_cumulative,
+                                      "rounds_accounted": plan.rounds_accounted,
+                                      "sample_rate": plan.record.sample_rate,
+                                      "steps": plan.record.steps})
     payload = wire.upload_payload_from_dir(
         adapter_dir, client_id=client_id, cluster_id=target.cluster_id, round_id=rnd,
         num_examples=n, seed=seed if seed is not None else manifest.get("seed"),
-        privacy=privacy, base=base)
+        privacy=privacy, base=base, hmac_secret=hmac_secret)
     size_mb = sum(len(t["data_b64"]) for t in payload["tensors"]) * 3 / 4 / 1e6
     log(f"  {len(payload['tensors'])} tensors, {payload['num_layers']} layers, "
         f"rank {payload['rank']}, {size_mb:.1f} MB fp32, weight {n} blocks, "
         f"epsilon {privacy['epsilon'] if privacy['epsilon'] is not None else 'none (DP off)'}")
+    log("  signed with this edge's upload key" if hmac_secret
+        else "  not signed (no upload key on this laptop)")
+    if plan is not None:
+        log(f"  privacy budget, run {plan.run_id!r}: epsilon {plan.epsilon_cumulative:.2f} of "
+            f"{plan.ledger.budget:g} after this upload, round {plan.rounds_accounted} of "
+            f"{plan.ledger.rounds_total}"
+            + (" (already sent once: not charged again)" if plan.already_charged else ""))
     log(f"  trained on round {base['round_id']}'s merged adapter {base['sha256'][:12]} "
         f"(alpha {base['alpha']:g}): the cluster adds it onto that adapter (FedProx)"
         if base else "  a full adapter (trained on the bare base): averaged with the round's others")
@@ -236,11 +448,14 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
     seconds = round(time.monotonic() - t0, 2)
     if r.status_code == 201:
         body = r.json()
+        if plan is not None and not plan.already_charged:
+            # C8: charged now that the update has left the laptop and was accepted
+            plan.ledger.charge(plan.record)
         log(f"  accepted in {seconds}s: {body['pending_uploads']} upload(s) now pending "
             f"in {target.cluster_id!r} round {body['round_id']}")
         return {"response": body, "cluster_id": target.cluster_id, "client_id": client_id,
                 "round_id": rnd, "num_examples": n, "privacy": privacy, "seconds": seconds,
-                "cluster_url": cluster_url, "base": base}
+                "cluster_url": cluster_url, "base": base, "signed": bool(hmac_secret)}
     detail = _http_error(r)
     hints = {
         404: "the cluster was not registered; press 'Register clusters' in demo_ui on laptop A",
@@ -254,8 +469,16 @@ def upload_adapter(adapter_dir: Path | str, *, cluster_url: str = DEFAULT_CLUSTE
         403: ("this edge's certificate is for a different client - use --client-id matching "
               "the certificate's CN" if "authenticated identity" in detail else
               "this client is assigned to another cluster"),
-        401: "the cluster requires a client certificate: pass --mtls-dir",
-        422: "the cluster could not parse or combine this adapter with the round's others",
+        401: ("this laptop's upload key is not the one laptop A holds for it: copy the current "
+              "edge bundle (edge-certs/<client>/hmac.key) or pass --hmac-key"
+              if "upload_signature_invalid" in detail else
+              "the cluster requires a client certificate: pass --mtls-dir"),
+        422: ("the cluster counts this client's run over its privacy budget; a new run "
+              "(train with --run-id <new name>) has a new budget"
+              if "privacy_budget_exceeded" in detail else
+              "the cluster expects the run's cumulative epsilon with a DP upload: update this "
+              "edge and train the adapter again" if "privacy_budget_unreported" in detail else
+              "the cluster could not parse or combine this adapter with the round's others"),
         429: "the cluster is full for this round",
     }
     raise UploadError(f"cluster refused the upload ({r.status_code}): {detail}",
@@ -271,7 +494,7 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
     ``GET /clusters/{id}/adapters/active`` on the same cluster service (and the
     same mTLS session) the upload went to, so an edge needs no route to the
     registry. Written to ``<out_root>/<cluster>-round<N>-<sha12>/`` (the digest
-    in the name: a restarted cluster or a rollback can serve a different adapter
+    in the name: a restarted cluster or an operator restore can serve a different adapter
     under a round number this laptop already has) with
     ``adapter_config.json`` built from the broadcast's own ``peft_config``
     (``wire.broadcast_to_peft``), plus ``pull_manifest.json`` recording which
@@ -288,7 +511,8 @@ def pull_cluster_adapter(out_root: Path | str, *, cluster_id: str,
         raise UploadError(f"pull from {url} failed: {exc}",
                           hint="is laptop A's stack up and reachable on port 8002?") from exc
     if r.status_code != 200:
-        hints = {404: "laptop A has not merged this cluster yet; wait for the round to close",
+        hints = {404: ("no merge of this cluster has been promoted yet; wait for laptop A "
+                       "to merge, evaluate and promote"),
                  403: "this client is assigned to another cluster and may not read this one"}
         raise UploadError(f"cluster refused the pull ({r.status_code}): {_http_error(r)}",
                           status=r.status_code, hint=hints.get(r.status_code, ""))
@@ -325,7 +549,10 @@ def session_for(mtls_dir: Optional[Path], server_hostname: Optional[str] = None)
     if missing:
         raise UploadError(f"missing certificate files {missing}",
                           hint="copy .runtime/certs/edges/<client_id>/ from laptop A")
-    return transport.mtls_session(**files, server_hostname=server_hostname)
+    session = transport.mtls_session(**files, server_hostname=server_hostname)
+    #: where this session's certificates are, for ``certificate_names``
+    session.clasp_mtls = files
+    return session
 
 
 def main(argv=None) -> int:
@@ -349,15 +576,22 @@ def main(argv=None) -> int:
                          "this cluster, as a full adapter")
     ap.add_argument("--allow-reset", action="store_true",
                     help="send a bare-base adapter even though the cluster has merged rounds")
+    ap.add_argument("--hmac-key", type=Path, default=None,
+                    help="this edge's upload key; default: hmac.key in --mtls-dir when present")
+    ap.add_argument("--ledger-root", type=Path, default=None,
+                    help="this laptop's privacy ledgers (default: services/edge/artifacts/"
+                         "privacy_ledger, env CLASP_PRIVACY_LEDGER)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON")
     args = ap.parse_args(argv)
     try:
         http = session_for(args.mtls_dir, args.server_hostname)
+        key = read_hmac_key(args.hmac_key, args.mtls_dir)
         out = upload_adapter(args.adapter, cluster_url=args.cluster_url, client_id=args.client_id,
+                             hmac_secret=key,
                              cluster_id=args.cluster, num_examples=args.num_examples,
                              round_id=args.round, http=http,
                              allow_foreign_base=args.allow_foreign_base,
-                             allow_reset=args.allow_reset,
+                             allow_reset=args.allow_reset, ledger_root=args.ledger_root,
                              # with --json, stdout carries only the JSON
                              log=(lambda m: print(m, file=sys.stderr)) if args.json else print)
     except UploadError as exc:

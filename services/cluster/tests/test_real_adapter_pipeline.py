@@ -89,6 +89,7 @@ def _reset_state():
     _state.uploads.clear()
     _state.round_id = 0
     _state.active = None
+    _state.candidate = None
     _state.last_manifest = None
 
 

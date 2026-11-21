@@ -3,21 +3,27 @@
 Layout on the persistent docker volume (``CLASP_REGISTRY_DATA``)::
 
     <root>/
+      registry.db                   # metadata: versions, active pointers,
+                                    # decisions (unless CLASP_REGISTRY_DB is set)
       adapters/
         <name>/
           v1/
             adapter.safetensors     # opaque payload (client-serialized)
-            metadata.json           # AdapterMetadata, immutable
+            metadata.json           # AdapterMetadata sidecar, never read on requests
           v2/ ...
-          active                    # text file: the active version int (D5 promotion)
+          gc.jsonl                  # retention audit log (still a file)
+
+Volumes written before the database also hold ``active`` and
+``promotions.jsonl`` per adapter; ``registry.migrate`` imports them once, on
+the first start against an empty database, and they are not written again.
 
 Invariants (MASTER_PLAN D9):
   * safetensors blobs are **never overwritten in place** — a new version is a
     new directory. ``save`` refuses to clobber an existing version.
   * every payload gets a sha256 digest recorded in its metadata for audit.
 
-Storage is intentionally stdlib-only: the registry treats adapter tensors as
-opaque bytes, so this service never needs torch/numpy/safetensors installed.
+The registry treats adapter tensors as opaque bytes, so storage never needs
+torch/numpy/safetensors installed.
 """
 from __future__ import annotations
 
@@ -28,6 +34,8 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+
+from sqlalchemy import Engine
 
 from contracts import (
     AdapterKind,
@@ -41,6 +49,19 @@ from contracts import (
     utcnow_iso,
 )
 
+from .config import data_root
+from .db import DB_ENV, create_all, make_engine
+from .durable import fsync_path as _fsync
+from .errors import (  # noqa: F401  (re-exported: callers import these from registry.storage)
+    AdapterNotFound,
+    InvalidAdapterName,
+    KindMismatch,
+    StorageError,
+    VersionExists,
+)
+from .migrate import import_volume
+from .repository import MetadataRepository, SqlMetadataRepository
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: Header size bound. A real 24-layer adapter's header is ~30 KB; parsing a
 #: hostile 100 MB header would cost hundreds of MB of RAM.
@@ -48,45 +69,6 @@ _ST_MAX_HEADER = 8 * 1024 * 1024
 _ST_DTYPE_BYTES = {"BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1, "I16": 2,
                    "U16": 2, "F16": 2, "BF16": 2, "I32": 4, "U32": 4, "F32": 4, "I64": 8,
                    "U64": 8, "F64": 8}
-_IS_WINDOWS = os.name == "nt"
-
-
-class StorageError(Exception):
-    """Base class for registry storage errors."""
-
-
-class AdapterNotFound(StorageError):
-    pass
-
-
-class KindMismatch(StorageError):
-    """A name's versions all share one AdapterKind; a save tried to change it."""
-
-
-class InvalidAdapterName(StorageError):
-    """Name fails the path-safe pattern — a client error, never a 500."""
-
-
-class VersionExists(StorageError):
-    """Refused to overwrite an existing immutable version (D9)."""
-
-
-def _fsync(path: Path) -> None:
-    """Force a file's contents, or a directory's entries, onto the disk.
-
-    Atomic renames stop a crash from leaving a half-written version; this stops
-    a power cut from losing a write the registry already acknowledged. Windows
-    cannot open a directory handle (NTFS journals its own metadata), so
-    directories are skipped there; files need a writable handle to flush.
-    """
-    is_dir = path.is_dir()
-    if is_dir and _IS_WINDOWS:
-        return
-    fd = os.open(path, os.O_RDWR if _IS_WINDOWS else os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 def _validate_name(name: str) -> str:
@@ -136,14 +118,45 @@ def is_safetensors(payload: bytes) -> bool:
     return cursor == len(payload) - 8 - header_len
 
 
-class RegistryStore:
-    """Filesystem-backed adapter store rooted at a persistent directory."""
+def _db_url(root: Path) -> str:
+    """``CLASP_REGISTRY_DB`` if set, else SQLite next to this store's adapters."""
+    return os.environ.get(DB_ENV) or f"sqlite:///{(root / 'registry.db').as_posix()}"
 
-    def __init__(self, root: str | os.PathLike[str] | None = None) -> None:
-        root = root or os.environ.get("CLASP_REGISTRY_DATA", "/data/registry")
-        self.root = Path(root)
+
+class RegistryStore:
+    """Adapter store: weight files under a persistent directory, metadata in a database.
+
+    Without an explicit ``repo`` the store opens its own SQLite database (see
+    ``_db_url``) and, while that database holds no adapters, imports the
+    volume the file-based registry wrote (``registry.migrate``).
+    """
+
+    def __init__(
+        self,
+        root: str | os.PathLike[str] | None = None,
+        repo: MetadataRepository | None = None,
+    ) -> None:
+        self.root = data_root(root)
         self.adapters_dir = self.root / "adapters"
-        self.adapters_dir.mkdir(parents=True, exist_ok=True)
+        self.adapters_dir.mkdir(parents=True, exist_ok=True)  # also creates root
+        self._engine: Engine | None = None
+        if repo is None:
+            self._engine = make_engine(_db_url(self.root))
+            create_all(self._engine)
+            repo = SqlMetadataRepository(self._engine)
+        self.repo: MetadataRepository = repo
+        try:
+            if not repo.list_adapters():
+                import_volume(self.root, repo)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        """Dispose of the engine this store opened (Windows: before removing its files)."""
+        if self._engine is not None:
+            self._engine.dispose()
+            self._engine = None
 
     # -- paths -------------------------------------------------------------- #
     def _adapter_dir(self, name: str) -> Path:
@@ -154,55 +167,39 @@ class RegistryStore:
 
     # -- queries ------------------------------------------------------------ #
     def list_adapters(self) -> list[str]:
-        if not self.adapters_dir.exists():
-            return []
-        return sorted(p.name for p in self.adapters_dir.iterdir() if p.is_dir())
+        return self.repo.list_adapters()
 
     def list_versions(self, name: str) -> list[int]:
-        d = self._adapter_dir(name)
-        if not d.exists():
+        versions = self.repo.list_versions(_validate_name(name))
+        # A name with a directory but no registered version (its first save
+        # failed) lists no versions, as before; only a name never seen is unknown.
+        if not versions and name not in self.repo.list_adapters() \
+                and not self._adapter_dir(name).is_dir():
             raise AdapterNotFound(name)
-        vs = [int(p.name[1:]) for p in d.iterdir() if p.is_dir() and re.fullmatch(r"v\d+", p.name)]
-        return sorted(vs)
+        return versions
 
     def latest_version(self, name: str) -> int:
         vs = self.list_versions(name)
         return vs[-1] if vs else 0
 
     def get_metadata(self, name: str, version: int) -> AdapterMetadata:
-        meta_path = self._version_dir(name, version) / "metadata.json"
-        if not meta_path.exists():
-            raise AdapterNotFound(f"{name} v{version}")
-        return _metadata_from_dict(json.loads(meta_path.read_text()))
+        return self.repo.get_metadata(_validate_name(name), version)
 
     def load_payload(self, name: str, version: int) -> bytes:
+        """The version's weights. The row is checked first: a directory with no
+        row (an unregistered write, awaiting the orphan sweep) is never served."""
+        self.get_metadata(name, version)  # AdapterNotFound without a row
         blob = self._version_dir(name, version) / "adapter.safetensors"
         if not blob.exists():
             raise AdapterNotFound(f"{name} v{version}")
         return blob.read_bytes()
 
-    # -- active pointer (promotion groundwork, D5 lands fully in W5) --------- #
+    # -- active pointer (D5) -------------------------------------------------- #
     def get_active(self, name: str) -> int | None:
-        p = self._adapter_dir(name) / "active"
-        if not p.exists():
-            return None
-        raw = p.read_text().strip()
-        try:  # L1: a corrupt/hand-edited pointer must not 500 the rollback path
-            return int(raw)
-        except ValueError as e:
-            raise StorageError(f"corrupt active pointer for {name!r}: {raw!r}") from e
+        return self.repo.get_active(_validate_name(name))
 
     def set_active(self, name: str, version: int) -> None:
-        if version not in self.list_versions(name):
-            raise AdapterNotFound(f"{name} v{version}")
-        # L2: atomic write (temp + os.replace) so the pointer is never truncated
-        # mid-write — the D5 rollback / D11 restore path must stay reliable.
-        target = self._adapter_dir(name) / "active"
-        tmp = target.with_suffix(".tmp")
-        tmp.write_text(str(version))
-        _fsync(tmp)
-        os.replace(tmp, target)
-        _fsync(target.parent)
+        self.repo.set_active(_validate_name(name), version)
 
     def check_kind(self, name: str, kind: AdapterKind) -> None:
         """Raise KindMismatch if ``name`` already holds versions of another kind."""
@@ -217,55 +214,90 @@ class RegistryStore:
                 f"{name} holds kind {existing.value!r}; refusing to add a {kind.value!r} version"
             )
 
-    def previous_version(self, name: str, version: int) -> int | None:
-        """The version immediately before ``version`` in this adapter's history.
-
-        Used by the D5 rule as the rollback target. None if ``version`` is the
-        first version (nothing to fall back to).
-        """
-        vs = self.list_versions(name)
-        earlier = [v for v in vs if v < version]
-        return max(earlier) if earlier else None
-
-    # -- promotion audit trail (D5/D9) --------------------------------------- #
+    # -- audit trail (D5/D9) -------------------------------------------------- #
     def append_log(self, name: str, log_name: str, line: str) -> None:
-        """Append one JSON line to an adapter's append-only log."""
+        """Append one JSON line to an adapter's append-only file log (e.g. gc.jsonl).
+
+        Promotion decisions are not file logs any more; see ``record_promotion``.
+        """
         log = self._adapter_dir(name) / log_name
         with log.open("a") as f:
             f.write(line + "\n")
         _fsync(log)
 
-    def record_promotion(self, name: str, decision: PromotionDecision) -> None:
-        """Append a PromotionDecision to this adapter's audit log (never rewritten)."""
-        self.append_log(name, "promotions.jsonl", json.dumps(_promotion_decision_to_dict(decision)))
+    def record_promotion(self, name: str, decision: PromotionDecision) -> int:
+        """Record a PromotionDecision in this adapter's audit trail (never rewritten).
+
+        Returns the decision's id (a cluster-sync row refers to it)."""
+        return self.repo.record_decision(_validate_name(name), decision)
 
     def list_promotions(self, name: str) -> list[PromotionDecision]:
-        log = self._adapter_dir(name) / "promotions.jsonl"
-        if not log.exists():
-            return []
-        return [
-            _promotion_decision_from_dict(json.loads(line))
-            for line in log.read_text().splitlines()
-            if line.strip()
-        ]
+        return self.repo.list_decisions(_validate_name(name))
 
     # -- mutation ----------------------------------------------------------- #
     def delete_version(self, name: str, version: int) -> None:
-        """Remove one version — retention/GC only; refuses the active version.
+        """Remove one version — retention/GC only; refuses the active version
+        and any version a composite is built from.
 
-        The directory is renamed to a hidden trash name first (atomic), so
-        ``list_versions`` never sees a half-deleted version, then removed.
+        The metadata row goes first, so the version disappears from every
+        listing at once; the directory is then renamed to a hidden trash name
+        (atomic) and removed.
         """
+        self.repo.delete_version(_validate_name(name), version)
         vdir = self._version_dir(name, version)
         if not vdir.exists():
-            raise AdapterNotFound(f"{name} v{version}")
-        if self.get_active(name) == version:
-            raise StorageError(f"refusing to delete the active version {name} v{version}")
+            return
         trash = Path(tempfile.mkdtemp(prefix=f".trash-v{version}-", dir=self._adapter_dir(name)))
         os.replace(vdir, trash / "v")
         shutil.rmtree(trash, ignore_errors=True)
 
+    def discard_unregistered(self, name: str, version: int) -> bool:
+        """Remove ``vN``'s directory if no row registers it; True if it was removed.
+
+        For a caller undoing its own ``write_version_files`` after the
+        registering transaction failed. A registered version is never touched.
+        """
+        if version in self.repo.list_versions(_validate_name(name)):
+            return False
+        vdir = self._version_dir(name, version)
+        if not vdir.exists():
+            return False
+        shutil.rmtree(vdir, ignore_errors=True)
+        return not vdir.exists()
+
     def save(
+        self,
+        name: str,
+        payload: bytes,
+        *,
+        set_active: bool = False,
+        client_privacy: list[dict] | None = None,
+        **fields,
+    ) -> AdapterMetadata:
+        """Write a new immutable version and register it. Assigns the next version number.
+
+        ``fields`` are ``write_version_files``'s keyword arguments. The version
+        is an inactive candidate unless ``set_active`` is true (operator use);
+        a promote is what normally makes it live. ``client_privacy`` (the
+        cluster's per-client run spend, D7) goes on the privacy ledger in the
+        same transaction: a version is never registered without its rows.
+        """
+        meta = self.write_version_files(name, payload, **fields)
+        # The version exists once its metadata row commits. If that fails, the
+        # published directory goes too, so no unregistered version is left.
+        try:
+            with self.repo.transaction():
+                self.repo.add_version(meta)
+                if client_privacy:
+                    self.repo.add_privacy_rows(name, meta.ref.version, client_privacy)
+                if set_active:
+                    self.repo.set_active(name, meta.ref.version)
+        except BaseException:
+            shutil.rmtree(self._version_dir(name, meta.ref.version), ignore_errors=True)
+            raise
+        return meta
+
+    def write_version_files(
         self,
         name: str,
         payload: bytes,
@@ -278,10 +310,14 @@ class RegistryStore:
         seed: int = 0,
         cluster_id: str | None = None,
         source_clients: tuple[str, ...] = (),
-        set_active: bool = True,
         composed_from: CompositeProvenance | None = None,
     ) -> AdapterMetadata:
-        """Write a new immutable version. Assigns the next version number."""
+        """Publish the next version's files (fsynced) and return its metadata; no row.
+
+        Until a caller registers the metadata (``repo.add_version``) the
+        directory is not a version: nothing lists or serves it, and
+        ``retention.sweep_orphans`` removes it.
+        """
         _validate_name(name)
         if not is_safetensors(payload):
             raise StorageError("payload is not a valid safetensors blob")
@@ -334,26 +370,16 @@ class RegistryStore:
             raise VersionExists(f"{name} v{version} already exists") from e
         _fsync(adapter_dir)        # the rename that named vN
         _fsync(self.adapters_dir)  # the adapter dir itself, on its first save
-        if set_active:
-            self.set_active(name, version)
         return meta
 
 
 # --------------------------------------------------------------------------- #
-# (de)serialization helpers — thin wrappers over the contracts' own JSON codecs
-# (contracts v1.1), kept as module functions so tests can fault-inject them.
+# serialization helpers — thin wrappers over the contracts' own JSON codecs
+# (contracts v1.1), used for the metadata.json sidecar and the API responses.
 # --------------------------------------------------------------------------- #
 def _metadata_to_dict(meta: AdapterMetadata) -> dict:
     return meta.to_json()
 
 
-def _metadata_from_dict(d: dict) -> AdapterMetadata:
-    return AdapterMetadata.from_json(d)
-
-
 def _promotion_decision_to_dict(decision: PromotionDecision) -> dict:
     return decision.to_json()
-
-
-def _promotion_decision_from_dict(d: dict) -> PromotionDecision:
-    return PromotionDecision.from_json(d)

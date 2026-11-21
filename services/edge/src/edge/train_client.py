@@ -491,21 +491,36 @@ def _security_dp():
     return DPConfig, PrivacyAccountant, get_privacy_engine, make_private
 
 
+def manifest_privacy(privacy: Optional[Dict], *, run_id: str, delta: float) -> Dict:
+    """The training manifest's ``privacy`` block.
+
+    A DP run records the round's epsilon and what the run's ledger composes it
+    from (``noise_multiplier``, ``sample_rate``, ``steps``), under the run it
+    belongs to. ``None`` (DP off, the ablation) is the contract's encoding:
+    ``epsilon`` None and no run.
+    """
+    if not privacy:
+        return {"epsilon": None, "delta": delta, "noise_multiplier": None,
+                "max_grad_norm": None}
+    return {**privacy, "run_id": run_id}
+
+
 def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
              log_every: int, *, epochs: int, batch_size: int, target_epsilon: float,
              delta: float, max_grad_norm: float,
-             max_steps: Optional[int] = None, fedprox_mu: float = 0.0) -> Dict:
+             max_steps: Optional[int] = None, fedprox_mu: float = 0.0,
+             rounds_total: int = 2) -> Dict:
     """DP-SGD over the client's packed blocks, via ``security.make_private``.
 
     P3's ``DPConfig`` carries the budget and ``make_private`` builds the
-    Opacus engine. The noise is calibrated so the run stays within
-    ``target_epsilon`` at ``delta`` (D7): Opacus's ``get_noise_multiplier``
-    over the engine's accountant, sample rate and epochs, i.e. exactly what
-    ``make_private_with_epsilon`` computes. ``security.make_private(...,
-    epochs=)`` would do it for us but crashes on Opacus 1.6; once P3 fixes
-    that, the calibration line can go. Without calibration ``make_private``
-    uses ``DPConfig.noise_multiplier`` as given and nothing enforces the
-    budget. The edge supplies the model, the optimizer, the data and the loop.
+    Opacus engine. ``target_epsilon`` at ``delta`` is the budget of the whole
+    federated run of ``rounds_total`` rounds (D7, U3), not of this round: the
+    noise is the level at which ``rounds_total`` rounds like this one compose
+    to at most the budget (``security.calibrate_run_sigma``, C9), so every
+    round of a run trains with the same sigma. Without calibration
+    ``make_private`` uses ``DPConfig.noise_multiplier`` as given and nothing
+    enforces the budget. The edge supplies the model, the optimizer, the data
+    and the loop.
     Constraints, all measured or read off the library rather than assumed:
 
     * Per-sample gradients use Opacus's default ``hooks`` mode, which is what
@@ -529,6 +544,10 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     * ``max_steps`` caps the logical steps actually taken (smoke runs). The
       noise is still calibrated over ``epochs``; stopping early only spends
       less ε, and the accountant reports what was spent.
+    * The budget is enforced when the adapter is uploaded, not here (C8): the
+      upload composes this round with the run's earlier rounds on the laptop's
+      ledger (``edge.upload``), from the sigma, sample rate and steps recorded
+      below. A training that is never uploaded costs nothing.
     * FedProx (``fedprox_mu`` > 0) adds ``mu * (w - w0)`` in the optimizer's
       step hook, which Opacus calls after clipping, noising and scaling and
       before the update. It depends on no data, so ε is unchanged; added any
@@ -541,10 +560,10 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     the RDP bound for the same (σ, q, steps), which is looser and can read
     above the target. Both are recorded and neither is hidden.
     """
-    from opacus.accountants.utils import get_noise_multiplier
     from opacus.utils.batch_memory_manager import BatchMemoryManager
 
     DPConfig, PrivacyAccountant, get_privacy_engine, make_private = _security_dp()
+    from security.dp import ledger as run_budget
 
     model.train()
     model.config.use_cache = False
@@ -557,14 +576,16 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
     prox_terms: List[float] = []
     optimizer = torch.optim.AdamW(trainable, lr=lr)
     loader = torch.utils.data.DataLoader(_Blocks(chunks), batch_size=batch_size)
-    # D7: sigma calibrated so this run spends at most target_epsilon at delta.
-    # Exactly what Opacus's make_private_with_epsilon does (same accountant,
-    # sample rate 1/len(loader), epochs) — done here because
-    # security.make_private(..., epochs=) crashes on Opacus 1.6 (it reads
-    # accountant.noise_multiplier, which the PRV accountant does not have).
-    sigma_target = float(get_noise_multiplier(
-        target_epsilon=target_epsilon, target_delta=delta, sample_rate=1 / len(loader),
-        epochs=epochs, accountant=DP_ACCOUNTANT))
+    # D7 (U3, C9): sigma calibrated so rounds_total rounds of this size together
+    # spend at most target_epsilon at delta, with the accountant the engine
+    # reports epsilon by. One round alone therefore spends less than the budget.
+    round_steps = epochs * len(loader)
+    sigma_target = float(run_budget.calibrate_run_sigma(
+        steps_per_round=round_steps, sample_rate=1 / len(loader),
+        rounds_total=rounds_total, budget=target_epsilon, delta=delta))
+    # what one full round costs at that sigma: this round's share of the run
+    round_budget = float(run_budget._compose(
+        [(sigma_target, 1 / len(loader), round_steps)], delta, DP_ACCOUNTANT))
     cfg = DPConfig(enabled=True, noise_multiplier=sigma_target, target_epsilon=target_epsilon,
                    delta=delta, max_grad_norm=max_grad_norm)
     cfg.validate()
@@ -661,6 +682,10 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
         "delta": delta,
         "noise_multiplier": round(sigma, 6),
         "max_grad_norm": max_grad_norm,
+        # one round of the accountant's history: what the run's ledger composes
+        "sample_rate": q,
+        "steps": steps,
+        "rounds_total": rounds_total,
     }
     return {
         "history": history,
@@ -677,14 +702,18 @@ def train_dp(model, chunks: List[List[int]], lr: float, warmup_ratio: float,
         "dp": {
             "library": "security.make_private (P3) over Opacus",
             "grad_sample_mode": "hooks",
-            "noise_calibration": (f"opacus get_noise_multiplier({DP_ACCOUNTANT}) to "
-                                  f"target_epsilon at delta over {epochs} epochs"),
+            "noise_calibration": (f"security.calibrate_run_sigma({DP_ACCOUNTANT}): "
+                                  f"{rounds_total} rounds of {epochs} epochs compose to "
+                                  f"at most target_epsilon at delta"),
             "accountant": f"opacus {engine.accountant.mechanism()} (the engine's, "
                           f"over the steps actually taken)",
             "epsilon_engine": round(eps_engine, 6),
             "epsilon_rdp_security": round(eps_rdp, 6),
             "target_epsilon": target_epsilon,
-            "within_d7_budget": eps_engine <= DEFAULT_DP_EPSILON,
+            "rounds_total": rounds_total,
+            # this round's share of the run budget, as calibrated
+            "round_epsilon_budget": round(round_budget, 6),
+            "within_d7_budget": eps_engine <= round_budget + 1e-3,
             "sample_rate": q,
             "logical_batch_size": batch_size,
             "epochs": epochs,
@@ -744,7 +773,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="D3 composition coefficient for the frozen cluster layer")
     ap.add_argument("--dp", action="store_true",
                     help="D7: train with DP-SGD from P3's security library")
-    ap.add_argument("--dp-epsilon", type=float, default=DEFAULT_DP_EPSILON)
+    ap.add_argument("--dp-epsilon", type=float, default=DEFAULT_DP_EPSILON,
+                    help="the privacy budget of the whole run (all --rounds-total rounds)")
+    ap.add_argument("--run-id", default="run-1",
+                    help="the federated run this round belongs to; its rounds share one "
+                         "privacy budget on this laptop's ledger (a new id starts a new budget)")
+    ap.add_argument("--rounds-total", type=int, default=2,
+                    help="rounds in the run: the DP noise is set so that many rounds "
+                         "together stay within --dp-epsilon")
     ap.add_argument("--dp-delta", type=float, default=DEFAULT_DP_DELTA)
     ap.add_argument("--dp-max-grad-norm", type=float, default=DEFAULT_DP_MAX_GRAD_NORM)
     ap.add_argument("--dp-batch-size", type=int, default=DEFAULT_DP_BATCH_SIZE,
@@ -828,7 +864,7 @@ def main() -> None:
                           epochs=dp_epochs, batch_size=args.dp_batch_size,
                           target_epsilon=args.dp_epsilon, delta=args.dp_delta,
                           max_grad_norm=args.dp_max_grad_norm, max_steps=dp_max_steps,
-                          fedprox_mu=args.fedprox_mu)
+                          fedprox_mu=args.fedprox_mu, rounds_total=args.rounds_total)
     else:
         schedule = build_schedule(train_split["n_chunks"], budget, args.micro_batch,
                                   args.grad_accum, random.Random(args.seed))
@@ -896,9 +932,8 @@ def main() -> None:
 
     fedprox_info = result.pop("fedprox")
     # contracts.PrivacySpec: epsilon None means DP was off (the ablation).
-    privacy = result.pop("privacy", None) or {
-        "epsilon": None, "delta": args.dp_delta, "noise_multiplier": None,
-        "max_grad_norm": None}
+    privacy = manifest_privacy(result.pop("privacy", None), run_id=args.run_id,
+                               delta=args.dp_delta)
 
     manifest = {
         "utc": datetime.now(timezone.utc).isoformat(),

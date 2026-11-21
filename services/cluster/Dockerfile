@@ -4,6 +4,8 @@ WORKDIR /app
 COPY contracts /app/contracts
 COPY security /app/security
 COPY services/cluster /app/service
+# the cluster uses security's validation and the run-budget numbers, not DP-SGD
+# itself, so the library's DP extra (opacus) is not installed
 RUN pip install --no-cache-dir -e /app/contracts -e /app/security -e /app/service
 EXPOSE 8002
 # Plain HTTP unless CLASP_TLS_CERT/KEY/CA are all set, then mTLS + TLS 1.3 with

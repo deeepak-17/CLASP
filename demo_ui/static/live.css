@@ -9,7 +9,7 @@
   --web: #0b7285;
   --scientific: #6741b0;
   --promote: #23784a;
-  --rollback: #b4530f;
+  --rejected: #b4530f;
   --alert: #b42318;
   --lane: var(--ink);
   --font: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
@@ -109,7 +109,7 @@ main { padding: 24px 40px 40px; display: grid; gap: 22px; }
 .stop h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink-2); }
 .stop .lead { margin: 0; font-size: 18.75px; line-height: 1.35; }
 .stop .fine { margin: 0; font-size: 15px; color: var(--ink-2); }
-.stop .fine.warn { color: var(--rollback); }
+.stop .fine.warn { color: var(--rejected); }
 .stop .act { margin-top: auto; }
 
 /* parcels: one per edge laptop */
@@ -122,6 +122,30 @@ main { padding: 24px 40px 40px; display: grid; gap: 22px; }
 }
 .parcel .who { font-weight: 700; font-size: 16px; overflow-wrap: anywhere; }
 .parcel .state { font-size: 14px; color: var(--ink-2); }
+[hidden] { display: none !important; }
+.login { max-width: 460px; margin: 28px 40px; background: var(--sheet); border-radius: 10px; padding: 20px 24px; }
+.login h2 { margin: 0 0 4px; }
+.login p { margin: 0 0 14px; color: var(--ink-2); }
+.login form { display: grid; gap: 12px; }
+.login label { display: grid; gap: 4px; font-weight: 700; font-size: 15px; }
+.login input { font: inherit; padding: 9px 10px; border-radius: 6px; border: 1.5px solid var(--rule); background: var(--paper); color: var(--ink); }
+.login-note { color: var(--rejected); font-size: 15px; }
+.regroup { margin: 0 40px 24px; background: var(--sheet); border-radius: 10px; padding: 18px 22px; }
+.regroup-head { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; }
+.regroup h2 { margin: 0 0 4px; }
+.regroup p { margin: 0; color: var(--ink-2); max-width: 70ch; }
+.groupings { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 14px 0 8px; }
+.grouping h3 { margin: 0 0 6px; font-size: 17px; }
+.grouping p { margin: 2px 0; color: var(--ink); }
+.grouping .moved { font-weight: 800; text-decoration: underline; text-decoration-thickness: 2px; }
+.regroup .fine { font-size: 15px; margin-top: 6px; }
+.regroup .fine.warn { color: var(--rejected); }
+.regroup .caption { margin-top: 10px; }
+table.similarity { border-collapse: collapse; margin: 12px 0 4px; font-size: 14px; }
+table.similarity caption { text-align: left; color: var(--ink-2); padding-bottom: 4px; }
+table.similarity th, table.similarity td { border: 1px solid var(--rule); padding: 4px 8px; text-align: right; }
+table.similarity th { font-weight: 700; background: var(--paper); }
+.parcel .spend { font-size: 14px; color: var(--ink-2); margin-top: 2px; }
 .parcel.in { border: 1.5px solid var(--lane); background: color-mix(in srgb, var(--lane) 11%, var(--sheet)); }
 .parcel.in .state { color: var(--lane); font-weight: 700; }
 
@@ -146,7 +170,7 @@ main { padding: 24px 40px 40px; display: grid; gap: 22px; }
   color: var(--promote);
 }
 .stamp small { display: block; font-size: 15px; font-weight: 700; }
-.stamp.rollback { color: var(--rollback); }
+.stamp.rejected { color: var(--rejected); }
 .stamp.fresh { animation: stamp-down 420ms cubic-bezier(.2, 1.4, .4, 1) both; }
 @keyframes stamp-down {
   from { transform: rotate(-12deg) scale(1.9); opacity: 0; }

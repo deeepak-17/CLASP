@@ -13,8 +13,10 @@ When part ``P`` moves from ``v_from`` to ``v_to``, every composite whose
     rebuild   otherwise, build one now (a new immutable version)
 
 Composites pinned to other versions of ``P`` are left alone. ``plan_cascade``
-writes nothing and fails before any write if a rebuild cannot be built, so the
-part and its composites always move together.
+writes nothing and fails before any write if a rebuild cannot be built;
+``write_cascade_files`` writes the rebuilds' files; ``apply_cascade`` makes
+only database writes, inside the restore's transaction, so the part and its
+composites always move together.
 """
 from __future__ import annotations
 
@@ -28,7 +30,14 @@ from contracts import (
     PromotionDecision,
 )
 
-from .composition import ComposeRequest, PlannedComposite, plan_composite, store_composite
+from .composition import (
+    ComposeRequest,
+    PlannedComposite,
+    plan_composite,
+    register_composite,
+    write_composite_files,
+)
+from .promotion import CASCADE_REASON_PREFIX
 from .storage import RegistryStore
 
 
@@ -39,6 +48,7 @@ class CascadeStep:
     provenance: CompositeProvenance
     reuse_version: int | None = None  # set -> repoint; None -> store ``plan``
     plan: PlannedComposite | None = None
+    written: AdapterMetadata | None = None  # ``plan``'s files, once written
 
 
 def _swap(prov: CompositeProvenance, part: str, from_v: int,
@@ -50,14 +60,15 @@ def _swap(prov: CompositeProvenance, part: str, from_v: int,
     return None
 
 
-def _active_composite(store: RegistryStore, name: str) -> AdapterMetadata | None:
-    active = store.get_active(name)
-    if active is None:
-        return None
-    meta = store.get_metadata(name, active)
-    if meta.ref.kind is not AdapterKind.COMPOSITE or meta.composed_from is None:
-        return None
-    return meta
+def _live_composites(store: RegistryStore, part: str, version: int) -> list[AdapterMetadata]:
+    """The composites built from ``part@version`` that are active right now."""
+    live = []
+    for ref in store.repo.composites_built_from(part, version):
+        if store.get_active(ref.name) == ref.version:
+            meta = store.get_metadata(ref.name, ref.version)
+            if meta.ref.kind is AdapterKind.COMPOSITE and meta.composed_from is not None:
+                live.append(meta)
+    return live
 
 
 def _find(store: RegistryStore, name: str, prov: CompositeProvenance) -> int | None:
@@ -82,34 +93,42 @@ def plan_cascade(store: RegistryStore, part: str, from_version: int,
     Writes nothing. Raises CompositionError if a needed rebuild cannot be built.
     """
     steps = []
-    for name in store.list_adapters():
-        meta = _active_composite(store, name)
-        if meta is None:
-            continue
+    for meta in _live_composites(store, part, from_version):
+        name = meta.ref.name
+        # a part row exists only where the provenance names part@from_version
         target = _swap(meta.composed_from, part, from_version, to_version)
-        if target is None:
-            continue
         reuse = _find(store, name, target)
         plan = None if reuse is not None else plan_composite(store, _request(target), name)
         steps.append(CascadeStep(name, meta.ref.version, target, reuse, plan))
     return steps
 
 
+def write_cascade_files(store: RegistryStore, steps: list[CascadeStep]) -> list[CascadeStep]:
+    """Write every rebuild's files (no rows) before the caller's transaction opens."""
+    return [step if step.reuse_version is not None
+            else replace(step, written=write_composite_files(store, step.composite, step.plan))
+            for step in steps]
+
+
 def apply_cascade(store: RegistryStore, steps: list[CascadeStep], *,
                   action: PromotionAction, reason: str) -> list[dict]:
-    """Repoint (or build) each composite and record the move in its audit trail."""
+    """Repoint (or register a rebuilt) composite and record each move in its audit trail.
+
+    ``steps`` come from ``write_cascade_files``. Database writes only, so it
+    joins the caller's transaction.
+    """
     moved = []
     for step in steps:
         if step.reuse_version is not None:
             store.set_active(step.composite, step.reuse_version)
             version, rebuilt = step.reuse_version, False
         else:
-            meta, rebuilt = store_composite(store, step.composite, step.plan)
-            version = meta.ref.version
+            register_composite(store.repo, step.written)
+            version, rebuilt = step.written.ref.version, True
         candidate = store.get_metadata(step.composite, step.from_version).ref
         store.record_promotion(step.composite, PromotionDecision(
             adapter=candidate, action=action, active_version_after=version,
-            reason=f"cascade v{step.from_version} -> v{version}: {reason}",
+            reason=f"{CASCADE_REASON_PREFIX}v{step.from_version} -> v{version}: {reason}",
         ))
         moved.append({"name": step.composite, "from_version": step.from_version,
                       "to_version": version, "rebuilt": rebuilt,

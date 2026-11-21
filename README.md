@@ -11,10 +11,15 @@ Personalization is composed from three weight layers on top of a frozen base mod
 W_new = W_base + α·ΔW_cluster + β·ΔW_client
 ```
 
-- **W_base** — frozen DeepSeek-Coder-6.7B.
+- **W_base** — frozen base model. The design names DeepSeek-Coder-6.7B; every Phase II run
+  uses the 1.3B profile because the team's GPUs have 4 GB.
 - **ΔW_cluster** — a project-specific LoRA adapter trained via federated aggregation.
 - **ΔW_client** — a per-developer LoRA adapter trained locally.
-- **α, β** — coefficients controlling project vs. personal contribution.
+- **α, β** — coefficients controlling project vs. personal contribution. The composite is
+  merged **on the edge** at pull time (D6, amended): the edge pulls the merged cluster adapter
+  and merges it with its own client layer. The registry's `/compose` path exists and is
+  tested but is not called by the live loop. See
+  `docs/decisions/2026-11-14-amended-decisions.md`.
 
 ## Repository layout
 
@@ -23,7 +28,7 @@ CLASP/
 ├── contracts/          # shared interface package (the integration seam)
 ├── services/
 │   ├── edge/           # Edge Layer — PEFT training, 4-bit inference, dynamic merger
-│   ├── cluster/        # Cluster Layer — Flower + FedProx aggregation (FastAPI)
+│   ├── cluster/        # Cluster Layer — FedProx + SVD aggregation (FastAPI; Flower for simulation)
 │   ├── registry/       # State Registry — versioning, two-sided promotion, composites (FastAPI)
 │   └── evaluation/     # Evaluation & Dashboard — HumanEval/MBPP, Pass@k, React/Recharts
 ├── security/           # Security library — Opacus DP-SGD + mTLS (imported, not deployed)
@@ -52,7 +57,9 @@ docker compose --profile demo up --build
 docker compose up -d --build
 ```
 
-`docs/devops.md` covers the compose profiles, CI, mTLS for the registry and the
+`docs/devops.md` covers the compose profiles, CI and the
+transport security that is on by default (`docs/mtls_setup.md`: mTLS between
+services, HTTPS and logins for the pages, roles, signatures, audit), and the
 measured non-functional requirements; `scripts/fresh_machine_check.sh` proves a
 clean clone installs, tests and runs.
 
@@ -80,14 +87,14 @@ python -m pytest tests/integration -q
 | Module | Path | Description |
 |--------|------|-------------|
 | Edge Layer | `services/edge` | Local LoRA training (PEFT), 4-bit inference, dynamic adapter merger |
-| Cluster Layer | `services/cluster` | Flower orchestration, FedProx aggregation, cluster LoRA redistribution |
-| Security | `security` | Opacus DP-SGD on gradients, mTLS between edge and cluster (library) |
+| Cluster Layer | `services/cluster` | FedProx + SVD aggregation (FastAPI; Flower for simulation), cluster LoRA redistribution |
+| Security | `security` | Library: Opacus DP-SGD and the per-run privacy ledger; mTLS and certificate roles; HMAC signatures; JWT logins; headers, rate limit, audit |
 | State Registry | `services/registry` | safetensors versioning, two-sided promotion/rollback, pre-merged composites, retention, run manifests, FastAPI |
 | Evaluation & Dashboard | `services/evaluation` | HumanEval/MBPP pipeline, Pass@k scoring, React/Recharts dashboard |
 
 ## Tech stack
 
-DeepSeek-Coder-6.7B · HuggingFace PEFT · Flower · FedProx · Opacus (DP-SGD) · mTLS ·
+DeepSeek-Coder (6.7B design, 1.3B profile in Phase II) · HuggingFace PEFT · FedProx + SVD aggregation · Flower (simulation) · Opacus (DP-SGD) · mTLS ·
 FastAPI · safetensors · HumanEval/MBPP · React + Recharts · Docker Compose.
 
 ## Team

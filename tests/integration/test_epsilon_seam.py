@@ -51,6 +51,14 @@ def cluster_client():
     srv._reset_clusters()
 
 
+def _dp(epsilon, cumulative=None, rounds=1):
+    """A DP round as the edge reports it: this round's epsilon and the run's
+    cumulative epsilon from the client's ledger (a first round: the same number)."""
+    return {"epsilon": epsilon, "delta": 1e-5,
+            "epsilon_cumulative": epsilon if cumulative is None else cumulative,
+            "rounds_accounted": rounds}
+
+
 def _upload(cluster_client, client_id, seed, privacy):
     sd, cfg = make_client_adapter(seed)
     payload = wire.upload_payload(
@@ -76,7 +84,7 @@ def test_the_edges_epsilon_reaches_the_registry_cluster_version(
     cluster_client, registry_client, monkeypatch
 ):
     for i, eps in enumerate((2.5, 7.99, 5.0)):
-        _upload(cluster_client, f"client-{i}", 100 + i, {"epsilon": eps, "delta": 1e-5})
+        _upload(cluster_client, f"client-{i}", 100 + i, _dp(eps))
     agg = cluster_client.post("/aggregate", json={"cluster_id": CLUSTER_ID, "include_manifest": True})
     assert agg.status_code == 200, agg.text
     assert agg.json()["epsilon"] == 7.99  # max over the aggregated clients
@@ -94,7 +102,7 @@ def test_the_edges_epsilon_reaches_the_registry_cluster_version(
 def test_one_client_trained_without_dp_leaves_the_cluster_epsilon_unknown(
     cluster_client, registry_client, monkeypatch
 ):
-    _upload(cluster_client, "client-dp", 1, {"epsilon": 4.0})
+    _upload(cluster_client, "client-dp", 1, _dp(4.0))
     _upload(cluster_client, "client-plain", 2, None)  # DP off: epsilon None
     agg = cluster_client.post("/aggregate", json={"cluster_id": CLUSTER_ID})
     assert agg.status_code == 200 and agg.json()["epsilon"] is None

@@ -3,8 +3,10 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY contracts /app/contracts
+# P3's library, without its DP extra: no torch in this image
+COPY security /app/security
 COPY services/registry /app/service
-RUN pip install --no-cache-dir -e /app/contracts -e /app/service
+RUN pip install --no-cache-dir -e /app/contracts -e /app/security -e /app/service
 ENV CLASP_REGISTRY_DATA=/data/registry \
     CLASP_REGISTRY_PORT=8004
 EXPOSE 8004

@@ -85,12 +85,23 @@ class PrivacyBlock(BaseModel):
     "max_grad_norm": null}``. ``epsilon`` is ``None`` when the client trained
     without DP. Unknown keys are ignored so a later contracts version that adds
     a field does not make the cluster refuse every upload.
+
+    A differentially private upload also carries the client's run accounting
+    (D7, U3): ``epsilon_cumulative`` is the run's epsilon including this round,
+    composed by the client's own accountant, ``rounds_accounted`` how many
+    rounds that covers, and ``sample_rate`` / ``steps`` (with
+    ``noise_multiplier``) the round the accountant composed. The cluster's
+    budget rules on them live in ``cluster.server``.
     """
 
     epsilon: float | None = Field(None, ge=0, allow_inf_nan=False)
     delta: float | None = Field(None, ge=0, le=1, allow_inf_nan=False)
     noise_multiplier: float | None = Field(None, ge=0, allow_inf_nan=False)
     max_grad_norm: float | None = Field(None, ge=0, allow_inf_nan=False)
+    epsilon_cumulative: float | None = Field(None, ge=0, allow_inf_nan=False)
+    rounds_accounted: int | None = Field(None, ge=1)
+    sample_rate: float | None = Field(None, gt=0, le=1, allow_inf_nan=False)
+    steps: int | None = Field(None, ge=0)
 
 
 class AdapterUpload(BaseModel):
@@ -141,6 +152,11 @@ class AdapterUpload(BaseModel):
     base_sha256: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
     composition_alpha: float | None = Field(None, gt=0, allow_inf_nan=False)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Optional (U4): the edge's HMAC-SHA256 over every tensor's raw bytes and
+    # the rest of this body (``security.auth.hmac_signer.sign_adapter_upload``).
+    # Verified by the cluster, against the body as it arrived, when it holds a
+    # key for ``client_id`` (see ``cluster.server._check_upload_signature``).
+    signature: str | None = None
     tensors: list[TensorPayload]
 
     @model_validator(mode="after")
@@ -237,7 +253,13 @@ class ClusterAdapterBroadcast(BaseModel):
     # AdapterMetadata.source_clients, which is what the panel gate reads back.
     source_clients: tuple[str, ...] = ()
     aggregation: str = "svd"  # "svd" | "naive" (ablation baseline, D2)
-    epsilon: float | None = None  # DP budget spent, filled by P3's accountant
+    # D7: the largest cumulative epsilon among the clients in this adapter (each
+    # composed over its own run by the client's accountant); None when a client
+    # trained without DP.
+    epsilon: float | None = None
+    # Per aggregated client: {"client_id", "epsilon_round", "epsilon_cumulative",
+    # "rounds_accounted"}. What the registry records in its privacy ledger.
+    client_privacy: tuple[dict, ...] = ()
     # PEFT adapter_config.json fields (LoRAAdapter.to_peft_config()) so a
     # consumer can materialize a loadable PEFT directory from this broadcast
     # alone, alongside ``tensors`` in PEFT key form (LoRAAdapter.to_peft_state_dict()).

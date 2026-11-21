@@ -2,29 +2,55 @@ import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, X
 import { ErrorState, LoadingState } from "../components/DataState";
 import { StatTile } from "../components/StatTile";
 import { useRounds } from "../lib/rounds";
-import { candidateTrend, clusterIds, type ClusterRound, type VersionBlock } from "../lib/roundsFeed";
+import {
+  activeLabel,
+  candidateTrend,
+  clusterIds,
+  decisionWord,
+  type ClusterRound,
+  type RoundEntry,
+  type VersionBlock,
+} from "../lib/roundsFeed";
 
 // Fixed categorical order (same validated slots the Pass@k chart uses). The
 // system has two clusters (web, scientific); colour follows the cluster id.
 const SERIES = ["var(--series-humaneval)", "var(--series-mbpp)"];
 
 const fx = (v: number | null | undefined, digits = 4) => (v === null || v === undefined ? "N/A" : v.toFixed(digits));
+
+// Line-completion guard: per cluster, candidate vs baseline edit similarity. HumanEval (old rounds): pass@1.
+function guardTileValue(r: RoundEntry | undefined): string {
+  if (!r || !r.guard.available) return "N/A";
+  if (r.guard.kind === "line_completion") {
+    return r.clusters
+      .filter((c) => c.guard?.candidate && c.guard?.baseline)
+      .map((c) => `${c.cluster_id} ${fx(c.guard?.candidate?.edit_similarity)} vs ${fx(c.guard?.baseline?.edit_similarity)}`)
+      .join(" · ") || "N/A";
+  }
+  return `${fx(r.guard.candidate_pass_at_1)} vs ${fx(r.guard.baseline_pass_at_1)}`;
+}
+
+const guardTileHint = (r: RoundEntry) =>
+  r.guard.kind === "line_completion" ? "candidate vs baseline edit similarity" : "candidate vs baseline pass@1";
 const signed = (v: number | null) => (v === null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(4)}`);
 
 function versionCell(v: VersionBlock) {
   return (
     <>
-      v{v.version} <span style={{ color: "var(--text-muted)" }}>({v.aggregation})</span>
+      {v.version === null ? "base model" : `v${v.version}`}{" "}
+      <span style={{ color: "var(--text-muted)" }}>({v.aggregation})</span>
     </>
   );
 }
 
 function DecisionBadge({ c }: { c: ClusterRound }) {
   const promote = c.decision.action === "promote";
+  const notSent = c.decision.action === "not_sent";
   return (
     <span className={"badge " + (promote ? "badge-real" : "badge-demo")}>
       <span className="badge-dot" />
-      {promote ? "▲ PROMOTE" : "▼ ROLLBACK"} → v{c.decision.active_version_after}
+      {notSent ? "" : promote ? "▲ " : "▼ "}
+      {decisionWord(c.decision.action)} · {activeLabel(c.decision.active_version_after)}
       {c.authoritative ? "" : " · provisional"}
     </span>
   );
@@ -76,9 +102,9 @@ export function Rounds() {
           hint={latest?.nfr_round_minutes == null ? undefined : `NFR ${latest.nfr_round_minutes} min${latest.nfr_met ? " · met" : " · missed"}`}
         />
         <StatTile
-          label="HumanEval guard (latest)"
-          value={latest?.guard.available ? `${fx(latest.guard.candidate_pass_at_1)} vs ${fx(latest.guard.baseline_pass_at_1)}` : "N/A"}
-          hint={latest?.guard.available ? "candidate vs baseline pass@1" : "unavailable — decisions provisional"}
+          label={latest?.guard.kind === "line_completion" ? "Line-completion guard (latest)" : "HumanEval guard (latest)"}
+          value={guardTileValue(latest)}
+          hint={latest?.guard.available ? guardTileHint(latest) : "unavailable — decisions provisional"}
         />
         <StatTile label="Alerts" value={String(feed.alerts.length)} />
       </div>

@@ -1,7 +1,9 @@
 """Promote judges the candidate on its own measurements (D5), never on another adapter's.
 
-``scripts/evaluate_candidate.py`` scores the registry's active version and the
-one before it on laptop A's GPU and writes ``<cluster>-v<N>.json``;
+``scripts/evaluate_candidate.py`` scores the registry's pending candidate (the
+newest version above the active one) and the active version — or the bare base
+model when nothing is active yet — on laptop A's GPU and writes
+``<cluster>-v<N>.json``;
 ``demo_ui.evidence.evidence_for`` hands Promote that file only when its
 version and sha256 are the candidate's. The GPU scoring itself runs in the
 live check; here its pure parts and the selection rule are pinned.
@@ -30,23 +32,58 @@ def _v(version, sha):
     return {"ref": {"name": "cluster-web", "version": version}, "sha256": sha, "round": version - 1}
 
 
+def _guard_score(es, rows):
+    return {"benchmark": "LineCompletion", "edit_similarity": es, "exact_match": 0.1,
+            "n_examples": len(rows)}
+
+
 SCORES = {
     "candidate": {"in_project": {"edit_similarity": 0.52, "exact_match": 0.2, "perplexity": 3.1,
-                                 "n_examples": 60}, "pass_at_1": 0.45},
+                                 "n_examples": 60},
+                  "guard": _guard_score(0.60, [0.6, 0.6, 0.7, 0.5]), "guard_rows": [0.6, 0.6, 0.7, 0.5],
+                  "guard_examples_sha256": "f" * 64},
     "baseline": {"in_project": {"edit_similarity": 0.50, "exact_match": 0.2, "perplexity": 3.2,
-                                "n_examples": 60}, "pass_at_1": 0.5},
+                                "n_examples": 60},
+                 "guard": _guard_score(0.61, [0.6, 0.7, 0.6, 0.5]), "guard_rows": [0.6, 0.7, 0.6, 0.5],
+                 "guard_examples_sha256": "f" * 64},
 }
 
 
-def test_the_candidate_is_the_active_version_and_the_baseline_the_one_before():
+def test_the_candidate_is_the_newest_above_the_active_and_the_baseline_the_active():
     mod = _script()
-    listing = {"active": 3, "versions": [_v(1, "a" * 64), _v(3, "c" * 64), _v(2, "b" * 64)]}
-    cand, base = mod.pick_versions(listing)
+    listing = {"active": 2, "versions": [_v(1, "a" * 64), _v(3, "c" * 64), _v(2, "b" * 64)]}
+    cand, base = mod.pick_versions(listing, 2)
     assert cand["ref"]["version"] == 3 and base["ref"]["version"] == 2
-    with pytest.raises(SystemExit, match="previous version"):
-        mod.pick_versions({"active": 1, "versions": [_v(1, "a" * 64)]})
-    with pytest.raises(SystemExit, match="no active version"):
-        mod.pick_versions({"active": None, "versions": []})
+
+
+def test_with_nothing_active_the_candidate_is_compared_with_the_bare_base_model():
+    mod = _script()
+    listing = {"active": None, "versions": [_v(1, "a" * 64)]}
+    cand, base = mod.pick_versions(listing, None)
+    assert cand["ref"]["version"] == 1 and base is None
+    # the newest version wins when several are pending and nothing is active
+    listing = {"active": None, "versions": [_v(2, "b" * 64), _v(1, "a" * 64)]}
+    assert mod.pick_versions(listing, None)[0]["ref"]["version"] == 2
+
+
+def test_without_a_pending_candidate_there_is_nothing_to_evaluate():
+    mod = _script()
+    with pytest.raises(SystemExit, match="no candidate"):
+        mod.pick_versions({"active": 2, "versions": [_v(1, "a" * 64), _v(2, "b" * 64)]}, 2)
+    with pytest.raises(SystemExit, match="no candidate"):
+        mod.pick_versions({"active": None, "versions": []}, None)
+
+
+def test_the_registrys_candidate_field_wins_over_the_newest_version():
+    mod = _script()
+    # v3 was refused (REJECT, or an old D5 rollback): the registry names v2 the candidate
+    listing = {"active": 1, "candidate": 2, "rejected": [3],
+               "versions": [_v(1, "a" * 64), _v(2, "b" * 64), _v(3, "c" * 64)]}
+    cand, base = mod.pick_versions(listing, 1)
+    assert cand["ref"]["version"] == 2 and base["ref"]["version"] == 1
+    # the registry says nothing is pending: nothing to evaluate, even with v3 above active
+    with pytest.raises(SystemExit, match="no candidate"):
+        mod.pick_versions({**listing, "candidate": None}, 1)
 
 
 def _write(tmp_path, mod, version=2, sha="b" * 64):
@@ -64,8 +101,12 @@ def test_evidence_document_is_what_promote_sends(tmp_path):
     entry = doc["clusters"]["web"]
     assert entry["in_project"]["edit_similarity"] == 0.52
     assert entry["baseline_in_project"]["edit_similarity"] == 0.50
-    assert entry["guard"] == [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.45}}]
-    assert entry["baseline_guard"] == [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.5}}]
+    assert entry["guard"] == [SCORES["candidate"]["guard"]]
+    assert entry["baseline_guard"] == [SCORES["baseline"]["guard"]]
+    assert entry["guard"][0]["benchmark"] == "LineCompletion"
+    assert isinstance(doc["guard_noise"], float) and doc["guard_noise"] >= 0.0
+    assert entry["guard_noise"] == doc["guard_noise"]
+    assert doc["guard_examples_sha256"] == "f" * 64
     assert entry["noise_band"] == 0.01
     assert doc["candidate_version"] == 2 and doc["candidate_sha256"] == "b" * 64
     assert doc["baseline_version"] == 1
@@ -100,10 +141,246 @@ def test_an_override_file_for_another_version_does_not_win(tmp_path, monkeypatch
     assert evidence.evidence_for("web", version=1, sha256="a" * 64)["in_project"]
 
 
-def test_the_baseline_is_the_candidates_parent_not_the_highest_lower_number():
-    """Review #2: v4 built on v2 (v3 was rolled back) is compared with v2."""
+def test_a_rejected_version_in_between_is_never_the_baseline():
+    """v3 was rejected (never live); v4 is judged against the active v2."""
     mod = _script()
-    listing = {"active": 4, "versions": [_v(1, "a" * 64), _v(2, "b" * 64), _v(3, "c" * 64),
+    listing = {"active": 2, "versions": [_v(1, "a" * 64), _v(2, "b" * 64), _v(3, "c" * 64),
                                          _v(4, "d" * 64)]}
-    cand, base = mod.pick_versions(listing, parent_sha256="b" * 64)
+    cand, base = mod.pick_versions(listing, 2)
     assert cand["ref"]["version"] == 4 and base["ref"]["version"] == 2
+
+
+def test_the_first_candidates_evidence_names_the_base_model_as_its_baseline(tmp_path, monkeypatch):
+    mod = _script()
+    doc = mod.evidence_document("web", _v(1, "a" * 64), None, SCORES["candidate"],
+                                SCORES["baseline"], band={"value": 0.0}, details={"alpha": 0.5})
+    assert doc["baseline_version"] is None and doc["baseline_sha256"] is None
+    assert doc["clusters"]["web"]["baseline_guard"] == [SCORES["baseline"]["guard"]]
+    monkeypatch.delenv("CLASP_EVAL_EVIDENCE", raising=False)
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    mod.write_evidence(tmp_path, "web", doc)
+    ev = evidence.evidence_for("web", version=1, sha256="a" * 64)
+    assert "bare base model" in ev["provenance"]["in_project"]
+    assert "vNone" not in ev["provenance"]["in_project"]
+
+
+# --------------------------------------------------------------------------- #
+# score_version: the guard set replaces HumanEval
+# --------------------------------------------------------------------------- #
+class _FakeModel:
+    """Enough of a PeftModel for score_version's adapter bookkeeping."""
+
+    def __init__(self):
+        self.peft_config = {}
+
+    def load_adapter(self, path, adapter_name):
+        self.peft_config[adapter_name] = path
+
+    def set_adapter(self, name):
+        pass
+
+    def eval(self):
+        pass
+
+    def delete_adapter(self, name):
+        self.peft_config.pop(name, None)
+
+
+class _FakeTokenizer:
+    pad_token_id = 0
+
+
+def _score_with_fake_model(tmp_path, monkeypatch, *, alpha=0.5):
+    import argparse
+
+    pytest.importorskip("torch")
+    from edge import completion_eval, train_client
+    from evaluation.eval_harness.line_guard import load_guard_set
+
+    mod = _script()
+    guard_examples = load_guard_set()
+    calls = []
+
+    def fake_evaluate_completion(model, tokenizer, examples, perplexity, **kw):
+        calls.append(len(examples))
+        rows = [{"edit_similarity": 0.5 + (i % 3) / 10, "exact_match": i % 5 == 0}
+                for i in range(len(examples))]
+        es = sum(r["edit_similarity"] for r in rows) / len(rows)
+        em = sum(r["exact_match"] for r in rows) / len(rows)
+        return {"in_project": {"edit_similarity": es, "exact_match": em,
+                               "perplexity": perplexity, "n_examples": len(examples)},
+                "examples_sha256": "e" * 64, "rows": rows, "wall_seconds": 0.0}
+
+    monkeypatch.setattr(completion_eval, "evaluate_completion", fake_evaluate_completion)
+    monkeypatch.setattr(train_client, "evaluate",
+                        lambda model, chunks, pad: {"perplexity": 3.0})
+    monkeypatch.setattr(mod, "_composite", lambda *a, **k: tmp_path / "composite")
+    state = {"model": _FakeModel(), "tokenizer": _FakeTokenizer(), "peft": _FakeModel(),
+             "client": "web/client-flask", "examples": guard_examples[:5],
+             "guard_examples": guard_examples, "held_chunks": [[1]]}
+    args = argparse.Namespace(alpha=alpha, ppl_max_blocks=4)
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    result = mod.score_version(state, None, "cluster-web", _v(2, "b" * 64), args, work)
+    return mod, state, args, work, result, calls
+
+
+def test_score_version_scores_the_guard_set_not_humaneval(tmp_path, monkeypatch):
+    _, _, _, _, result, calls = _score_with_fake_model(tmp_path, monkeypatch)
+    assert result["guard"]["benchmark"] == "LineCompletion"
+    assert result["guard"]["n_examples"] == 300
+    assert set(result["guard"]) == {"benchmark", "edit_similarity", "exact_match", "n_examples"}
+    assert len(result["guard_rows"]) == 300
+    for gone in ("pass_at_1", "humaneval_solved", "humaneval_n"):
+        assert gone not in result
+    assert 300 in calls  # one evaluate_completion call on the guard set
+
+
+def test_the_cache_key_carries_the_guard_fingerprint(tmp_path, monkeypatch):
+    from evaluation.completion import examples_fingerprint
+    from evaluation.eval_harness.line_guard import load_guard_set
+
+    mod, state, args, work, _, calls = _score_with_fake_model(tmp_path, monkeypatch)
+    fp = examples_fingerprint(load_guard_set())[:12]
+    cached = list((work / "cache").glob("*.json"))
+    assert len(cached) == 1 and fp in cached[0].name
+    # a HumanEval-era cache entry (no fingerprint in its name) is never read
+    old = work / "cache" / f"{'b' * 64}-alpha0.5-web_client-flask.json"
+    old.write_text(json.dumps({"pass_at_1": 0.4}), encoding="utf-8")
+    n = len(calls)
+    again = mod.score_version(state, None, "cluster-web", _v(2, "b" * 64), args, work)
+    assert len(calls) == n and "guard" in again  # served from the new cache, not the old file
+
+
+def test_the_bare_base_model_is_scored_with_no_adapter_and_cached_as_base(tmp_path, monkeypatch):
+    """C7: with nothing active the baseline is the base model itself, no adapter loaded."""
+    mod, state, args, work, _, calls = _score_with_fake_model(tmp_path, monkeypatch)
+    composed = []
+    monkeypatch.setattr(mod, "_composite", lambda *a, **k: composed.append(a) or tmp_path / "c")
+    state["peft"], plain = None, _FakeModel()
+    state["model"] = plain
+    result = mod.score_version(state, None, "cluster-web", None, args, work)
+    assert composed == [] and plain.peft_config == {} and state["peft"] is None
+    assert result["version"] is None and result["sha256"] == "base"
+    assert result["guard"]["benchmark"] == "LineCompletion"
+    cached = [p.name for p in (work / "cache").glob("base-*.json")]
+    assert len(cached) == 1
+    n = len(calls)
+    mod.score_version(state, None, "cluster-web", None, args, work)
+    assert len(calls) == n  # served from the "base" cache entry
+
+
+def test_the_guard_benchmark_name_is_the_one_evaluation_froze():
+    from evaluation.eval_harness import line_guard
+
+    assert evidence.GUARD_BENCHMARK == line_guard.GUARD_BENCHMARK == "LineCompletion"
+
+
+def test_without_live_guard_evidence_the_fallback_has_no_guard_and_says_why(tmp_path, monkeypatch):
+    """The round-manifest fallback never yields a HumanEval guard (it used to read anchors)."""
+    monkeypatch.delenv("CLASP_EVAL_EVIDENCE", raising=False)
+    ip = {"edit_similarity": 0.5, "exact_match": 0.2, "perplexity": 3.0, "n_examples": 60}
+    doc = {"round": 1, "finished_utc": "2026-01-01T00:00:00", "clusters": {"web": {
+        "representative_client": "client-flask",
+        "seam_a_b": {"registry_name": "cluster-web", "versions": {}},
+        "evaluation": {"candidate": {"in_project": ip}, "baseline": {"in_project": ip}}}}}
+    monkeypatch.setattr(evidence, "_newest_round_manifest",
+                        lambda cluster_id: (tmp_path / "round1_manifest.json", doc))
+    ev = evidence.evidence_for("web")
+    assert ev["guard"] == [] and ev["baseline_guard"] == []
+    note = ev["provenance"]["guard"]
+    assert "line-completion guard was not scored" in note and "HumanEval" not in note
+    assert "failed" in note  # D5 counts a missing guard as failed
+    assert not hasattr(evidence, "guard_anchors")
+
+
+def test_a_humaneval_era_evidence_file_counts_as_not_evaluated(tmp_path, monkeypatch):
+    """A live-eval file written before the line guard is neither read nor a crash: re-evaluate."""
+    monkeypatch.delenv("CLASP_EVAL_EVIDENCE", raising=False)
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    ip = {"edit_similarity": 0.52, "exact_match": 0.2, "perplexity": 3.1, "n_examples": 60}
+    old = {"candidate_version": 2, "candidate_sha256": "b" * 64, "baseline_version": 1,
+           "clusters": {"web": {"in_project": ip, "baseline_in_project": ip, "noise_band": 0.0,
+                                "guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.45}}],
+                                "baseline_guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.5}}]}},
+           "details": {"candidate": {"humaneval_n": 20, "humaneval_solved": 9}, "baseline": {}}}
+    (tmp_path / "web-v2.json").write_text(json.dumps(old), encoding="utf-8")
+    assert evidence.evaluated_version("web", 2, "b" * 64) is False
+    with pytest.raises(evidence.EvidenceMissing, match="Evaluate"):
+        evidence.evidence_for("web", version=2, sha256="b" * 64)
+    # the same file with a line guard but no fingerprint is not trusted either
+    entry = old["clusters"]["web"]
+    entry["guard"] = entry["baseline_guard"] = [SCORES["candidate"]["guard"]]
+    (tmp_path / "web-v2.json").write_text(json.dumps(old), encoding="utf-8")
+    assert evidence.evaluated_version("web", 2, "b" * 64) is False
+
+
+# --------------------------------------------------------------------------- #
+# U4: the evaluator signs what it measured
+# --------------------------------------------------------------------------- #
+EVAL_SECRET = "5e" * 32
+
+
+def test_the_evidence_carries_the_promote_body_signed_by_the_evaluator(tmp_path, monkeypatch):
+    from security.auth.hmac_signer import verify_evaluation
+
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    doc = _write(tmp_path, _script())
+    promote = doc["promote"]
+    assert promote["candidate_sha256"] == "b" * 64
+    assert promote["eval"]["adapter"] == {"name": "cluster-web", "version": 2, "kind": "cluster",
+                                          "cluster_id": "web"}
+    assert promote["eval"]["in_project"] == SCORES["candidate"]["in_project"]
+    assert promote["eval"]["baseline_in_project"] == SCORES["baseline"]["in_project"]
+    assert promote["eval"]["guard"] == [SCORES["candidate"]["guard"]]
+    assert promote["eval"]["baseline_noise_band"] == 0.01 and promote["eval"]["seed"] == 0
+    assert promote["baseline_guard"] == [SCORES["baseline"]["guard"]]
+    assert verify_evaluation("cluster-web", 2, "b" * 64, promote["eval"], promote["baseline_guard"],
+                             promote["eval_signature"], EVAL_SECRET)
+    # the secret is in neither the document nor its file
+    assert EVAL_SECRET not in json.dumps(doc)
+
+
+def test_without_a_secret_the_promote_body_is_there_unsigned(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLASP_EVAL_HMAC_SECRET", raising=False)
+    monkeypatch.delenv("CLASP_EVAL_HMAC_SECRET_FILE", raising=False)
+    promote = _write(tmp_path, _script())["promote"]
+    assert promote["eval_signature"] is None and promote["candidate_sha256"] == "b" * 64
+
+
+def test_the_panel_gets_the_evaluators_promote_body_with_the_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    doc = _write(tmp_path, _script())
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    ev = evidence.evidence_for("web", version=2, sha256="b" * 64)
+    assert ev["promote"] == doc["promote"]
+
+
+def test_evidence_written_before_signing_existed_has_no_promote_body(tmp_path, monkeypatch):
+    mod = _script()
+    doc = _write(tmp_path, mod)
+    del doc["promote"]
+    mod.evidence_path(tmp_path, "web", 2).write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path)
+    assert evidence.evidence_for("web", version=2, sha256="b" * 64)["promote"] is None
+
+
+def test_an_override_file_from_the_evaluator_keeps_its_signed_promote_body(tmp_path, monkeypatch):
+    """CLASP_EVAL_EVIDENCE names a file an evaluation run wrote: with signing on,
+    the registry accepts it only with the evaluator's signed body."""
+    monkeypatch.setenv("CLASP_EVAL_HMAC_SECRET", EVAL_SECRET)
+    mod = _script()
+    doc = mod.evidence_document("web", _v(2, "b" * 64), _v(1, "a" * 64), SCORES["candidate"],
+                                SCORES["baseline"],
+                                band={"value": 0.01, "client": "web/client-flask", "source": "x"},
+                                details={"alpha": 0.5})
+    override = tmp_path / "elsewhere.json"
+    override.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setenv("CLASP_EVAL_EVIDENCE", str(override))
+    monkeypatch.setattr(evidence, "LIVE_EVAL_DIR", tmp_path / "none")
+    ev = evidence.evidence_for("web", version=2, sha256="b" * 64)
+    assert ev["promote"] == doc["promote"] and ev["promote"]["eval_signature"]
+    # a hand-written override without one still works where nothing is signed
+    del doc["promote"]
+    override.write_text(json.dumps(doc), encoding="utf-8")
+    assert evidence.evidence_for("web", version=2, sha256="b" * 64)["promote"] is None

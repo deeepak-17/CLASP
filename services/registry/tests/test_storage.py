@@ -72,7 +72,10 @@ def test_metadata_roundtrips_cluster_fields(store, safetensors_blob):
 def test_active_pointer(store, safetensors_blob):
     store.save("sk", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
     store.save("sk", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
-    assert store.get_active("sk") == 2  # last save is active by default
+    assert store.get_active("sk") is None  # a save is a candidate, not live
+    store.save("sk", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams(),
+               set_active=True)
+    assert store.get_active("sk") == 3
     store.set_active("sk", 1)
     assert store.get_active("sk") == 1
 
@@ -84,19 +87,27 @@ def test_missing_adapter_raises(store):
 
 def test_corrupt_active_pointer_degrades(store, safetensors_blob):
     # L1: a garbage `active` file must raise StorageError, not a bare ValueError.
-    store.save("torch", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
-    (store._adapter_dir("torch") / "active").write_text("not-an-int")
-    from registry.storage import StorageError
+    # Pointers live in the database now; a file-based volume's `active` file is
+    # read once, by the import on first start.
+    from registry.storage import RegistryStore, StorageError
 
-    with pytest.raises(StorageError):
-        store.get_active("torch")
+    from .conftest import forget_database
+
+    store.save("torch", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    store.close()
+    forget_database(store.root)
+    (store._adapter_dir("torch") / "active").write_text("not-an-int")
+
+    with pytest.raises(StorageError, match="corrupt active pointer"):
+        RegistryStore(store.root)
 
 
 def test_set_active_is_atomic_no_tmp_left(store, safetensors_blob):
-    # L2: temp file is renamed away, never left behind.
+    # L2: no pointer file (or temp file) is written; the database holds it.
     store.save("scipy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
     store.set_active("scipy", 1)
     assert not (store._adapter_dir("scipy") / "active.tmp").exists()
+    assert not (store._adapter_dir("scipy") / "active").exists()
     assert store.get_active("scipy") == 1
 
 
@@ -133,6 +144,82 @@ def test_save_leaves_no_orphan_on_crash_between_writes(store, safetensors_blob, 
     monkeypatch.undo()
     m = store.save("crashy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
     assert m.ref.version == 1
+
+
+def test_save_leaves_no_version_when_the_metadata_write_fails(store, safetensors_blob, monkeypatch):
+    # The same guarantee one step later: the files are published, then the
+    # metadata row fails to commit. The published directory must go too.
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated metadata write failure")
+
+    monkeypatch.setattr(store.repo, "add_version", boom)
+
+    with pytest.raises(RuntimeError):
+        store.save("crashy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+
+    assert store.list_versions("crashy") == []
+    assert not (store._adapter_dir("crashy") / "v1").exists()
+    leftovers = list(store._adapter_dir("crashy").iterdir())
+    assert leftovers == [], f"published dir not cleaned up: {leftovers}"
+
+    monkeypatch.undo()
+    m = store.save("crashy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    assert m.ref.version == 1
+
+
+def test_set_active_on_save_commits_with_the_version(store, safetensors_blob, monkeypatch):
+    # add_version and set_active are one transaction: if the pointer fails,
+    # the version row is rolled back and its directory removed.
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated pointer failure")
+
+    store.save("pair", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    monkeypatch.setattr(store.repo, "set_active", boom)
+    with pytest.raises(RuntimeError):
+        store.save("pair", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams(),
+                   set_active=True)
+    assert store.list_versions("pair") == [1]
+    assert not (store._adapter_dir("pair") / "v2").exists()
+
+
+def test_delete_version_removes_row_and_directory(store, safetensors_blob):
+    for _ in range(2):
+        store.save("del", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    store.set_active("del", 2)
+    with pytest.raises(StorageError, match="active"):
+        store.delete_version("del", 2)
+    store.delete_version("del", 1)
+    assert store.list_versions("del") == [2]
+    assert not (store._adapter_dir("del") / "v1").exists()
+    assert store.list_adapters() == ["del"]
+    with pytest.raises(AdapterNotFound):
+        store.delete_version("del", 1)
+
+
+def test_delete_version_with_its_directory_already_gone(store, safetensors_blob):
+    import shutil
+
+    store.save("gone", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    shutil.rmtree(store._adapter_dir("gone") / "v1")
+    store.delete_version("gone", 1)
+    assert store.list_versions("gone") == []
+
+
+def test_store_accepts_an_injected_repository(tmp_path, safetensors_blob):
+    from registry import db
+    from registry.repository import SqlMetadataRepository
+    from registry.storage import RegistryStore
+
+    engine = db.make_engine("sqlite://")
+    db.create_all(engine)
+    try:
+        s = RegistryStore(tmp_path / "vol", repo=SqlMetadataRepository(engine))
+        s.save("flask", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+        s.close()  # not its engine: a no-op
+        assert s.list_versions("flask") == [1]
+        assert not (tmp_path / "vol" / "registry.db").exists()
+    finally:
+        engine.dispose()
 
 
 def test_save_publishes_both_files_together(store, safetensors_blob):

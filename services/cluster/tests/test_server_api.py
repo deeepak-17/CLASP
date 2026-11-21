@@ -24,7 +24,8 @@ from cluster.adapter_format import (
     random_adapter,
 )
 from cluster.schemas.messages import TensorPayload
-from cluster.server import _state, app
+from cluster.server import DEFAULT_CLUSTER_ID, _state, app
+from tests.http_helpers import promote
 
 
 def _upload_payload(adapter: LoRAAdapter, client_id: str, round_id: int = 0,
@@ -52,6 +53,7 @@ def _reset_state():
     _state.uploads.clear()
     _state.round_id = 0
     _state.active = None
+    _state.candidate = None
     _state.last_manifest = None
     _state.last_round.clear()
 
@@ -124,6 +126,7 @@ def test_full_upload_aggregate_download_loop_short_key_form():
     )
     assert agg_resp.status_code == 200, agg_resp.text
     broadcast = agg_resp.json()
+    promote(client, DEFAULT_CLUSTER_ID, broadcast)
     assert broadcast["num_clients"] == 3
     assert broadcast["aggregation"] == "svd"
     assert broadcast["rank"] == 4

@@ -4,10 +4,11 @@
 
 Walks every P4 capability over real HTTP, asserting each response:
 
-    1. save a cluster adapter and a client adapter        (versioning, sha256)
-    2. compose them into a pre-merged composite            (D6)
-    3. save a better client v2, PROMOTE it with build-on-promote composite (D5+D6)
-    4. save a bad client v3, D5 ROLLS IT BACK                (D5, real rule)
+    1. upload a cluster adapter (seeded active) and a client candidate v1,
+       which stays inactive until promoted                (versioning, sha256)
+    2. PROMOTE v1, then compose it with the cluster into a composite (D5+D6)
+    3. upload a better client v2, PROMOTE it with build-on-promote composite
+    4. upload a bad client v3, D5 REJECTS it: the pointer stays on v2 (D5)
     5. restore drill on a 1.3B-sized client: its composite follows, timed
        on the composite the edge fetches            (D11: <= 10 s)
     6. lineage + audit trail, then a retention dry run      (D9)
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import ssl
 import sys
@@ -105,19 +107,54 @@ def _expect(step: str, status: int, want: int, body) -> None:
         raise DemoFailure(f"{step}: expected HTTP {want}, got {status}: {body}")
 
 
-def _eval(name: str, version: int, sim: float, pass1: float) -> dict:
+def _line_guard(edit_similarity: float) -> dict:
+    return {"benchmark": "LineCompletion", "edit_similarity": edit_similarity,
+            "exact_match": edit_similarity / 2, "n_examples": 300, "pass_at_k": {}}
+
+
+def _eval(name: str, version: int, sim: float, guard_sim: float) -> dict:
     metrics = lambda s: {"edit_similarity": s, "exact_match": s / 2,  # noqa: E731
                          "perplexity": 3.0, "n_examples": 40}
     return {
         "eval": {
             "adapter": {"name": name, "version": version, "kind": "client", "cluster_id": "web"},
             "in_project": metrics(sim),
-            "guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": pass1}}],
+            "guard": [_line_guard(guard_sim)],
             "baseline_in_project": metrics(0.60),
             "baseline_noise_band": 0.02,
         },
-        "baseline_guard": [{"benchmark": "HumanEval", "pass_at_k": {"1": 0.30}}],
+        "baseline_guard": [_line_guard(0.60)],
     }
+
+
+EVAL_SECRET_ENV = "CLASP_EVAL_HMAC_SECRET"
+
+
+def eval_secret() -> str | None:
+    """The evaluation-signing key (``CLASP_EVAL_HMAC_SECRET`` or the file
+    ``CLASP_EVAL_HMAC_SECRET_FILE`` names), the one the registry verifies with;
+    ``None`` when neither is set."""
+    from security.auth.hmac_signer import secret_from_env
+
+    return secret_from_env(EVAL_SECRET_ENV)
+
+
+def _promote(reg: Registry, name: str, version: int, body: dict) -> tuple[int, dict]:
+    """POST a promote the way the evaluator does (U4): it names the sha256 of
+    the version it measured and, when the job has the key, is signed. A
+    registry with the key refuses anything else with 401."""
+    status, meta = reg.get(f"/adapters/{name}/versions/{version}")
+    _expect(f"read v{version} before promoting", status, 200, meta)
+    body = {**body, "candidate_sha256": meta["sha256"]}
+    secret = eval_secret()
+    if secret:
+        from security.auth.hmac_signer import sign_evaluation
+
+        body["eval_signature"] = sign_evaluation(
+            adapter=name, version=version, candidate_sha256=meta["sha256"],
+            eval_result=body["eval"], baseline_guard=body.get("baseline_guard", []),
+            secret=secret)
+    return reg.post_json(f"/adapters/{name}/promote", body)
 
 
 def _restore_drill(reg: Registry, run_id: str, hp: dict, *, layers: int, hidden: int,
@@ -131,12 +168,12 @@ def _restore_drill(reg: Registry, run_id: str, hp: dict, *, layers: int, hidden:
     cluster, client, composite = f"nfr-cluster-{run_id}", f"nfr-{run_id}", f"nfr-composite-{run_id}"
     status, body = reg.save(cluster, make_adapter(5, layers=layers, hidden=hidden),
                             {"kind": "cluster", "hparams": hp, "aggregation": "svd_exact",
-                             "source_clients": [client]})
+                             "source_clients": [client], "set_active": True})
     _expect("save nfr cluster", status, 201, body)
     compose = {"cluster": cluster, "client": client, "alpha": 0.5, "beta": 1.0}
     for seed in (6, 7):
         status, body = reg.save(client, make_adapter(seed, layers=layers, hidden=hidden),
-                                {"kind": "client", "hparams": hp})
+                                {"kind": "client", "hparams": hp, "set_active": True})
         _expect("save nfr client", status, 201, body)
         status, body = reg.post_json(f"/adapters/{composite}/compose", compose)
         _expect("compose nfr", status, 201, body)
@@ -144,7 +181,7 @@ def _restore_drill(reg: Registry, run_id: str, hp: dict, *, layers: int, hidden:
     _expect("fetch nfr composite v1", status, 200, good)
 
     start = time.perf_counter()
-    status, body = reg.post_json(f"/adapters/{client}/restore", {"reason": "D11 restore drill"})
+    status, body = reg.post_json(f"/adapters/{client}/restore", {"reason": "D11 restore drill", "to_version": 1})
     _expect("restore", status, 200, body)
     status, active = reg.get(f"/adapters/{composite}/active")
     status, blob = reg.get(f"/adapters/{composite}/versions/{active['ref']['version']}/file",
@@ -174,16 +211,26 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     _expect("healthz", status, 200, body)
     log("healthz", contracts=body["contracts"])
 
+    # the cluster layer is operator-seeded active; client versions are candidates
     status, body = reg.save(cluster, make_adapter(1, layers=layers, hidden=hidden), {
         "kind": "cluster", "hparams": hp, "aggregation": "svd_exact", "round": 1,
         "cluster_id": "web", "source_clients": ["flask", "requests", "werkzeug"],
-        "privacy": {"epsilon": 3.0}})
+        "privacy": {"epsilon": 3.0}, "set_active": True})
     _expect("save cluster", status, 201, body)
     status, body = reg.save(client, make_adapter(2, layers=layers, hidden=hidden), {
         "kind": "client", "hparams": hp, "round": 1, "cluster_id": "web",
         "privacy": {"epsilon": 2.5}})
     _expect("save client v1", status, 201, body)
     log("save", cluster_sha256=body["sha256"][:12])
+    status, _ = reg.get(f"/adapters/{client}/active")
+    if status != 404:
+        raise DemoFailure(f"save client v1: an upload must not be active, got HTTP {status}")
+
+    status, body = _promote(reg, client, 1, _eval(client, 1, 0.70, 0.60))
+    _expect("promote v1", status, 200, body)
+    if body["action"] != "promote" or body["active_version_after"] != 1:
+        raise DemoFailure(f"promote v1: unexpected decision {body}")
+    log("promote_v1", action=body["action"])
 
     status, body = reg.post_json(f"/adapters/{composite}/compose", {
         "cluster": cluster, "client": client, "alpha": 0.5, "beta": 1.0})
@@ -194,23 +241,27 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     status, body = reg.save(client, make_adapter(3, layers=layers, hidden=hidden),
                             {"kind": "client", "hparams": hp, "round": 2, "cluster_id": "web"})
     _expect("save client v2", status, 201, body)
-    promote = _eval(client, 2, sim=0.70, pass1=0.30)
+    promote = _eval(client, 2, sim=0.70, guard_sim=0.60)
     promote["composite"] = {"name": composite, "cluster": cluster, "client": client,
                             "alpha": 0.5, "beta": 1.0}
-    status, body = reg.post_json(f"/adapters/{client}/promote", promote)
+    status, body = _promote(reg, client, 2, promote)
     _expect("promote v2", status, 200, body)
     if body["action"] != "promote" or body["composite"]["composed_from"]["client_version"] != 2:
         raise DemoFailure(f"promote v2: unexpected decision {body}")
-    log("promote", action=body["action"], composite_version=body["composite"]["ref"]["version"])
+    log("promote_v2", action=body["action"], composite_version=body["composite"]["ref"]["version"])
 
     status, body = reg.save(client, make_adapter(4, layers=layers, hidden=hidden),
                             {"kind": "client", "hparams": hp, "round": 3, "cluster_id": "web"})
     _expect("save client v3", status, 201, body)
-    status, body = reg.post_json(f"/adapters/{client}/promote", _eval(client, 3, 0.61, 0.20))
+    status, body = _promote(reg, client, 3, _eval(client, 3, 0.61, 0.40))
     _expect("promote v3", status, 200, body)
-    if body["action"] != "rollback" or body["active_version_after"] != 2:
-        raise DemoFailure(f"promote v3: expected rollback to v2, got {body}")
-    log("rollback", reason=body["reason"])
+    if body["action"] != "reject" or body["active_version_after"] != 2:
+        raise DemoFailure(f"promote v3: expected reject with v2 still active, got {body}")
+    status, active = reg.get(f"/adapters/{client}/active")
+    _expect("active after reject", status, 200, active)
+    if active["ref"]["version"] != 2:
+        raise DemoFailure(f"reject: v3 went live, active is {active['ref']['version']}")
+    log("reject", reason=body["reason"])
 
     report["restore_seconds"] = _restore_drill(reg, run_id, hp, layers=nfr_layers,
                                                hidden=nfr_hidden, log=log)
@@ -227,6 +278,25 @@ def run_demo(reg: Registry, *, run_id: str, layers: int = 2, hidden: int = 64,
     return report
 
 
+def tls_context_from_env(url: str, env) -> ssl.SSLContext | None:
+    """For an ``https`` registry: present ``CLASP_TLS_CLIENT_CERT`` /
+    ``CLASP_TLS_CLIENT_KEY`` and trust only ``CLASP_TLS_CA`` (TLS 1.3, hostname
+    checked). The job saves, promotes, restores and garbage-collects, so under
+    mTLS it needs the operator's certificate (``clasp-admin``, role ``admin``).
+    ``None`` for a plain ``http`` URL."""
+    if not url.startswith("https"):
+        return None
+    names = ("CLASP_TLS_CLIENT_CERT", "CLASP_TLS_CLIENT_KEY", "CLASP_TLS_CA")
+    missing = [n for n in names if not env.get(n)]
+    if missing:
+        raise SystemExit(f"{url} is https: set {', '.join(missing)} (the operator's "
+                         f"certificate, e.g. .runtime/certs/admin/)")
+    ctx = ssl.create_default_context(cafile=env["CLASP_TLS_CA"])
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.load_cert_chain(env["CLASP_TLS_CLIENT_CERT"], env["CLASP_TLS_CLIENT_KEY"])
+    return ctx
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--url", default="http://localhost:8004")
@@ -235,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--wait", type=float, default=60.0, help="seconds to wait for /healthz")
     args = ap.parse_args(argv)
 
-    reg = Registry(args.url)
+    reg = Registry(args.url, tls_context_from_env(args.url, os.environ))
     deadline = time.time() + args.wait
     while True:
         try:

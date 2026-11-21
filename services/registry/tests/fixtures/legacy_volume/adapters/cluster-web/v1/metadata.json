@@ -1,0 +1,41 @@
+{
+  "ref": {
+    "name": "cluster-web",
+    "version": 1,
+    "kind": "cluster",
+    "cluster_id": "web"
+  },
+  "hparams": {
+    "rank": 8,
+    "lora_alpha": 32,
+    "dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj"
+    ],
+    "alpha": 1.0,
+    "beta": 1.0
+  },
+  "privacy": {
+    "epsilon": 4.0,
+    "delta": 1e-05,
+    "noise_multiplier": null,
+    "max_grad_norm": null,
+    "epsilon_cumulative": null,
+    "rounds_accounted": null
+  },
+  "aggregation": "svd_exact",
+  "round": 1,
+  "seed": 0,
+  "sha256": "8a292bff5892c0ecf85c5ec79fe4c9c4da1f4dafaa8f758f83f0bc56264ef1af",
+  "num_bytes": 82,
+  "source_clients": [
+    "flask",
+    "requests"
+  ],
+  "created_at": "2026-11-14T19:59:47.301378+00:00",
+  "contracts_version": "1.2.0",
+  "composed_from": null
+}

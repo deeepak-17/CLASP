@@ -5,15 +5,21 @@ description = "CLASP Security (P3) — Opacus DP-SGD + mTLS. Library, not a serv
 requires-python = ">=3.10"
 dependencies = [
     "clasp-contracts",
-    "opacus>=1.4",
     "cryptography>=42.0",
     "PyJWT>=2.0",
     "fastapi>=0.100",
+    # security.mtls.peer subclasses uvicorn's h11 protocol
+    "uvicorn>=0.29",
     "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
-test = ["pytest", "torch", "httpx"]
+# DP-SGD (security.dp: make_private, the accountant, the run ledger's
+# composition). An extra, so a service that uses only the mTLS, auth,
+# middleware and audit parts (the registry) does not install torch. The
+# library imports without it; the DP calls then raise a clear ImportError.
+dp = ["opacus>=1.4", "torch"]
+test = ["pytest", "torch", "opacus>=1.4", "httpx"]
 
 [build-system]
 requires = ["setuptools>=68"]

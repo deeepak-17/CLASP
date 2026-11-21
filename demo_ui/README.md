@@ -13,8 +13,12 @@ One page (`static/live.html`) and a thin FastAPI backend (`server.py`):
    promote. Every number and tensor comes from them or from the edge laptops,
    which upload their own trained adapters (`edge.webui`).
 2. **Promote sends measured evaluation** (`evidence.py`), never constants, and
-   says where each number came from. On a ROLLBACK it tells the cluster to
-   serve the restored version again, so the edges' next round builds on it.
+   says where each number came from. A published version is a candidate;
+   promotion makes it live; a rejected candidate is never served. After the
+   registry's decision the panel calls the cluster's `candidate/promote`
+   (with the registry's sha256 for that version) or `candidate/reject`, so
+   the edges pull a merge only once it is promoted and keep their adapter
+   after a reject. The panel shows "Promoted" or "Rejected".
 3. **Proxies** `/api/cluster/*` and `/api/registry/*` straight through, for
    inspection.
 
@@ -50,6 +54,11 @@ CLASP_REGISTRY_DATA=./_demo_data/registry .venv-demo/bin/uvicorn registry.app:ap
 # Terminal 3 — Demo UI
 .venv-demo/bin/uvicorn demo_ui.server:app --port 8010
 ```
+
+The round on the page: Register → (edges upload) → Merge (the cluster's candidate) →
+Publish (an inactive registry version) → Evaluate (the candidate against the active
+version, or the bare base model for the first one) → Ask the registry (Promoted or
+Rejected, carried to the cluster).
 
 Open `http://localhost:8010/` for the live multi-laptop round; the edges upload from
 their own laptops (see `docs/multi-laptop-demo.md`). `python scripts/run_services.py --ui`

@@ -319,6 +319,12 @@ def decode_tensor(payload: Dict) -> np.ndarray:
     return np.frombuffer(raw, dtype=dtype).reshape(tuple(payload["shape"])).copy()
 
 
+#: One round of the accountant's history, sent beside the contract's fields.
+RUN_ACCOUNTING_FIELDS = ("sample_rate", "steps")
+#: Recorded in the training manifest for this laptop's ledger; never sent.
+RUN_LOCAL_FIELDS = ("run_id", "rounds_total")
+
+
 def privacy_block(privacy: Optional[Dict]) -> Dict:
     """A ``contracts.PrivacySpec`` as a JSON dict — the D7 field of the envelope.
 
@@ -328,12 +334,24 @@ def privacy_block(privacy: Optional[Dict]) -> Dict:
     or extra field fails here rather than vanishing on the far side.
     ``None`` -> DP was off: ``epsilon`` is None, which is the contract's own
     encoding of the no-DP ablation.
+
+    Beside the contract's fields the block carries what the run's accounting is
+    composed from, when the training manifest recorded it: ``sample_rate`` and
+    ``steps`` (with ``noise_multiplier``, one round of the accountant's
+    history). ``run_id`` and ``rounds_total`` name the run on this laptop's
+    ledger and are not sent.
     """
     from dataclasses import asdict
 
     from contracts import PrivacySpec
 
-    return asdict(PrivacySpec(**(privacy or {})))
+    given = dict(privacy or {})
+    accounting = {k: given.pop(k) for k in RUN_ACCOUNTING_FIELDS if k in given}
+    for local in RUN_LOCAL_FIELDS:
+        given.pop(local, None)
+    block = asdict(PrivacySpec(**given))
+    block.update({k: v for k, v in accounting.items() if v is not None})
+    return block
 
 
 def privacy_from_training_manifest(adapter_dir: Path | str) -> Dict:
@@ -355,7 +373,8 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
                    num_examples: int, seed: Optional[int] = None,
                    key_convention: str = "peft",
                    privacy: Optional[Dict] = None,
-                   base: Optional[Dict] = None) -> Dict:
+                   base: Optional[Dict] = None,
+                   hmac_secret: Optional[str] = None) -> Dict:
     """Build the JSON body for ``POST /uploads`` from a real client adapter.
 
     Carries everything the cluster needs to identify and aggregate the upload:
@@ -369,6 +388,13 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
     residual: the adapter was trained on top of frozen base + alpha * the merged
     adapter with that digest, and the cluster adds it onto that adapter (the
     FedProx server step) instead of averaging it as a full adapter.
+
+    ``hmac_secret`` (this edge's upload key, U4) adds ``signature``: an
+    HMAC-SHA256 over every tensor's raw little-endian bytes (the bytes that are
+    base64-encoded below) and the rest of the body, built by
+    ``security.auth.hmac_signer.sign_adapter_upload``. The cluster recomputes
+    it from the body it receives, so a changed tensor or sample count is
+    refused. Without a key the body carries no signature.
     """
     sd = as_fp32(translate_keys(state_dict, "peft" if key_convention == "peft" else "cluster"))
     info = describe(sd)
@@ -391,7 +417,7 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
               for k, v in sd.items()}
         sd = as_fp32(sd)
 
-    return {
+    payload = {
         "client_id": client_id,
         "cluster_id": cluster_id,
         "round_id": round_id,
@@ -409,6 +435,26 @@ def upload_payload(state_dict: Dict[str, np.ndarray], cfg: Dict, *,
            if base else {}),
         "tensors": [encode_tensor(name, arr) for name, arr in sd.items()],
     }
+    if hmac_secret:
+        payload["signature"] = sign_upload(payload, hmac_secret)
+    return payload
+
+
+#: Body keys the upload signature does not cover (the tensors are signed as raw
+#: bytes; a relay may add a timestamp).
+UNSIGNED_UPLOAD_KEYS = ("tensors", "signature", "timestamp")
+
+
+def sign_upload(payload: Dict, secret: str) -> str:
+    """This edge's signature over an upload body (see :func:`upload_payload`)."""
+    import base64
+
+    from security.auth.hmac_signer import sign_adapter_upload
+
+    tensors = {t["name"]: base64.b64decode(t["data_b64"]) for t in payload["tensors"]}
+    metadata = {k: v for k, v in payload.items() if k not in UNSIGNED_UPLOAD_KEYS}
+    # through JSON once, so tuples and floats are what the cluster will read
+    return sign_adapter_upload(tensors, json.loads(json.dumps(metadata)), secret)
 
 
 def upload_payload_from_dir(adapter_dir: Path | str, **kw) -> Dict:

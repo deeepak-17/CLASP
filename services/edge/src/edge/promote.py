@@ -3,30 +3,35 @@
     candidate version + baseline version + EvalResult
         -> POST /adapters/{name}/promote
         -> registry.promotion.decide  (D5, unmodified)
-        -> PROMOTE or ROLLBACK, recorded in the registry's audit trail
+        -> PROMOTE or REJECT, recorded in the registry's audit trail
 
 Three facts about D5 that shape everything here, all read off
 ``registry/src/registry/promotion.py`` rather than assumed:
 
 1. The rule is TWO-SIDED. It promotes only if in-project ``edit_similarity``
-   improves beyond the noise band AND HumanEval pass@1 has not dropped more
-   than ``GUARD_PASS_AT_1_TOLERANCE``. A missing guard on either side is not
-   neutral — ``_guard_holds`` returns False, so the answer is ROLLBACK.
-2. The rule only ever judges the version that is CURRENTLY ACTIVE, and the API
-   rejects an eval whose version is not the active one (409).
-3. ROLLBACK with no previous version raises, surfaced as a 422. So a promote
-   call is only well-formed once the adapter has at least two versions.
+   improves beyond the noise band AND the regression guard has not dropped more
+   than ``GUARD_TOLERANCE``. A missing guard on either side is not
+   neutral — ``_guard_holds`` returns False, so the answer is REJECT. The
+   guard is next-line completion on the frozen line-completion guard set
+   (``LineCompletion``), and the registry's rule reads exactly that.
+2. An uploaded version is an inactive candidate. The rule judges a candidate
+   newer than the active version (the API answers 409 otherwise, and 409 for a
+   version already decided).
+3. PROMOTE makes the candidate active; REJECT records the decision and leaves
+   the active pointer where it was (``0`` when nothing was active yet), so a
+   rejected candidate is never served.
 
-Hence the shape of the flow: publish a baseline version, publish the candidate
-(which auto-activates), evaluate both, then call promote.
+Hence the shape of the flow: publish the candidate (inactive), evaluate it and
+the active baseline, then call promote.
 
-The HumanEval guard
--------------------
-``resolve_guard`` never fabricates a pass@1. It reads a real anchor file
-produced by ``edge.humaneval_baseline`` (generation) plus evalplus scoring, and
-if there is no such file it returns ``None`` with a reason string. The caller
+The line-completion guard
+-------------------------
+``resolve_guard`` never fabricates a guard score. It reads the evidence file
+``scripts/evaluate_candidate.py`` wrote (the candidate's and the baseline's
+``LineCompletion`` metrics on the frozen guard set), and if there is no such
+file it returns an unavailable status with a reason string. The caller
 then sends an EvalResult with an empty ``guard`` tuple and D5 does what it was
-designed to do when it cannot see the guard: roll back. That is the sprint's
+designed to do when it cannot see the guard: reject. That is the sprint's
 stated F3 position — a legitimate refusal to promote beats a fabricated number.
 """
 from __future__ import annotations
@@ -36,17 +41,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-GUARD_BENCHMARK = "HumanEval"
+#: Edge-local ``decision.action`` for a promote that was never sent (not a
+#: contracts ``PromotionAction``; the registry never produces it).
+NOT_SENT = "not_sent"
 
-#: What the registry's D5 rule tolerates, mirrored here only so the manifest
-#: can state the threshold that was in force. The rule itself is not
-#: re-implemented — ``registry.promotion.decide`` is the only place it lives.
-GUARD_PASS_AT_1_TOLERANCE = 0.02
+GUARD_BENCHMARK = "LineCompletion"  # evaluation.eval_harness.line_guard.GUARD_BENCHMARK
+
+#: The edit-similarity drop the line-completion guard tolerates
+#: (``guard_thresholds.yaml``: ``line_guard.tolerance_edit_similarity``), stated
+#: here only so the manifest can say which threshold was meant. The rule itself
+#: is not re-implemented — ``registry.promotion.decide`` is the only place it lives.
+GUARD_TOLERANCE = 0.02
 
 
 @dataclass(frozen=True)
 class GuardStatus:
-    """Whether a HumanEval guard number exists, and where it came from."""
+    """Whether a line-completion guard score exists, and where it came from."""
 
     available: bool
     reason: str
@@ -60,56 +70,68 @@ class GuardStatus:
             "reason": self.reason,
             "source": self.source,
             "benchmark": GUARD_BENCHMARK,
-            "tolerance_pass_at_1": GUARD_PASS_AT_1_TOLERANCE,
+            "tolerance_edit_similarity": GUARD_TOLERANCE,
             "candidate": self.candidate,
             "baseline": self.baseline,
         }
 
 
-def _guard_metrics(pass_at_1: float) -> Dict:
-    return {"benchmark": GUARD_BENCHMARK, "pass_at_k": {"1": float(pass_at_1)}}
+_NO_GUARD_EVIDENCE = ("no line-completion guard evidence supplied: the line-completion guard was "
+                      "not scored (scripts/evaluate_candidate.py writes it). D5 treats a missing "
+                      "guard as a failed guard, so the rule will return REJECT.")
 
 
-def resolve_guard(candidate_anchor: Optional[Path | str] = None,
-                  baseline_anchor: Optional[Path | str] = None) -> GuardStatus:
-    """Load real HumanEval pass@1 anchors, or say plainly that there are none.
+def _line_guard(entries) -> Optional[Dict]:
+    """The ``LineCompletion`` entry of a guard list, or None."""
+    return next((g for g in entries or ()
+                 if isinstance(g, dict) and g.get("benchmark") == GUARD_BENCHMARK
+                 and g.get("edit_similarity") is not None), None)
 
-    An anchor is the JSON ``edge.humaneval_baseline`` writes: it carries
-    ``base_pass_at_1`` over a frozen task subset together with the decoding
-    config and model id that produced it. Both sides are required, because D5
-    compares a candidate against a baseline; one anchor alone cannot answer the
-    question the rule asks.
+
+def resolve_guard(evidence: Optional[Path | str] = None,
+                  cluster_id: Optional[str] = None) -> GuardStatus:
+    """Load the line-completion guard from an evidence file, or say plainly there is none.
+
+    ``evidence`` is the JSON ``scripts/evaluate_candidate.py`` writes: its
+    ``clusters[<cluster>]`` entry carries the candidate's ``guard`` and the
+    ``baseline_guard``, each a ``LineCompletion`` metrics dict (``GuardMetrics.
+    to_json`` shape). Both sides are required, because D5 compares a candidate
+    against a baseline; one side alone cannot answer the question the rule asks.
+    ``cluster_id`` picks the entry when the file holds several.
     """
-    if candidate_anchor is None or baseline_anchor is None:
+    if evidence is None:
+        return GuardStatus(available=False, reason=_NO_GUARD_EVIDENCE)
+    path = Path(evidence)
+    if not path.exists():
         return GuardStatus(
             available=False,
-            reason=("no HumanEval anchor supplied for candidate and/or baseline — "
-                    "evalplus imports the Unix-only `resource` module and cannot "
-                    "score on Windows (W1 debt). D5 treats a missing guard as a "
-                    "failed guard, so the rule will return ROLLBACK."),
-        )
-    cand_path, base_path = Path(candidate_anchor), Path(baseline_anchor)
-    missing = [str(p) for p in (cand_path, base_path) if not p.exists()]
-    if missing:
+            reason=f"line-completion guard evidence file not found: {path}; guard unavailable")
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return GuardStatus(available=False,
+                           reason=f"line-completion guard evidence {path} is unreadable ({exc}); "
+                                  f"guard unavailable")
+    clusters = (doc.get("clusters") or {}) if isinstance(doc, dict) else {}
+    if cluster_id is None and len(clusters) == 1:
+        cluster_id = next(iter(clusters))
+    entry = clusters.get(cluster_id) if cluster_id is not None else None
+    if not entry:
         return GuardStatus(
             available=False,
-            reason=f"HumanEval anchor file(s) not found: {missing}; guard unavailable",
-        )
-    cand = json.loads(cand_path.read_text(encoding="utf-8"))
-    base = json.loads(base_path.read_text(encoding="utf-8"))
-    for label, payload, path in (("candidate", cand, cand_path), ("baseline", base, base_path)):
-        if "base_pass_at_1" not in payload:
-            return GuardStatus(
-                available=False,
-                reason=f"{label} anchor {path} has no base_pass_at_1 field; guard unavailable")
+            reason=(f"line-completion guard evidence {path} has no entry for cluster "
+                    f"{cluster_id!r} (it holds {sorted(clusters)}); guard unavailable"))
+    cand, base = _line_guard(entry.get("guard")), _line_guard(entry.get("baseline_guard"))
+    if cand is None or base is None:
+        return GuardStatus(
+            available=False,
+            reason=(f"evidence {path} has no {GUARD_BENCHMARK} guard for the "
+                    f"{'candidate' if cand is None else 'baseline'}; guard unavailable"))
     return GuardStatus(
         available=True,
-        reason=(f"HumanEval pass@1 from evalplus over a frozen "
-                f"{cand.get('subset', {}).get('n', '?')}-problem subset"),
-        candidate=_guard_metrics(cand["base_pass_at_1"]),
-        baseline=_guard_metrics(base["base_pass_at_1"]),
-        source=f"candidate={cand_path}, baseline={base_path}",
-    )
+        reason=(f"line-completion guard: next-line edit similarity on the frozen "
+                f"{cand.get('n_examples', '?')}-example guard set, from {path.name}"),
+        candidate=dict(cand), baseline=dict(base), source=str(path))
 
 
 #: What goes in ``in_project`` when nothing was measured. contracts v1.0 has no
@@ -117,7 +139,7 @@ def resolve_guard(candidate_anchor: Optional[Path | str] = None,
 #: honest signal is ``n_examples == 0``: zero examples were scored, therefore the
 #: other three fields are not measurements and must not be read as any. Every
 #: record produced from this carries ``in_project_measured: false``, and the
-#: resulting ROLLBACK is marked provisional. This is the sprint's F3 position:
+#: resulting REJECT is marked provisional. This is the sprint's F3 position:
 #: a refusal to promote beats a fabricated edit_similarity.
 UNMEASURED_IN_PROJECT: Dict[str, float] = {
     "edit_similarity": 0.0,
@@ -153,37 +175,21 @@ def _guard_contract(metrics: Dict):
     """A guard dict as sent over HTTP -> ``contracts.GuardMetrics`` (int k keys)."""
     from contracts import GuardMetrics
 
-    return GuardMetrics(benchmark=metrics["benchmark"],
-                        pass_at_k={int(k): float(v) for k, v in metrics["pass_at_k"].items()})
+    return GuardMetrics.from_json(metrics)
 
 
-def _previous_version(versions: Sequence[int], version: int) -> Optional[int]:
-    """The rollback target D5 would use: the version just before ``version``.
-
-    Mirrors ``registry.storage.previous_version`` over a version list the
-    registry itself returned; None when ``version`` is the first one.
-    """
-    earlier = [v for v in versions if v < version]
-    return max(earlier) if earlier else None
-
-
-def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict],
-                     previous_version: Optional[int]) -> Tuple[str, str]:
+def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict]) -> Tuple[str, str]:
     """What D5 will say, and why — for the manifest ONLY.
 
     Computed by the registry's own rule, ``registry.promotion.decide`` (P4), on
     exactly the inputs being sent: the EvalResult body and baseline guard of
-    seam C2, with the candidate as the active version (the only one the
-    registry evaluates) and ``previous_version`` as the rollback target. The
-    edge does not keep a copy of D5. The authoritative decision is still
-    whatever the live registry returns; this sits beside it in the manifest so
-    a disagreement between the inputs' implications and the service's answer is
-    visible instead of invisible.
+    seam C2. The edge does not keep a copy of D5. The authoritative decision is
+    still whatever the live registry returns; this sits beside it in the
+    manifest so a disagreement between the inputs' implications and the
+    service's answer is visible instead of invisible.
 
     Returns ("unavailable", why) if the registry package is not installed
-    alongside the edge, or if the rule cannot decide on these inputs (a
-    rollback with no previous version) — a prediction the edge cannot make is
-    not made up.
+    alongside the edge — a prediction the edge cannot make is not made up.
     """
     try:
         from contracts import AdapterKind, AdapterRef, EvalResult, InProjectMetrics
@@ -208,13 +214,11 @@ def predict_decision(eval_result: Dict, baseline_guard: Sequence[Dict],
         baseline_in_project=metrics(baseline) if baseline else None,
         baseline_noise_band=float(eval_result.get("baseline_noise_band", 0.0)),
         seed=int(eval_result.get("seed", 0)))
-    try:
-        decision = decide(result,
-                          baseline_guard=tuple(_guard_contract(g) for g in baseline_guard),
-                          active_version_before=result.adapter.version,
-                          previous_version=previous_version)
-    except ValueError as exc:
-        return "unavailable", f"registry.promotion.decide could not decide: {exc}"
+    # The action and reason do not depend on the active version; only the
+    # pointer after a REJECT does, and the prediction does not report it.
+    decision = decide(result,
+                      baseline_guard=tuple(_guard_contract(g) for g in baseline_guard),
+                      active_version_before=None)
     return decision.action.value, decision.reason
 
 
@@ -244,12 +248,23 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         guard=[guard.candidate] if guard.available else [],
         baseline_noise_band=noise_band, seed=seed)
     baseline_guard: List[Dict] = [guard.baseline] if guard.available else []
-    # Read before C2: a rollback moves the active pointer, not the history.
-    versions = [v["ref"]["version"] for v in client.list_versions(adapter_name)["versions"]]
-    previous_version = _previous_version(versions, version)
-    decision = client.promote(adapter_name, eval_result, baseline_guard)
-    expected_action, expected_why = predict_decision(
-        eval_result, baseline_guard, previous_version)
+    # Read before C2: the active version the candidate is judged against.
+    listing = client.list_versions(adapter_name)
+    expected_action, expected_why = predict_decision(eval_result, baseline_guard)
+    if guard.available:
+        decision = client.promote(adapter_name, eval_result, baseline_guard)
+    else:
+        # The registry refuses a promote that carries no guard (422, nothing
+        # recorded), so it is not asked. This is an edge-local record, not a
+        # registry decision: its pointer is where it was.
+        decision = {
+            "adapter": eval_result["adapter"],
+            "action": NOT_SENT,
+            "active_version_after": listing.get("active"),
+            "registry_called": False,
+            "reason": f"promote not sent: {guard.reason}",
+            "predicted": {"action": expected_action, "why": expected_why},
+        }
     return {
         "adapter": adapter_name,
         "candidate_version": version,
@@ -264,7 +279,7 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
         "locally_predicted": {"action": expected_action, "why": expected_why,
                               "rule": "registry.promotion.decide"},
         "registry_agrees_with_local_prediction":
-            (None if expected_action == "unavailable"
+            (None if expected_action == "unavailable" or decision["action"] == NOT_SENT
              else decision["action"] == expected_action),
         "in_project_measured": measured,
         "in_project_note": (
@@ -279,7 +294,7 @@ def promote_candidate(client, adapter_name: str, *, version: int, kind: str,
             if (guard.available and measured) else
             "PROVISIONAL: " + "; ".join(
                 ([] if guard.available else
-                 ["the HumanEval half of D5 could not be scored"])
+                 ["the line-completion guard half of D5 could not be scored"])
                 + ([] if measured else ["the in-project half was not measured"]))
             + " — this decision reflects a missing input, not a measured regression"),
     }
