@@ -1,19 +1,25 @@
 # Phase III ablation — composition coefficients in Wnew = Wbase + alpha*dWcluster + beta*dWclient.
-# No retraining: re-composes the round's adapters (registry /compose) and re-evaluates.
+# No retraining: re-composes one round's adapters and re-evaluates (eval_point.py).
 name: alpha-beta-sweep
-owner: P1 Adithyaa (composition runs) · P5 (sensitivity curves) · P4 (orchestration)
+owner: P4 Deepak
 base_model: deepseek-ai/deepseek-coder-1.3b-base
 seed: 0
-# Compose + in-project eval of one composite: the 27.8 min round covers 4 composites
-# plus 2 aggregations, so ~7 min per composite; 0.15 h leaves headroom.
-gpu_hours_estimate: 0.15
+# One point = one composite + in-project eval for ONE client. The 27.8 min
+# round covered 4 composites + 2 aggregations, so ~7 min per composite.
+gpu_hours_estimate: 0.12
 gpus: 1
 budget:
-  gpu_hours_total: 2           # 5 x 2 points x 0.15 = 1.5 (greedy eval: one seed suffices)
+  gpu_hours_total: 11          # 15 (alpha, beta) x 6 clients x 0.12 = 10.8
 clients: 6
 rank: 16
 seq_len: 1024
 sweep:
   alpha: [0.0, 0.25, 0.5, 0.75, 1.0]
-  beta: [0.5, 1.0]
-notes: ""
+  beta: [0.0, 0.5, 1.0]        # beta = 0 is the cluster-only row; (0, 0) is the base model
+  client: [web/client-flask, web/client-requests, web/client-werkzeug,
+           scientific/client-numpy, scientific/client-pandas, scientific/client-scikit-learn]
+notes: >-
+  Greedy decoding, so one seed suffices: a rerun on the same adapter and examples
+  gives identical numbers. Web cluster is {flask, requests, werkzeug}, not D1's
+  django (see docs/dataset.md). D3 caveat: client adapters were trained on
+  base + alpha_train * cluster; points with alpha != alpha_train are off that base.
