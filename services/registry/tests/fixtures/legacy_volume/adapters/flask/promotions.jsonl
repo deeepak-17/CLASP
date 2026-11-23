@@ -1,0 +1,2 @@
+{"adapter": {"name": "flask", "version": 1, "kind": "client", "cluster_id": "web"}, "action": "promote", "active_version_after": 1, "reason": "fixture promote v1", "timestamp": "2026-11-14T19:59:47.434592+00:00"}
+{"adapter": {"name": "flask", "version": 2, "kind": "client", "cluster_id": "web"}, "action": "promote", "active_version_after": 2, "reason": "fixture promote v2", "timestamp": "2026-11-14T19:59:47.460452+00:00"}

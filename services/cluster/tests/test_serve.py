@@ -46,7 +46,8 @@ def pki(tmp_path_factory):
     ca_p, _ = _write(tmp, "ca", ca_key, ca_cert)
     srv_cert_p, srv_key_p = _write(tmp, "cluster", srv_key, srv_cert)
     out = {"ca": ca_p, "cert": srv_cert_p, "key": srv_key_p}
-    for cn in ("alice", "bob"):
+    # demo-ui: the panel's certificate, the role that may register members (U5)
+    for cn in ("alice", "bob", "demo-ui"):
         key, cert = _issue(cn, ca_key, ca_cert.subject, client=True)
         out[cn] = MTLSFiles(ca_p, *_write(tmp, cn, key, cert))
     return out
@@ -96,9 +97,13 @@ def test_plain_config_has_no_tls_and_no_identity_binding():
 
 def test_upload_is_bound_to_the_client_certificate(running, pki):
     url, env = running
-    with httpx.Client(verify=client_ssl_context(pki["alice"]), timeout=10) as alice:
-        assert alice.put(f"{url}/clusters/team/members",
+    with httpx.Client(verify=client_ssl_context(pki["demo-ui"]), timeout=10) as panel:
+        assert panel.put(f"{url}/clusters/team/members",
                          json={"client_ids": ["alice", "bob"]}).status_code == 200
+    with httpx.Client(verify=client_ssl_context(pki["alice"]), timeout=10) as alice:
+        # a member's certificate may upload as itself, not run the cluster
+        refused = alice.put(f"{url}/clusters/team/members", json={"client_ids": ["alice"]})
+        assert refused.status_code == 403 and "svc:evaluation" in refused.text
         ok = alice.post(f"{url}/clusters/team/uploads", json=upload_body("alice", trained_adapter(1)))
         assert ok.status_code == 201, ok.text
         spoof = alice.post(f"{url}/clusters/team/uploads", json=upload_body("bob", trained_adapter(2)))

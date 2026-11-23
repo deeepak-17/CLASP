@@ -13,6 +13,8 @@ HP = {"rank": R, "lora_alpha": R, "target_modules": list(MODULES)}
 
 
 def _save(client, name, payload, **meta):
+    """Upload a version, active by default (operator seeding); ``set_active=False`` = candidate."""
+    meta.setdefault("set_active", True)
     r = client.post(
         f"/adapters/{name}/versions",
         files={"file": (f"{name}.safetensors", payload, "application/octet-stream")},
@@ -135,7 +137,7 @@ def _promote_with_composite(client, name, version, *, good):
 
 def test_promote_builds_composite_from_the_promoted_client(client):
     _seed(client)
-    _save(client, "flask", make_adapter(3), kind="client")  # candidate v2
+    _save(client, "flask", make_adapter(3), kind="client", set_active=False)  # candidate v2
     r = _promote_with_composite(client, "flask", 2, good=True)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -144,18 +146,18 @@ def test_promote_builds_composite_from_the_promoted_client(client):
     assert body["composite"]["ref"]["name"] == "composite-flask"
 
 
-def test_rollback_builds_no_composite(client):
+def test_reject_builds_no_composite(client):
     _seed(client)
-    _save(client, "flask", make_adapter(3), kind="client")
+    _save(client, "flask", make_adapter(3), kind="client", set_active=False)
     r = _promote_with_composite(client, "flask", 2, good=False)
-    assert r.json()["action"] == "rollback"
+    assert r.json()["action"] == "reject"
     assert r.json()["composite"] is None
     assert client.get("/adapters/composite-flask/active").status_code == 404
 
 
 def test_failed_composite_build_records_nothing(client):
     _seed(client)
-    _save(client, "flask", make_adapter(3), kind="client")
+    _save(client, "flask", make_adapter(3), kind="client", set_active=False)
     body = _promote_body("flask", 2, good=True)
     body["composite"] = {"name": "composite-flask", "cluster": "cluster-ghost",
                          "client": "flask", "alpha": 0.5, "beta": 1.0}
@@ -166,7 +168,7 @@ def test_failed_composite_build_records_nothing(client):
 
 def test_promote_without_composite_is_unchanged(client):
     _seed(client)
-    _save(client, "flask", make_adapter(3), kind="client")
+    _save(client, "flask", make_adapter(3), kind="client", set_active=False)
     r = client.post("/adapters/flask/promote", json=_promote_body("flask", 2, good=True))
     assert r.status_code == 200
     assert "composite" not in r.json()
@@ -183,7 +185,7 @@ def test_one_adapter_name_never_mixes_kinds(client):
 
 def test_promote_with_composite_into_wrong_kind_records_nothing(client):
     _seed(client)
-    _save(client, "flask", make_adapter(3), kind="client")
+    _save(client, "flask", make_adapter(3), kind="client", set_active=False)
     body = _promote_body("flask", 2, good=True)
     body["composite"] = {"name": "cluster-web", "cluster": "cluster-web",
                          "client": "flask", "alpha": 0.5, "beta": 1.0}

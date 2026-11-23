@@ -13,6 +13,8 @@ from pathlib import Path
 
 from contracts import RunManifest
 
+from . import durable
+
 
 def config_hash(config: dict) -> str:
     """Deterministic sha256 over a resolved experiment config (order-insensitive)."""
@@ -41,7 +43,7 @@ def build_manifest(
 def write_manifest(manifest: RunManifest, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(manifest), indent=2, sort_keys=True))
+    durable.atomic_write_text(path, json.dumps(asdict(manifest), indent=2, sort_keys=True))
     return path
 
 

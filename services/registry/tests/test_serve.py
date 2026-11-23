@@ -158,3 +158,52 @@ def test_healthcheck_reports_down(pki):
     from registry.healthcheck import check
 
     assert check({"CLASP_REGISTRY_PORT": str(free_port())}) is False
+
+
+# --------------------------------------------------------------------------- #
+# who is calling: the verified peer name (security.mtls.peer)
+# --------------------------------------------------------------------------- #
+def test_tls_config_serves_with_the_peer_certificate_protocol(pki):
+    from security.mtls.peer import PeerCertH11Protocol
+
+    config = build_config({
+        "CLASP_TLS_CERT": str(pki["server_cert"]), "CLASP_TLS_KEY": str(pki["server_key"]),
+        "CLASP_TLS_CA": str(pki["ca"]), "CLASP_REGISTRY_PORT": str(free_port()),
+    })
+    assert config.http_protocol_class is PeerCertH11Protocol
+
+
+def test_plain_config_keeps_uvicorns_own_protocol():
+    from security.mtls.peer import PeerCertH11Protocol
+
+    config = build_config({"CLASP_REGISTRY_PORT": str(free_port())})
+    assert config.ssl is None
+    assert config.http_protocol_class is not PeerCertH11Protocol
+    assert not issubclass(config.http_protocol_class, PeerCertH11Protocol)
+
+
+def test_the_registrys_run_budget_is_the_security_librarys():
+    """registry.config repeats three numbers so reading them does not import the
+    DP stack; they must be the ones the edge and the cluster enforce."""
+    from security.dp import ledger
+
+    from registry import config
+
+    assert (config.RUN_EPSILON_BUDGET, config.RUN_DELTA, config.RUN_ROUNDS) == (
+        ledger.RUN_EPSILON_BUDGET, ledger.RUN_DELTA, ledger.RUN_ROUNDS)
+
+# --------------------------------------------------------------------------- #
+# the demo-seed job speaks mTLS too (it is how compose proves the stack)
+# --------------------------------------------------------------------------- #
+def test_the_demo_job_presents_a_client_certificate_when_the_url_is_https(pki):
+    from registry import demo
+
+    assert demo.tls_context_from_env("http://registry:8004", {}) is None
+    ctx = demo.tls_context_from_env("https://registry:8004", {
+        "CLASP_TLS_CLIENT_CERT": str(pki["client_cert"]),
+        "CLASP_TLS_CLIENT_KEY": str(pki["client_key"]), "CLASP_TLS_CA": str(pki["ca"])})
+    assert isinstance(ctx, ssl.SSLContext) and ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True and ctx.minimum_version == ssl.TLSVersion.TLSv1_3
+    with pytest.raises(SystemExit) as stop:
+        demo.tls_context_from_env("https://registry:8004", {"CLASP_TLS_CA": str(pki["ca"])})
+    assert "CLASP_TLS_CLIENT_CERT" in str(stop.value)

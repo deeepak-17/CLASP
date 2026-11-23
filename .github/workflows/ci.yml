@@ -53,9 +53,11 @@ jobs:
           # services/edge depends on clasp-evaluation for the B5 in-project
           # completion metric, so the shared packages go in before the matrix one.
           pip install -e services/evaluation
-          # The cluster screens uploads with P3's library (clasp-security), which
-          # is not on PyPI: install it from the checkout first.
-          if [ "${{ matrix.package.name }}" = "cluster" ]; then pip install -e security; fi
+          # The cluster screens uploads with P3's library (clasp-security) and
+          # the registry reads the verified peer name through it. It is not on
+          # PyPI: install it from the checkout first. (The security job itself
+          # installs its [test] extra, which carries opacus for the DP tests.)
+          case "${{ matrix.package.name }}" in cluster|registry) pip install -e security ;; esac
           # A missing [test] extra only warns, so install errors are no longer hidden.
           pip install -e "${{ matrix.package.path }}[test]"
           pip install pytest pytest-cov httpx
@@ -112,7 +114,8 @@ jobs:
           pip install -e contracts -e services/evaluation -e security
           pip install -e services/cluster -e services/registry
           pip install --no-deps -e services/edge
-          pip install peft safetensors requests pytest httpx
+          # opacus: the edge's privacy ledger composes rounds with its accountant
+          pip install peft safetensors requests pytest httpx opacus
       - name: Run the four-seam test
         # Tiny synthetic adapters, in-process TestClients: no GPU, no model
         # download, no services to start, no HumanEval. See the module docstring
@@ -127,7 +130,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e contracts -e services/registry
+      # the registry depends on clasp-security, which is not on PyPI
+      - run: pip install -e contracts -e security -e services/registry
       # Every experiments/*/config.yaml must state a seed, a per-run GPU-hours
       # estimate, stay in the D8 caps (or justify an override) and fit its budget.
       - run: python -m registry.runs check experiments
@@ -139,14 +143,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Every profile parses
         run: docker compose --profile demo --profile train config --quiet
-      - name: mTLS overlay parses
-        run: docker compose -f docker-compose.yml -f docker-compose.mtls.yml config --quiet
+      - name: Plain-HTTP overlay parses
+        run: docker compose -f docker-compose.yml -f docker-compose.insecure.yml --profile demo --profile train config --quiet
       # The real image, the real volume, a real HTTP round trip: demo-seed drives
       # save -> compose -> promote -> rollback -> restore (D11 timed) -> lineage -> GC
       # against the containerised registry and fails the job on any wrong answer.
+      # Over mutual TLS, as the stack runs by default: the one-shot `certs`
+      # service writes the dev CA and certificates first, the registry serves
+      # with its own, and demo-seed presents the operator's.
+      # `run` starts what demo-seed depends on (certs, then a healthy registry)
+      # and exits with demo-seed's own code. `up --exit-code-from` cannot be
+      # used: the one-shot certs job exits first and trips its abort.
       - name: Registry image + demo-seed end to end
-        run: docker compose --profile demo up --build --exit-code-from demo-seed registry demo-seed
+        run: docker compose --profile demo run --rm --build demo-seed
       - name: Logs on failure
         if: failure()
-        run: docker compose --profile demo logs registry demo-seed
+        run: docker compose --profile demo logs certs registry demo-seed
+      - name: Tear down
+        if: always()
+        run: docker compose --profile demo down -v --remove-orphans
 

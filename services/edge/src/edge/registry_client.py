@@ -164,7 +164,7 @@ class RegistryClient:
         """C2: hand the registry an EvalResult and get the D5 decision back.
 
         The rule itself lives in ``registry.promotion.decide`` and is not
-        second-guessed here: whatever comes back — PROMOTE or ROLLBACK — is the
+        second-guessed here: whatever comes back — PROMOTE or REJECT — is the
         registry's decision, recorded in its own audit trail.
         """
         body = {"eval": eval_result, "baseline_guard": list(baseline_guard)}

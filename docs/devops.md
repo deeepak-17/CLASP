@@ -7,14 +7,19 @@ reproduced — and the measured evidence behind each claim.
 
 | Command | Brings up |
 |---|---|
-| `docker compose up -d` | `registry` (:8004, stateful) + `cluster` (:8002). The cluster waits for a **healthy** registry. |
-| `docker compose --profile demo up` | + `demo-ui` (:8010) and `demo-seed`, a one-shot job that drives the registry end to end and writes `registry-demo.json` to the `demo-reports` volume |
+| `docker compose up -d` | `certs` (one-shot: writes the development CA, certificates and shared keys to `.runtime/certs` when they are not there), then `registry` (:8004, stateful) + `cluster` (:8002), both behind mutual TLS. The cluster waits for a **healthy** registry. |
+| `docker compose --profile demo up` | + `demo-ui` (https://localhost:8010, asks for a login), the dashboard (https://localhost:8005) and `demo-seed`, a one-shot job that drives the registry end to end with the operator's certificate and writes `registry-demo.json` to the `demo-reports` volume |
 | `docker compose --profile train up edge` | + the edge federated round (`edge.round`) on the NVIDIA runtime. Trained adapters come from `services/edge/artifacts`; the corpus from `datasets/materialized` (`CLASP_CORPUS_DIR`), read-only. `CLASP_EDGE_ADAPTERS` / `CLASP_EDGE_ROUND` pick the adapter set and round (default round 1; D3's round 2 needs clients retrained on base + α·cluster) |
-| `-f docker-compose.yml -f docker-compose.mtls.yml` | the registry behind mutual TLS (§4) |
+| `-f docker-compose.yml -f docker-compose.insecure.yml` | the same stack over plain HTTP with nothing signed and no logins, for debugging only (§4) |
 
-`security/` is a library, never a container. Every image is `python:3.11-slim`
-with `contracts` installed first: the contracts package is the only thing
-services share.
+Before the first `up`: set `CLASP_LAN_IPS=<laptop A's address>` so the
+certificates name it, and write the panel's operator
+(`python scripts/make_users.py --out .runtime/users/panel.json --add operator:operator`).
+
+`security/` is a library, never a container. The service images are
+`python:3.11-slim` with `contracts` installed first, then `security` without its
+DP extra (no torch in the registry or panel image); `certs` is alpine with bash
+and openssl; the dashboard is nginx.
 
 **State (D9).** Only the registry is stateful. Its named volume `registry-data`
 survives `docker compose down` and `up`. Verified by saving four adapters, cycling
@@ -34,7 +39,7 @@ is replaced atomically. Decisions and GC runs go to append-only JSONL.
 | `e2e` | cluster → registry loop over the real apps |
 | `integration` | all four seams (edge → cluster → registry → edge → registry), CPU only, plus registry-vs-edge composite equivalence |
 | `experiments` | every `experiments/*/config.yaml` has a seed, a GPU-hours estimate, stays in the D8 caps and fits its budget |
-| `compose` | every profile and the mTLS overlay parse; the real registry image + volume come up and `demo-seed` passes every step |
+| `compose` | every profile and the plain-HTTP overlay parse; the `certs` job writes the dev certificates, the real registry image + volume come up behind mutual TLS and `demo-seed` passes every step with the operator's certificate |
 
 **Fresh machine.** `scripts/fresh_machine_check.sh [ref]` clones the commit into an
 empty directory, so nothing untracked exists. It then installs and tests inside a
@@ -56,15 +61,25 @@ runs the compose demo from that clone. It passes at the commit that introduced i
 6. Read the lineage (composite v1 ← cluster@v1 + client@v1; composite v2 ←
    cluster@v1 + client@v2), the audit trail (`promote`, `rollback`) and a GC dry run.
 
-## 4. Security of the registry endpoint (D7)
+## 4. Transport security (D7)
 
-`python -m registry.serve` serves plain HTTP unless `CLASP_TLS_CERT`,
-`CLASP_TLS_KEY` and `CLASP_TLS_CA` are all set. With them, every connection must
-present a client certificate signed by the CLASP CA and negotiate TLS 1.3. That
-is the same policy as the security library's server context. A partial TLS
-config refuses to start; it never falls back to HTTP silently.
+The compose stack and `scripts/run_services.py` start behind mutual TLS; the
+details (certificates, roles, signatures, logins, the audit trail) are in
+`docs/mtls_setup.md`. In short:
 
-Verified in Docker with the overlay and `scripts/make_dev_certs.sh`:
+- `python -m registry.serve` and `python -m cluster.serve` serve plain HTTP unless
+  `CLASP_TLS_CERT`, `CLASP_TLS_KEY` and `CLASP_TLS_CA` are all set, and warn when
+  they do. With them, every connection must present a client certificate signed
+  by the CA and negotiate TLS 1.3, and the certificate's name decides which
+  routes the caller may use. A partial TLS config refuses to start.
+- Compose sets those variables and mounts each service's own certificate from
+  `.runtime/certs`; `docker-compose.insecure.yml` clears them.
+- The panel serves HTTPS with the `pages` certificate and asks for a login; the
+  dashboard's nginx serves HTTPS when that certificate is mounted.
+
+Verified in Docker on 2026-10 with the earlier overlay and
+`scripts/make_dev_certs.sh` (the registry endpoint; not re-run since mTLS became
+the default, see "Known limits"):
 
 | Client | Result |
 |---|---|
@@ -73,10 +88,8 @@ Verified in Docker with the overlay and `scripts/make_dev_certs.sh`:
 | plain HTTP | refused (curl exit 52) |
 | TLS 1.2 forced | handshake refused (curl exit 35) |
 
-The container healthcheck keeps reporting `healthy` under mTLS. **Scope:** this
-hardens the registry endpoint. Its callers must present client certificates
-before they can use it under the overlay. Wiring those clients is the security
-library's job, so the plain demo round runs without the overlay.
+The container healthchecks present the service's own certificate and keep
+reporting `healthy` under mTLS.
 
 ## 5. Non-functional requirements (D11)
 
@@ -86,6 +99,7 @@ library's job, so the plain demo round runs without the overlay.
 | One federated round | ≤ 30 min | **14.0–17.9 min** (four seams, real adapters, 3 runs); **27.8 min** for the full 6-client round excluding training — training adds 55.8 min | `experiments/w12-integration/RESULTS.md`; `experiments/w4w5-g2-g3-round/SUMMARY.md` |
 | Adapter swap | ≤ 2 s | 0.501 s median (p95 1.387 s) | edge, `experiments/w3-edge-lora-composite/RESULTS.md` |
 | Composite TTFT overhead | ≤ 200 ms | +36.7 ms worst | edge, `docs/integration-sprint.md` §9 |
+| Privacy budget (D7) | ε ≤ 8 at δ = 1e-5 per client over a run of 2 rounds | enforced, not yet measured on a GPU round: the edge ledger and the cluster refuse an upload past it; with 160 steps a round at sample rate 1/160 the calibrated σ is 0.47 and two rounds compose to ε 7.90 (PRV) | `security/tests/test_ledger.py`, `services/cluster/tests/test_privacy_budget.py`; recorded per client at `GET /privacy/ledger` |
 
 The round NFR passes only if D11 excludes client training. Including training it
 is 83.6 min on the development GPU (RTX 2050, 4 GB), which is not the reference
@@ -118,6 +132,13 @@ everything, re-validates every config, and requires every run to be complete.
 
 ## 7. Known limits
 
+- **The default-mTLS compose stack has not been brought up in Docker since mTLS
+  became the default** (2026-11-16): the compose files parse
+  (`docker compose config`), the services' own TLS paths are tested on real
+  sockets, and `scripts/make_dev_certs.sh` is run by the test suite, but
+  `docker compose --profile demo up --build` and the checks in
+  `docs/mtls_setup.md` ("Checking it") still have to be run on a machine with
+  Docker running.
 - The registry is single-process by design: its write lock is per process, so
   it runs one uvicorn worker. That is ample for a 6-client federation.
 - Tensor blobs are not in the repro pack. They are re-derivable from configs and

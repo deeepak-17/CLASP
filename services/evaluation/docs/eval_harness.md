@@ -76,6 +76,8 @@ python scripts/run_in_project_eval.py            # all clients, mock backend, DE
 
 ## 5b. HumanEval guard anchors (D5's second half)
 
+> **Superseded as the guard.** D5's promotion guard is now next-line completion on the frozen 300-example set (`eval_harness/line_guard.py`, tolerance 0.02 edit similarity); HumanEval and PY150 (`scripts/eval_py150.py`) are reported only. This section remains as the HumanEval scoring reference. See `docs/decisions/2026-11-14-amended-decisions.md`, D5.
+
 The edge lane generates HumanEval completions on the GPU (`edge.humaneval_baseline` → `eval_out/samples.jsonl` + `manifest.json`) but cannot score them on Windows (evalplus needs the Unix-only `resource` module), so the guard has been unavailable and every D5 decision a provisional ROLLBACK. `src/evaluation/eval_harness/guard_anchor.py` / `scripts/score_humaneval_samples.py` score those samples on P5's executor against the published HumanEval tests and write the `anchor.json` that `edge.promote.resolve_guard` reads (`base_pass_at_1`, `subset`):
 
 ```bash

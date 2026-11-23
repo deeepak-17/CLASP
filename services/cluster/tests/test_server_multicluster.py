@@ -11,7 +11,7 @@ from cluster.adapter_format import LoRAAdapter
 from cluster.aggregation import aggregate_svd
 from cluster.schemas.messages import TensorPayload
 from tests.conftest import trained_adapter
-from tests.http_helpers import create_cluster, reset_server_state, restore_server_state
+from tests.http_helpers import create_cluster, promote, reset_server_state, restore_server_state
 
 client = TestClient(server.app)
 
@@ -67,6 +67,7 @@ def test_clusters_aggregate_independently_and_keep_separate_round_counters():
     np.testing.assert_allclose(got_a.delta_w("q_proj"), ref_a.delta_w("q_proj"), atol=1e-5)
     np.testing.assert_allclose(got_b.delta_w("q_proj"), ref_b.delta_w("q_proj"), atol=1e-5)
     assert not np.allclose(got_a.delta_w("q_proj"), got_b.delta_w("q_proj"), atol=1e-4)
+    promote(client, "team-a", ra.json())
     act = client.get("/clusters/team-a/adapters/active").json()
     assert act["cluster_id"] == "team-a" and client.get("/clusters/team-a/aggregate/manifest").json()["cluster_id"] == "team-a"
 
@@ -103,7 +104,7 @@ def test_cluster_listing_names_who_uploaded_and_who_was_aggregated():
     entry = client.get("/clusters").json()["clusters"]["team-a"]
     assert entry["uploaded_clients"] == ["alice", "bob"] and entry["pending_uploads"] == 2
     assert entry["members"] == ["alice", "bob", "carol"]
-    client.post("/clusters/team-a/aggregate")
+    promote(client, "team-a", client.post("/clusters/team-a/aggregate").json())
     entry = client.get("/clusters").json()["clusters"]["team-a"]
     assert entry["uploaded_clients"] == []
     assert entry["aggregated_clients"] == ["alice", "bob"] and entry["aggregated_round_id"] == 0

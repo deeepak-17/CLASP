@@ -1,10 +1,13 @@
 """Composite storage service (D6): resolve parts, merge, store with provenance.
 
-Split in two so the promote path can be all-or-nothing:
+Split so the promote path can be all-or-nothing:
 
-    plan_composite   pure — reads the parts, builds the payload in memory
-    store_composite  writes — a new immutable COMPOSITE version (or reuses an
-                     identical one), and points `active` at it
+    plan_composite         pure — reads the parts, builds the payload in memory
+    write_composite_files  files only — the next version's directory, fsynced,
+                           no database row (or an identical existing version)
+    register_composite     database only — the row and the `active` pointer,
+                           inside the caller's transaction
+    store_composite        both at once, for a standalone compose
 
 Privacy of a composite (D7): it releases both parts, so its epsilon is the
 basic-composition bound eps_cluster + eps_client (delta likewise summed). If
@@ -26,6 +29,7 @@ from contracts import (
 )
 
 from .composite import PartSpec, build_composite, embedded_base_model
+from .repository import MetadataRepository
 from .storage import RegistryStore
 
 
@@ -199,3 +203,31 @@ def store_composite(store: RegistryStore, name: str,
         store.set_active(name, existing.ref.version)
         return existing, False
     return store.save(name, plan.payload, set_active=True, **plan.save_kwargs), True
+
+
+def write_composite_files(store: RegistryStore, name: str,
+                          plan: PlannedComposite) -> AdapterMetadata:
+    """The files half of ``store_composite``: no database row, nothing made active.
+
+    Writes ``plan`` as the next version of ``name`` (fsynced) and returns its
+    metadata for ``register_composite``. An identical earlier composite is
+    returned as it is, and nothing is written. Unregistered files are never
+    served and are removed by ``retention.sweep_orphans``.
+    """
+    existing = _existing_identical(store, name, plan, hashlib.sha256(plan.payload).hexdigest())
+    if existing is not None:
+        return existing
+    return store.write_version_files(name, plan.payload, **plan.save_kwargs)
+
+
+def register_composite(repo: MetadataRepository, meta: AdapterMetadata) -> None:
+    """The database half: add ``meta``'s row (unless it has one) and make it active.
+
+    Run it inside the caller's transaction so the composite and the moves it
+    belongs to commit together.
+    """
+    name, version = meta.ref.name, meta.ref.version
+    with repo.transaction():
+        if version not in repo.list_versions(name):
+            repo.add_version(meta)
+        repo.set_active(name, version)

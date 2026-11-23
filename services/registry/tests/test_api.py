@@ -18,7 +18,7 @@ def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
-    assert r.json()["contracts"] == "1.1.0"
+    assert r.json()["contracts"] == "1.2.0"
 
 
 def test_empty_registry_lists_nothing(client):
@@ -26,7 +26,7 @@ def test_empty_registry_lists_nothing(client):
 
 
 def test_save_then_list_and_get(client, safetensors_blob):
-    r = _upload(client, "django", safetensors_blob, {"kind": "client", "cluster_id": "web", "seed": 7})
+    r = _upload(client, "django", safetensors_blob, {"kind": "client", "cluster_id": "web", "seed": 7, "set_active": True})
     assert r.status_code == 201
     body = r.json()
     assert body["ref"]["version"] == 1
@@ -77,8 +77,8 @@ def test_cluster_snapshot_metadata(client, safetensors_blob):
 
 
 def test_active_endpoint(client, safetensors_blob):
-    _upload(client, "numpy", safetensors_blob, {"kind": "client"})
-    _upload(client, "numpy", safetensors_blob, {"kind": "client"})
+    _upload(client, "numpy", safetensors_blob, {"kind": "client", "set_active": True})
+    _upload(client, "numpy", safetensors_blob, {"kind": "client", "set_active": True})
     active = client.get("/adapters/numpy/active").json()
     assert active["ref"]["version"] == 2
 
@@ -100,7 +100,15 @@ def test_active_endpoint_corrupt_pointer_is_a_clean_500(client, safetensors_blob
     import os
     from pathlib import Path
 
-    _upload(client, "corrupt", safetensors_blob, {"kind": "client"})
+    import registry.app as appmod
+
+    from .conftest import _drop_app_store, forget_database
+
+    _upload(client, "corrupt", safetensors_blob, {"kind": "client", "set_active": True})
+    # pointers live in the database; a file-based volume's `active` file is
+    # read by the import when the registry next starts on an empty database
+    _drop_app_store(appmod)
+    forget_database(os.environ["CLASP_REGISTRY_DATA"])
     active_path = Path(os.environ["CLASP_REGISTRY_DATA"]) / "adapters" / "corrupt" / "active"
     active_path.write_text("not-an-int")
 

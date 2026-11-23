@@ -8,7 +8,7 @@ import struct
 import pytest
 
 from evaluation.eval_harness.round_feed import (
-    GUARD_PASS_AT_1_TOLERANCE,
+    GUARD_EDIT_SIMILARITY_TOLERANCE,
     build_feed,
     d5_alerts,
     summarize_round,
@@ -95,8 +95,10 @@ class TestSummarizeRound:
         assert (web["baseline"]["aggregation"], web["candidate"]["aggregation"]) == ("naive", "svd")
         assert web["edit_similarity_delta"] == pytest.approx(0.0133)
         assert web["decision"]["action"] == "rollback" and not web["authoritative"]
-        assert entry["guard"] == {"available": False, "reason": "no HumanEval anchor supplied",
-                                  "candidate_pass_at_1": None, "baseline_pass_at_1": None}
+        assert entry["guard"] == {"kind": "humaneval", "available": False,
+                                  "reason": "no HumanEval anchor supplied",
+                                  "candidate_pass_at_1": None, "baseline_pass_at_1": None,
+                                  "candidate": None, "baseline": None}
 
     def test_unmeasured_metric_stays_null(self) -> None:
         entry = summarize_round(_manifest(1, {"web": _cluster("web", None, None, "rollback")}))
@@ -144,7 +146,7 @@ class TestD5Alerts:
 
     def test_tolerance_mirrors_the_registry(self) -> None:
         promotion = pytest.importorskip("registry.promotion")
-        assert GUARD_PASS_AT_1_TOLERANCE == promotion.GUARD_PASS_AT_1_TOLERANCE
+        assert GUARD_EDIT_SIMILARITY_TOLERANCE == promotion.GUARD_EDIT_SIMILARITY_TOLERANCE
 
 
 class TestBuildFeed:
@@ -169,8 +171,16 @@ def _blob(value: float) -> bytes:
     return struct.pack("<Q", len(header)) + header + data
 
 
+def _lc_status(promote, candidate: float, baseline: float):
+    side = lambda es: {"benchmark": "LineCompletion", "edit_similarity": es,  # noqa: E731
+                       "exact_match": 0.1, "n_examples": 300}
+    return promote.GuardStatus(available=True, reason="scored", candidate=side(candidate),
+                               baseline=side(baseline))
+
+
 def test_feed_reads_what_the_real_producers_write(tmp_path, monkeypatch) -> None:
-    """seam_c2 / humaneval_guard built by edge.promote against the real registry app."""
+    """seam_c2 built by edge.promote against the real registry app, under the
+    candidate flow: v1 promoted, v2 published inactive, its promote not sent."""
     promote = pytest.importorskip("edge.promote")
     registry_client = pytest.importorskip("edge.registry_client")
     appmod = pytest.importorskip("registry.app")
@@ -179,25 +189,145 @@ def test_feed_reads_what_the_real_producers_write(tmp_path, monkeypatch) -> None
     monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "registry"))
     appmod._store = None
     with TestClient(appmod.app) as client:
+        rc = registry_client.RegistryClient(base_url="", session=client)
         published = {}
         for label, value in (("baseline", 0.1), ("candidate", 0.2)):
             resp = client.post("/adapters/cluster-web/versions",
                                files={"file": ("a.safetensors", _blob(value), "application/octet-stream")},
                                data={"meta": json.dumps({"kind": "cluster", "cluster_id": "web", "round": 1})})
             published[label] = resp.json()
+            if label == "baseline":  # a published version is a candidate: promote v1 first
+                first = promote.promote_candidate(
+                    rc, "cluster-web", version=1, kind="cluster", cluster_id="web",
+                    in_project=_ip(0.53), baseline_in_project=_ip(0.50),
+                    guard=_lc_status(promote, 0.60, 0.60))
+                assert first["decision"]["action"] == "promote"
         guard = promote.GuardStatus(available=False, reason="no anchor")
         seam_c2 = promote.promote_candidate(
-            registry_client.RegistryClient(base_url="", session=client), "cluster-web",
-            version=2, kind="cluster", cluster_id="web",
+            rc, "cluster-web", version=2, kind="cluster", cluster_id="web",
             in_project=_ip(0.547), baseline_in_project=_ip(0.5337), guard=guard)
     appmod._store = None
 
-    cluster = _cluster("web", 0.5337, 0.547, "rollback")
+    cluster = _cluster("web", 0.5337, 0.547, "reject")
     cluster["seam_c2"] = seam_c2
     for label in ("baseline", "candidate"):
         cluster["seam_a_b"]["versions"][label]["registry_version"] = published[label]
     feed = build_feed([_manifest(1, {"web": cluster}, guard.as_dict())])
     web = feed["rounds"][0]["clusters"][0]
-    assert web["decision"]["action"] == "rollback" and web["decision"]["active_version_after"] == 1
+    # not sent: the pointer is where it was, on the promoted v1
+    assert web["decision"]["action"] == "not_sent" and web["decision"]["active_version_after"] == 1
     assert web["candidate"]["sha256"] == published["candidate"]["sha256"]
     assert [a["kind"] for a in feed["alerts"]] == ["guard_unavailable"]
+
+
+def test_a_first_candidate_with_nothing_active_does_not_crash_the_feed(tmp_path, monkeypatch) -> None:
+    """The edge's not-sent record before any promotion carries active_version_after None."""
+    promote = pytest.importorskip("edge.promote")
+    registry_client = pytest.importorskip("edge.registry_client")
+    appmod = pytest.importorskip("registry.app")
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("CLASP_REGISTRY_DATA", str(tmp_path / "registry"))
+    appmod._store = None
+    with TestClient(appmod.app) as client:
+        resp = client.post("/adapters/cluster-web/versions",
+                           files={"file": ("a.safetensors", _blob(0.2), "application/octet-stream")},
+                           data={"meta": json.dumps({"kind": "cluster", "cluster_id": "web", "round": 1})})
+        published = resp.json()
+        guard = promote.GuardStatus(available=False, reason="no anchor")
+        seam_c2 = promote.promote_candidate(
+            registry_client.RegistryClient(base_url="", session=client), "cluster-web",
+            version=1, kind="cluster", cluster_id="web",
+            in_project=_ip(0.547), baseline_in_project=_ip(0.50), guard=guard)
+    appmod._store = None
+    assert seam_c2["decision"]["active_version_after"] is None
+
+    cluster = _cluster("web", 0.50, 0.547, "not_sent")
+    cluster["seam_c2"] = seam_c2
+    # nothing was active, so demo_round records no baseline version: the bare base model
+    del cluster["seam_a_b"]["versions"]["baseline"]
+    cluster["seam_a_b"]["versions"]["candidate"]["registry_version"] = published
+    feed = build_feed([_manifest(1, {"web": cluster}, guard.as_dict())])
+    web = feed["rounds"][0]["clusters"][0]
+    assert web["decision"]["active_version_after"] is None
+    base = web["baseline"]
+    assert (base["version"], base["aggregation"], base["sha256"]) == (None, "base model", None)
+    assert base["in_project"]["edit_similarity"] == 0.50
+    assert web["edit_similarity_delta"] == pytest.approx(0.047)
+    json.dumps(feed)
+
+
+def test_a_rejected_first_candidate_is_nothing_active_not_version_0() -> None:
+    cluster = _cluster("web", 0.50, 0.45, "reject")
+    cluster["seam_c2"]["decision"]["active_version_after"] = 0  # registry: nothing active
+    entry = summarize_round(_manifest(1, {"web": cluster}, _guard(0.3, 0.3)))
+    web = entry["clusters"][0]
+    assert web["decision"] == {"action": "reject", "active_version_after": None,
+                               "reason": "reject: ..."}
+    # a reject is the refusal D5 implies here: no decision_mismatch
+    assert [a["kind"] for a in d5_alerts(entry)] == ["in_project_not_improved"]
+
+
+def _line_guard(candidate: float | None = None, baseline: float | None = None) -> dict:
+    """``edge.promote.GuardStatus.as_dict()`` for the line-completion guard."""
+    available = candidate is not None and baseline is not None
+
+    def side(es: float) -> dict:
+        return {"benchmark": "LineCompletion", "edit_similarity": es, "exact_match": 0.1, "n_examples": 300}
+
+    return {
+        "available": available,
+        "reason": "scored" if available else "the line-completion guard was not scored",
+        "source": None,
+        "benchmark": "LineCompletion",
+        "tolerance_edit_similarity": 0.02,
+        "candidate": side(candidate) if available else None,
+        "baseline": side(baseline) if available else None,
+    }
+
+
+def _new_style(guard: dict) -> dict:
+    """A manifest as demo_round writes it now: ``line_guard`` per cluster, no ``humaneval_guard``."""
+    m = _manifest(1, {"web": _cluster("web", 0.50, 0.55, "promote", authoritative=True)})
+    del m["humaneval_guard"]
+    m["line_guard"] = {"web": guard}
+    return m
+
+
+class TestLineGuardManifests:
+    def test_new_manifest_reports_line_completion_fields(self) -> None:
+        entry = summarize_round(_new_style(_line_guard(0.60, 0.61)))
+        web = entry["clusters"][0]["guard"]
+        assert web["kind"] == "line_completion" and web["available"]
+        assert web["candidate"] == {"edit_similarity": 0.60, "exact_match": 0.1, "n_examples": 300}
+        assert web["baseline"]["edit_similarity"] == 0.61
+        assert web["candidate_pass_at_1"] is None and web["baseline_pass_at_1"] is None
+        assert entry["guard"]["kind"] == "line_completion" and entry["guard"]["available"]
+        assert d5_alerts(entry) == []
+
+    def test_new_manifest_alerts_on_an_edit_similarity_drop(self) -> None:
+        entry = summarize_round(_new_style(_line_guard(0.50, 0.60)))
+        alerts = d5_alerts(entry)
+        assert [a["kind"] for a in alerts] == ["guard_regression", "decision_mismatch"]
+        assert "line-completion" in alerts[0]["message"] and "HumanEval" not in alerts[0]["message"]
+
+    def test_new_manifest_without_a_guard_invents_no_numbers(self) -> None:
+        entry = summarize_round(_new_style(_line_guard()))
+        web = entry["clusters"][0]["guard"]
+        assert not web["available"] and web["candidate"] is None and web["baseline"] is None
+        assert not entry["guard"]["available"]
+        kinds = [a["kind"] for a in d5_alerts(entry)]
+        assert "guard_unavailable" in kinds
+
+    def test_old_manifest_keeps_the_humaneval_fields(self) -> None:
+        entry = summarize_round(_manifest(1, {"web": _cluster("web", 0.50, 0.55, "promote")}, _guard(0.28, 0.30)))
+        assert entry["guard"]["kind"] == "humaneval"
+        assert entry["guard"]["candidate_pass_at_1"] == 0.28 and entry["guard"]["baseline_pass_at_1"] == 0.30
+        assert entry["guard"]["candidate"] is None
+        assert entry["clusters"][0]["guard"] == entry["guard"]
+        assert d5_alerts(entry) == []
+
+    def test_feed_carries_both_tolerances(self) -> None:
+        feed = build_feed([_new_style(_line_guard(0.60, 0.61))])
+        assert feed["guard_edit_similarity_tolerance"] == 0.02
+        assert feed["guard_pass_at_1_tolerance"] == 0.02

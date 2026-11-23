@@ -18,6 +18,7 @@ from cluster import server
 from tests.conftest import trained_adapter
 from tests.http_helpers import (
     create_cluster,
+    promote,
     reset_server_state,
     restore_server_state,
     upload_body,
@@ -184,10 +185,15 @@ def test_an_upload_during_an_aggregate_waits_and_is_then_refused_not_lost(monkey
     assert state.uploads.keys() == {"c3"}
 
 
-def test_stress_every_accepted_upload_is_aggregated_exactly_once(monkeypatch):
-    """Many uploaders race a repeatedly-aggregating thread. Each client keeps
-    retrying (409 -> read the round again) until it gets its single 201. Every
-    one of those 201s must be counted by exactly one aggregate."""
+def test_stress_every_accepted_upload_is_aggregated_or_dropped_exactly_once(monkeypatch):
+    """Many uploaders race a thread that aggregates and promotes. Each client
+    keeps retrying (409 -> read the round again) until it gets its single 201.
+
+    A promote drops the uploads buffered while its candidate was pending (they
+    do not build on the adapter it makes active) and names them in
+    ``dropped_uploads``. So every 201 must be accounted for exactly once:
+    counted by one aggregate, or named by one promote. None may vanish
+    silently and none may be counted twice."""
     real = server.aggregate_svd_lowrank
     aggregated: list[int] = []
 
@@ -201,6 +207,7 @@ def test_stress_every_accepted_upload_is_aggregated_exactly_once(monkeypatch):
     n_clients = 12
     errors: list[BaseException] = []
     accepted = []
+    dropped: list[str] = []
     state = server._clusters["team-a"]
     done = threading.Event()
 
@@ -222,6 +229,8 @@ def test_stress_every_accepted_upload_is_aggregated_exactly_once(monkeypatch):
             while not done.is_set():
                 r = client.post("/clusters/team-a/aggregate")
                 assert r.status_code in (200, 400), r.text  # 400 = nothing buffered yet
+                if r.status_code == 200:  # no new aggregate while a candidate is pending
+                    dropped.extend(promote(client, "team-a", r.json())["dropped_uploads"])
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -239,7 +248,9 @@ def test_stress_every_accepted_upload_is_aggregated_exactly_once(monkeypatch):
     if state.uploads:  # drain whatever arrived after the last aggregate
         assert setup.post("/clusters/team-a/aggregate").status_code == 200
     assert sorted(accepted) == list(range(n_clients))
-    assert sum(aggregated) == n_clients  # none lost, none aggregated twice
+    assert len(set(dropped)) == len(dropped)  # a dropped upload is named once
+    # none lost silently, none aggregated twice, none both aggregated and dropped
+    assert sum(aggregated) + len(dropped) == n_clients
 
 
 # ---- readers never trip over a concurrent writer ----------------------------

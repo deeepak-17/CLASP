@@ -47,14 +47,28 @@ def test_provenance_only_allowed_on_composites(store, safetensors_blob):
 
 
 def test_v1_0_metadata_on_disk_still_reads(store, safetensors_blob):
-    """A metadata.json written before v1.1 has no composed_from key."""
+    """A metadata.json written before v1.1 has no composed_from key.
+
+    metadata.json is only read by the import of a file-based volume now, so
+    the old file is put back and the volume reopened without its database.
+    """
+    from registry.storage import RegistryStore
+
+    from .conftest import forget_database
+
     store.save("legacy", safetensors_blob, kind=AdapterKind.CLIENT, hparams=LoRAHyperParams())
+    store.close()
+    forget_database(store.root)
     meta_path = store._adapter_dir("legacy") / "v1" / "metadata.json"
     d = json.loads(meta_path.read_text())
     d.pop("composed_from", None)
     d["contracts_version"] = "1.0.0"
     meta_path.write_text(json.dumps(d))
-    back = store.get_metadata("legacy", 1)
+    reopened = RegistryStore(store.root)
+    try:
+        back = reopened.get_metadata("legacy", 1)
+    finally:
+        reopened.close()
     assert back.composed_from is None
     assert back.contracts_version == "1.0.0"
 
@@ -87,8 +101,10 @@ def test_lineage_lists_versions_parents_and_decisions(client):
     _upload(client, "cluster-web", {
         "kind": "cluster", "aggregation": "svd_exact", "round": 1,
         "cluster_id": "web", "source_clients": ["flask", "requests", "werkzeug"],
+        "set_active": True,
     })
-    _upload(client, "composite-flask", {"kind": "composite", "composed_from": PROV.to_json()})
+    _upload(client, "composite-flask", {"kind": "composite", "composed_from": PROV.to_json(),
+                                        "set_active": True})
 
     r = client.get("/adapters/cluster-web/lineage")
     assert r.status_code == 200
@@ -106,12 +122,12 @@ def test_lineage_lists_versions_parents_and_decisions(client):
 
 
 def test_lineage_attaches_promotion_events(client):
-    _upload(client, "flask")
-    _upload(client, "flask")
+    _upload(client, "flask", {"kind": "client", "set_active": True})
+    _upload(client, "flask")  # candidate v2
     r = client.post("/adapters/flask/promote", json=_promote_body("flask", 2, good=False))
-    assert r.json()["action"] == "rollback"
+    assert r.json()["action"] == "reject"
     versions = client.get("/adapters/flask/lineage").json()["versions"]
-    assert [e["action"] for e in versions[1]["decisions"]] == ["rollback"]
+    assert [e["action"] for e in versions[1]["decisions"]] == ["reject"]
     assert versions[0]["is_active"] is True and versions[1]["is_active"] is False
 
 

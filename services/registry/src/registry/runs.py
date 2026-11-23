@@ -45,6 +45,7 @@ from typing import Any
 import yaml
 from contracts import RunManifest, utcnow_iso
 
+from . import durable
 from .manifest import config_hash
 
 MANIFEST_VERSION = 2
@@ -166,9 +167,7 @@ def run_id_for(config: dict, point: dict) -> str:
 # result store
 # --------------------------------------------------------------------------- #
 def _atomic_write(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text)
-    os.replace(tmp, path)
+    durable.atomic_write_text(path, text)
 
 
 def _sha256(path: Path) -> str:
@@ -299,7 +298,8 @@ def _run_point(config: dict, point: dict, command: str | list[str], store: Resul
         "started_at": utcnow_iso(), "manifest": manifest.to_json(),
     }
     store.write_record(name, run_id, record)
-    (run_dir / "config.resolved.json").write_text(json.dumps(resolved, indent=2, sort_keys=True))
+    durable.atomic_write_text(run_dir / "config.resolved.json",
+                              json.dumps(resolved, indent=2, sort_keys=True))
 
     outputs = run_dir / "outputs"
     shutil.rmtree(outputs, ignore_errors=True)  # a retry must not archive stale files

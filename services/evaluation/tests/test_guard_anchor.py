@@ -112,16 +112,6 @@ class TestBuildAnchor:
         anchor = build_anchor(score_samples(samples, tasks), samples_path=_write(tmp_path, samples))
         assert anchor["base_pass_at_1"] == 0.25 and anchor["base_solved"] == 1
 
-    def test_resolve_guard_accepts_the_anchor(self, tasks, tmp_path) -> None:
-        promote = pytest.importorskip("edge.promote")
-        samples = [_good(tasks["HumanEval/0"]), _bad(tasks["HumanEval/1"])]
-        anchor_path = tmp_path / "anchor.json"
-        anchor = build_anchor(score_samples(samples, tasks), samples_path=_write(tmp_path, samples))
-        anchor_path.write_text(json.dumps(anchor), encoding="utf-8")
-        status = promote.resolve_guard(anchor_path, anchor_path)
-        assert status.available
-        assert status.candidate == {"benchmark": "HumanEval", "pass_at_k": {"1": 0.5}}
-
 
 def test_anchor_becomes_a_real_results_record_with_stable_run_id() -> None:
     from evaluation.eval_harness.guard_anchor import anchor_result_record
